@@ -1,6 +1,6 @@
 Hola Copilot,
 
-Estoy desarrollando mi proyecto "BTC-Transformer-RL-Trader". Tengo una guía de implementación en Markdown muy detallada que desglosa el proyecto en Fases y Pasos.
+Estoy desarrollando mi proyecto "BTC-Transformer-RL-Trader". Tengo una guía de implementación en Markdown muy detallada que desglosa el proyecto en Fases y Pasos. --> docs/implementacion.md
 
 Actualmente, necesito tu ayuda para implementar la **[Fase X: Nombre Descriptivo de la Fase]**, específicamente el **[Paso Y: Título Descriptivo del Paso]**.
 
