@@ -13,6 +13,7 @@ Este proyecto implementa un agente de trading basado en Reinforcement Learning p
 - Simulación de un entorno de trading de futuros BTCUSDT con Gymnasium
 - Agente de RL (Soft Actor-Critic) con extractor de características basado en Transformers
 - Visualización de resultados y métricas de rendimiento
+- Infraestructura en Google Cloud Platform para entrenamiento y despliegue a escala
 
 ## Estructura del Proyecto
 
@@ -22,6 +23,7 @@ btcbot/
 │   ├── raw/                   # Datos sin procesar de Binance
 │   └── processed/             # Datos preprocesados con features
 ├── docs/                      # Documentación detallada
+├── gcp/                       # Scripts para Google Cloud Platform
 ├── logs/                      # Logs de entrenamiento y evaluación
 ├── models/                    # Modelos guardados
 ├── results/                   # Resultados de evaluación
@@ -49,6 +51,56 @@ btcbot/
 2. **Crear y activar un entorno virtual**:
    ```
    python3 -m venv .venv
+   source .venv/bin/activate  # En Windows: .venv\Scripts\activate
+   ```
+
+3. **Instalar dependencias**:
+   ```
+   pip install -r requirements.txt
+   ```
+
+## Uso Local
+
+### 1. Descarga de Datos
+
+```bash
+python scripts/download_data.py --symbol BTCUSDT --interval 1h --start_date 2022-01-01
+```
+
+### 2. Preprocesamiento
+
+```bash
+python scripts/preprocess_data.py --input_file data/raw/BTCUSDT_FUTURES_1h_20220101_*.csv
+```
+
+### 3. Entrenamiento del Modelo
+
+```bash
+python scripts/train_rl_agent.py --timesteps 100000
+```
+
+### 4. Evaluación del Modelo
+
+```bash
+python scripts/evaluate_rl_agent.py --model_path models/sac_transformer_trading_agent_*.zip
+```
+
+## Implementación en Google Cloud Platform
+
+Este proyecto incluye implementación completa en Google Cloud Platform (GCP) para entrenamiento a escala, versionado de modelos y despliegue automatizado. Consulta el directorio `gcp/` y su [README](gcp/README.md) para obtener instrucciones detalladas sobre:
+
+- Configuración de la infraestructura en GCP
+- Ejecución de trabajos de entrenamiento en Vertex AI
+- Registro y versionado de modelos en Vertex AI Model Registry  
+- Evaluación de modelos con métricas de trading
+- Despliegue de modelos a endpoints para inferencia
+- Pipelines de MLOps automatizados
+
+### Requisitos para GCP
+
+- Cuenta de Google Cloud Platform
+- Google Cloud SDK instalado y configurado
+- APIs necesarias habilitadas (consulta la documentación)
    source .venv/bin/activate  # En Windows: .venv\Scripts\activate
    ```
 

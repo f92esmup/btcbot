@@ -14,6 +14,12 @@ filelock==3.18.0
 fonttools==4.58.0
 frozenlist==1.6.0
 fsspec==2025.3.2
+# GCP Dependencies
+google-cloud-storage>=2.10.0
+google-cloud-aiplatform>=1.37.0
+google-cloud-secretmanager>=2.16.0
+kfp>=2.0.0
+# End GCP Dependencies
 gymnasium==1.0.0
 idna==3.10
 Jinja2==3.1.6
