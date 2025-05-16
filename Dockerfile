@@ -18,13 +18,19 @@ RUN wget http://prdownloads.sourceforge.net/ta-lib/ta-lib-0.4.0-src.tar.gz && \
     cd .. && \
     rm -rf ta-lib ta-lib-0.4.0-src.tar.gz
 
+# Crear enlaces simbólicos para asegurar que ta-lib se encuentre correctamente
+RUN ln -sf /usr/lib/libta_lib.so.0 /usr/lib/libta_lib.so
+
 # Copiar archivos necesarios
 COPY requirements.txt /app/
 COPY src/ /app/src/
 COPY scripts/ /app/scripts/
 
 # Instalar dependencias
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt || \
+    (echo "Error installing requirements. Trying ta-lib separately..." && \
+     pip install --no-cache-dir --no-binary :all: TA-Lib==0.6.3 && \
+     pip install --no-cache-dir -r requirements.txt)
 
 # Variables de entorno predeterminadas
 ENV PYTHONPATH=/app

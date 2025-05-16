@@ -66,8 +66,20 @@ def build_and_push_image(tag, use_gpu=False):
     cloudbuild_content = f"""
 steps:
 - name: 'gcr.io/cloud-builders/docker'
-  args: ['build', '-t', '{training_image_tag}', '-f', '{dockerfile_name}', '.']
+  args: ['build', 
+         '-t', '{training_image_tag}', 
+         '-f', '{dockerfile_name}', 
+         '--build-arg', 'BUILDKIT_INLINE_CACHE=1',
+         '--progress=plain',
+         '.']
+  timeout: '3600s'
 images: ['{training_image_tag}']
+timeout: '3600s'
+options:
+  machineType: 'E2_HIGHCPU_8'
+  diskSizeGb: '100'
+  env:
+    - 'DOCKER_BUILDKIT=1'
     """
     
     cloudbuild_file = os.path.join(project_dir, "cloudbuild.yaml")
@@ -80,12 +92,20 @@ images: ['{training_image_tag}']
         build_command = [
             "gcloud", "builds", "submit",
             "--project", config.PROJECT_ID,
-            # No especificamos la región para usar la región global por defecto
+            "--region", config.REGION,
+            "--verbosity", "info",
+            "--log-http",
             "--config", "cloudbuild.yaml",
             project_dir
         ]
         
-        subprocess.run(build_command, check=True)
+        print(f"Ejecutando: {' '.join(build_command)}")
+        try:
+            subprocess.run(build_command, check=True)
+        except subprocess.CalledProcessError as e:
+            print(f"Error al construir la imagen: {e}")
+            print(f"Comando: {' '.join(build_command)}")
+            raise
         
     finally:
         # Eliminar el archivo temporal si existe

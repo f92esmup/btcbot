@@ -14,12 +14,27 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-pip \
     python3-setuptools \
     python3-dev \
+    build-essential \
+    wget \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
 # Crear enlaces simbólicos para python
 RUN ln -sf /usr/bin/python3.10 /usr/bin/python3 && \
     ln -sf /usr/bin/python3 /usr/bin/python
+
+# Descargar e instalar TA-Lib
+RUN wget http://prdownloads.sourceforge.net/ta-lib/ta-lib-0.4.0-src.tar.gz && \
+    tar -xvzf ta-lib-0.4.0-src.tar.gz && \
+    cd ta-lib && \
+    ./configure --prefix=/usr && \
+    make && \
+    make install && \
+    cd .. && \
+    rm -rf ta-lib ta-lib-0.4.0-src.tar.gz
+
+# Crear enlaces simbólicos para asegurar que ta-lib se encuentre correctamente
+RUN ln -sf /usr/lib/libta_lib.so.0 /usr/lib/libta_lib.so
 
 WORKDIR /app
 
@@ -30,7 +45,10 @@ COPY scripts/ /app/scripts/
 
 # Instalar tensorflow-gpu y otras dependencias 
 RUN pip3 install --no-cache-dir --upgrade pip && \
-    pip3 install --no-cache-dir -r requirements.txt && \
+    (pip3 install --no-cache-dir -r requirements.txt || \
+    (echo "Error installing requirements. Trying ta-lib separately..." && \
+     pip3 install --no-cache-dir --no-binary :all: TA-Lib==0.6.3 && \
+     pip3 install --no-cache-dir -r requirements.txt)) && \
     pip3 install --no-cache-dir tensorflow==2.15.0
 
 # Variables de entorno predeterminadas
