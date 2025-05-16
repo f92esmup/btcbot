@@ -11,7 +11,7 @@ from pathlib import Path
 
 # Importaciones locales
 from src.agent.rl_agent_manager import RLAgentManager
-from src.utils.config import load_config
+from src.utils.config import ConfigManager
 
 # Configurar logging
 logging.basicConfig(
@@ -58,6 +58,12 @@ def parse_arguments():
         help="Ruta a un modelo guardado para continuar el entrenamiento"
     )
     
+    parser.add_argument(
+        "--no-gpu",
+        action="store_true",
+        help="Desactivar el uso de GPU incluso si está disponible"
+    )
+    
     return parser.parse_args()
 
 
@@ -68,8 +74,22 @@ def main():
     # Parsear argumentos
     args = parse_arguments()
     
-    # Crear el administrador del agente
+    # Cargar la configuración del agente
+    config_manager = ConfigManager(config_path=args.agent_config)
+    agent_config = config_manager.config
+    
+    # Actualizar la configuración si se solicita no usar GPU
+    if args.no_gpu:
+        agent_config["use_gpu"] = False
+        logger.info("Uso de GPU desactivado por argumento de línea de comandos")
+    
+    # Crear el administrador del agente con la configuración actualizada
     agent_manager = RLAgentManager(config_path=args.agent_config)
+    
+    # Si se desactivó la GPU por argumento, aplicar la configuración al administrador
+    if args.no_gpu:
+        agent_manager.config["use_gpu"] = False
+        agent_manager.device = "cpu"
     
     # Configurar el agente
     should_load_model = args.load_model is not None

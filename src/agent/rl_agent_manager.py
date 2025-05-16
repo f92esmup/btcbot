@@ -10,6 +10,7 @@ import numpy as np
 from typing import Dict, Union, Optional, Any, Tuple
 import logging
 from pathlib import Path
+import torch
 
 # Importaciones de Stable Baselines3
 from stable_baselines3 import SAC
@@ -19,8 +20,8 @@ from stable_baselines3.common.logger import configure
 
 # Importaciones locales
 from src.agent.custom_transformer_extractor import CustomTransformerFeatureExtractor
-from src.environments.trading_env import TradingEnv
-from src.utils.config import load_config
+from src.environments.trading_env import TradingEnvironment
+from src.utils.config import ConfigManager
 
 # Configurar logging
 logging.basicConfig(
@@ -47,18 +48,51 @@ class RLAgentManager:
             config_path: Ruta al archivo de configuración YAML del agente
         """
         self.config_path = config_path
-        self.config = load_config(config_path)
+        config_manager_instance = ConfigManager(config_path=config_path)
+        self.config = config_manager_instance.config
         self.model = None
         self.env = None
         self.eval_env = None
+        
+        # Detectar y configurar el dispositivo (GPU o CPU)
+        self.device = self._setup_device()
         
         # Crear directorios para guardar modelos si no existen
         save_path_prefix = self.config.get("save_path_prefix", "models/sac_transformer_trading_agent")
         os.makedirs(os.path.dirname(save_path_prefix), exist_ok=True)
         
+    def _setup_device(self) -> str:
+        """
+        Detecta y configura el dispositivo para entrenamiento (GPU o CPU).
+        
+        Returns:
+            Nombre del dispositivo ("cuda", "mps" o "cpu")
+        """
+        use_gpu = self.config.get("use_gpu", True)
+        
+        if not use_gpu:
+            logger.info("Uso de GPU desactivado por configuración. Usando CPU.")
+            return "cpu"
+        
+        # Verificar disponibilidad de CUDA (NVIDIA)
+        if torch.cuda.is_available():
+            device = "cuda"
+            num_gpus = torch.cuda.device_count()
+            gpu_name = torch.cuda.get_device_name(0)
+            logger.info(f"GPU CUDA disponible: {gpu_name} (Total: {num_gpus})")
+        # Verificar disponibilidad de MPS (Apple M1/M2)
+        elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            device = "mps"
+            logger.info("GPU MPS disponible (Apple Silicon)")
+        else:
+            device = "cpu"
+            logger.info("No se detectó GPU. Usando CPU.")
+        
+        return device
+        
     def setup_environment(self, 
                           env_config_path: str = "src/environments/environment_config.yaml",
-                          is_eval: bool = False) -> TradingEnv:
+                          is_eval: bool = False) -> TradingEnvironment:
         """
         Configura y crea una instancia del entorno de trading.
         
@@ -69,16 +103,18 @@ class RLAgentManager:
         Returns:
             Instancia del entorno de trading configurado
         """
-        # Cargar configuración del entorno
-        env_config = load_config(env_config_path)
+        # Cargar configuración del entorno pero sin pasarla directamente al constructor
+        # En lugar de eso, simplemente pasamos la ruta al archivo de config
         
-        # Modificar configuración si es entorno de evaluación
+        # Determinar el modo de renderización
+        render_mode = None
         if is_eval:
-            env_config["evaluation_mode"] = True
-            # Modificar otras configuraciones si es necesario para evaluación
+            # Si es entorno de evaluación, se podría configurar el modo de renderización
+            # render_mode = 'human'  # Descomentar esta línea si quieres renderización en evaluación
+            pass
         
-        # Crear instancia del entorno
-        env = TradingEnv(**env_config)
+        # Crear instancia del entorno pasando solo los parámetros que acepta
+        env = TradingEnvironment(config_path=env_config_path, render_mode=render_mode)
         
         # Envolver con Monitor para seguimiento de recompensas y otra telemetría
         log_dir = "logs/"
@@ -153,9 +189,13 @@ class RLAgentManager:
         
         sac_params["policy_kwargs"] = policy_kwargs
         
+        # Agregar configuración del dispositivo a los parámetros
+        sac_params["device"] = self.device
+        
         # Crear el modelo SAC
         logger.info(f"Creando modelo SAC con los siguientes parámetros: {sac_params}")
-        self.model = SAC("MlpPolicy", self.env, **sac_params)
+        logger.info(f"Usando dispositivo: {self.device}")
+        self.model = SAC("MultiInputPolicy", self.env, **sac_params)
         
         return self.model
     
@@ -273,7 +313,8 @@ class RLAgentManager:
         """
         if not os.path.exists(path):
             raise FileNotFoundError(f"No se encontró el archivo del modelo en: {path}")
-            
-        self.model = SAC.load(path, env=self.env)
-        logger.info(f"Modelo cargado desde: {path}")
+        
+        # Cargar el modelo especificando el dispositivo
+        self.model = SAC.load(path, env=self.env, device=self.device)
+        logger.info(f"Modelo cargado desde: {path} en dispositivo: {self.device}")
         return self.model

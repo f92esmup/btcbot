@@ -15,8 +15,8 @@ import matplotlib.pyplot as plt
 
 # Importaciones locales
 from src.agent.rl_agent_manager import RLAgentManager
-from src.environments.trading_env import TradingEnv
-from src.utils.config import load_config
+from src.environments.trading_env import TradingEnvironment
+from src.utils.config import ConfigManager
 
 # Configurar logging
 logging.basicConfig(
@@ -68,6 +68,12 @@ def parse_arguments():
         type=str,
         default="results",
         help="Ruta donde guardar los resultados de evaluación"
+    )
+    
+    parser.add_argument(
+        "--no-gpu",
+        action="store_true",
+        help="Desactivar el uso de GPU incluso si está disponible"
     )
     
     return parser.parse_args()
@@ -204,8 +210,22 @@ def main():
     # Parsear argumentos
     args = parse_arguments()
     
+    # Cargar la configuración del agente
+    config_manager = ConfigManager(config_path=args.agent_config)
+    agent_config = config_manager.config
+    
+    # Actualizar la configuración si se solicita no usar GPU
+    if args.no_gpu:
+        agent_config["use_gpu"] = False
+        logger.info("Uso de GPU desactivado por argumento de línea de comandos")
+    
     # Crear el administrador del agente
     agent_manager = RLAgentManager(config_path=args.agent_config)
+    
+    # Si se desactivó la GPU por argumento, aplicar la configuración al administrador
+    if args.no_gpu:
+        agent_manager.config["use_gpu"] = False
+        agent_manager.device = "cpu"
     
     # Cargar el modelo entrenado
     agent_manager.setup_agent(
@@ -215,9 +235,8 @@ def main():
     )
     
     # Configurar el entorno de evaluación (modo determinístico)
-    env_config = load_config(args.env_config)
-    env_config["evaluation_mode"] = True
-    eval_env = TradingEnv(**env_config)
+    # Pasar directamente la ruta de configuración y establecer el modo de renderización
+    eval_env = TradingEnvironment(config_path=args.env_config, render_mode='human')
     
     # Evaluar el agente
     evaluate_agent(

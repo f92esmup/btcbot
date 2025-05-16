@@ -40,6 +40,7 @@ total_training_timesteps: 1000000
 log_interval_episodes: 10 # Loguear cada N episodios
 save_path_prefix: "models/sac_transformer_trading_agent"
 save_frequency_steps: 50000
+use_gpu: true  # Activar para usar GPU (CUDA/MPS) si está disponible
 
 # --- Carga de Modelo (Opcional) ---
 # load_trained_model_on_start: false

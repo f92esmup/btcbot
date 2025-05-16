@@ -13,6 +13,14 @@ from src.environments.simulated_broker import SimulatedBroker
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger('TradingEnv')
 
+import numpy as np
+# Importar torch de manera condicional para no crear dependencia obligatoria
+try:
+    import torch
+    TORCH_AVAILABLE = True
+except ImportError:
+    TORCH_AVAILABLE = False
+
 class TradingEnvironment(gym.Env):
     """
     Entorno de trading de futuros para Gymnasium.
@@ -799,6 +807,34 @@ class TradingEnvironment(gym.Env):
             logger.error(f"Error al construir observación: {e}")
             logger.error(f"Índice actual: {self.current_step_index}, L: {self.L}, Forma market_data: {self.market_data.shape}")
             raise
+            
+    def get_torch_observation(self, observation: Dict[str, np.ndarray], device: str = "cuda") -> Dict[str, torch.Tensor]:
+        """
+        Convierte una observación numpy a tensores de PyTorch para uso con GPU.
+        
+        Args:
+            observation: Observación en formato numpy
+            device: Dispositivo donde colocar los tensores ('cuda', 'mps', 'cpu')
+            
+        Returns:
+            Diccionario con tensores de PyTorch
+        """
+        if not TORCH_AVAILABLE:
+            raise ImportError("PyTorch no está disponible. Instálalo para usar esta función.")
+            
+        # Crear diccionario para tensores
+        torch_obs = {}
+        
+        # Convertir cada array numpy a tensor
+        for key, value in observation.items():
+            # Asegurar que los datos están en float32 para PyTorch
+            if value.dtype != np.float32:
+                value = value.astype(np.float32)
+                
+            # Convertir a tensor y mover al dispositivo especificado
+            torch_obs[key] = torch.tensor(value, dtype=torch.float32, device=device)
+            
+        return torch_obs
     
     def _get_normalized_portfolio_features(self) -> np.ndarray:
         """

@@ -142,6 +142,8 @@ class CustomTransformerFeatureExtractor(BaseFeaturesExtractor):
         market_features = observations[self.market_features_key]
         portfolio_features = observations[self.portfolio_features_key]
         
+        # Detectar el dispositivo de los tensores de entrada
+        device = market_features.device
         batch_size = market_features.shape[0]
         
         # Replicar las características del portafolio para cada paso temporal
