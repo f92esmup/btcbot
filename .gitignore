@@ -22,6 +22,7 @@ data/raw/*.csv
 data/processed/*.csv
 *.parquet
 *.pkl
+data/processed/*.npz
 
 # Logs
 *.log
