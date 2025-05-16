@@ -29,29 +29,60 @@ class DataPreprocessor:
             logger.warning(f"El número de columnas finales ({len(self.final_feature_columns)}) no coincide con el esperado (20). Verifica 'final_market_feature_columns' en la config.")
 
     def _load_and_prepare_base_df(self, raw_data_filename: str) -> pd.DataFrame:
+        """
+        Carga y prepara el DataFrame base desde un archivo CSV de forma eficiente.
+        
+        Args:
+            raw_data_filename: Nombre del archivo CSV con datos crudos
+            
+        Returns:
+            DataFrame preparado y limpio
+        """
         filepath = os.path.join(self.raw_data_path, raw_data_filename)
         logger.info(f"Cargando datos crudos desde: {filepath}")
+        
+        # Comprobar si debemos usar formato Parquet si el archivo existe
+        parquet_path = f"{os.path.splitext(filepath)[0]}.parquet"
+        use_float32 = self.mcfg.get('use_float32', False)
+        dtype_config = {col: 'float32' for col in ['Open', 'High', 'Low', 'Close', 'Volume']} if use_float32 else None
+        
         try:
+            # Intentar cargar desde Parquet si existe (más eficiente)
+            if os.path.exists(parquet_path) and self.mcfg.get('use_parquet_storage', False):
+                logger.info(f"Cargando datos desde Parquet: {parquet_path}")
+                df = pd.read_parquet(parquet_path)
+                logger.info(f"Datos cargados desde Parquet con éxito: {df.shape}")
+                return df
+                
+            # Si no hay Parquet, cargar desde CSV de forma optimizada
+            logger.info(f"Cargando datos desde CSV: {filepath}")
+            # Usar dtypes específicos y especificar parse_dates para eficiencia
             df = pd.read_csv(
                 filepath,
-                parse_dates=['Open_Time']
+                parse_dates=['Open_Time'],
+                dtype=dtype_config
             )
-            # Asegurar que Open_Time es datetime y UTC
+            
+            # Asegurar que Open_Time es datetime y UTC - optimizado
             df['Open_Time'] = pd.to_datetime(df['Open_Time'], utc=True)
             df.set_index('Open_Time', inplace=True)
 
-            # 1. Asegurar que el índice es único y está ordenado
-            if not df.index.is_monotonic_increasing:
+            # 1. Optimizar para conjuntos de datos grandes
+            # Primero verificar si el ordenamiento/deduplicación son realmente necesarios
+            is_monotonic = df.index.is_monotonic_increasing
+            has_duplicates = df.index.duplicated().any()
+            
+            if not is_monotonic:
                 logger.warning(f"El índice de tiempo en {raw_data_filename} no está ordenado. Ordenando...")
                 df.sort_index(inplace=True)
-            if not df.index.is_unique:
+            
+            if has_duplicates:
                 logger.warning(f"Timestamps duplicados encontrados en {raw_data_filename}. Se eliminarán duplicados manteniendo la primera ocurrencia.")
                 df = df[~df.index.duplicated(keep='first')]
 
-            # 2. Convertir columnas OHLCV a numérico, 'coerce' pone NaN si no puede convertir
+            # 2. Convertir columnas OHLCV a numérico en una sola operación
             cols_to_numeric = ['Open', 'High', 'Low', 'Close', 'Volume']
-            for col in cols_to_numeric:
-                df[col] = pd.to_numeric(df[col], errors='coerce')
+            df[cols_to_numeric] = df[cols_to_numeric].apply(pd.to_numeric, errors='coerce')
 
             # --- 3. Detección y Reporte de NaNs Iniciales ---
             nan_counts_initial = df[cols_to_numeric].isnull().sum()
@@ -104,52 +135,90 @@ class DataPreprocessor:
             raise
 
     def _apply_feature_normalization(self, df_with_features: pd.DataFrame) -> pd.DataFrame:
-        logger.debug("Aplicando normalización/escalado final a las características.")
-        df_norm = df_with_features.copy()
+        """
+        Aplica normalización a las características usando operaciones vectoriales de Pandas y NumPy.
+        
+        Args:
+            df_with_features: DataFrame con características calculadas
+            
+        Returns:
+            DataFrame con características normalizadas
+        """
+        logger.debug("Aplicando normalización/escalado final a las características usando operaciones vectorizadas.")
+        
+        # Crear una vista del dataframe sin copiar datos
+        df_norm = df_with_features.copy(deep=False)
+
+        # Convertir tipos a float32 para reducir uso de memoria
+        use_float32 = self.mcfg.get('use_float32', False)
+        if use_float32:
+            for col in df_norm.select_dtypes(include=['float64']).columns:
+                df_norm[col] = df_norm[col].astype(np.float32)
 
         # Ventana para Z-score, asegurando min_periods para tener valores al inicio
         min_p = self.norm_window // 2
 
-        # Normalización de características OHLCV procesadas (Z-score móvil)
+        # --- Normalización de características OHLCV (Z-score móvil) ---
+        # Vectorización: Procesamos todos los retornos en un solo paso
         ohlcv_raw_cols = ['log_ret_C_O', 'log_ret_H_O', 'log_ret_L_O', 'log_ret_C_C_prev', 'log_ret_Vol_SMAVol']
-        for col in ohlcv_raw_cols:
-            mean = df_norm[col].rolling(window=self.norm_window, min_periods=min_p).mean()
-            std = df_norm[col].rolling(window=self.norm_window, min_periods=min_p).std().replace(0, 1e-9)  # Evitar división por cero
-            df_norm[f'{col}_norm'] = (df_norm[col] - mean) / std
+        
+        # Calculamos medias y desviaciones estándar para todos los retornos juntos
+        # Esto reduce el número de llamadas a rolling(), que son costosas
+        returns_df = df_norm[ohlcv_raw_cols]
+        mean_returns = returns_df.rolling(window=self.norm_window, min_periods=min_p).mean()
+        std_returns = returns_df.rolling(window=self.norm_window, min_periods=min_p).std()
+        
+        # Reemplazar ceros con epsilon para evitar divisiones por cero
+        std_returns = std_returns.replace(0, 1e-9)
+        
+        # Calcular z-scores en una sola operación vectorizada
+        zscore_returns = (returns_df - mean_returns) / std_returns
+        
+        # Renombrar columnas con sufijo _norm
+        zscore_returns.columns = [f'{col}_norm' for col in ohlcv_raw_cols]
+        
+        # Añadir al DataFrame principal de manera eficiente
+        for col in zscore_returns.columns:
+            df_norm[col] = zscore_returns[col]
 
-        # Normalización de Indicadores
+        # --- Normalización de Indicadores ---
+        # Vectorizamos operaciones comunes
         atr = df_norm['ATR'].replace(0, 1e-9)  # Para evitar división por cero
         close = df_norm['Close'].replace(0, 1e-9)
 
-        df_norm['SMA_short_norm'] = (df_norm['SMA_short'] - close) / atr
-        df_norm['SMA_long_norm'] = (df_norm['SMA_long'] - close) / atr
-        df_norm['EMA_short_norm'] = (df_norm['EMA_short'] - close) / atr
-        df_norm['EMA_long_norm'] = (df_norm['EMA_long'] - close) / atr
+        # Normalización de SMAs y EMAs (operaciones vectorizadas)
+        sma_ema_cols = ['SMA_short', 'SMA_long', 'EMA_short', 'EMA_long']
+        for col in sma_ema_cols:
+            df_norm[f'{col}_norm'] = (df_norm[col] - close) / atr
 
+        # RSI - Escalado con verificación de opciones
         if self.mcfg['indicators']['rsi_scaling_mode'] == "0_1":
             df_norm['RSI_scaled'] = df_norm['RSI'] / 100.0
         else:  # "-1_1"
             df_norm['RSI_scaled'] = (df_norm['RSI'] - 50.0) / 50.0
         
+        # ATR normalizado
         df_norm['ATR_norm'] = atr / close
 
-        df_norm['MACD_line_norm'] = df_norm['MACD_line'] / atr  # O Z-score
-        df_norm['MACD_signal_norm'] = df_norm['MACD_signal'] / atr  # O Z-score
-        df_norm['MACD_hist_norm'] = df_norm['MACD_hist'] / atr  # O Z-score
-        
-        # Distancias a BB normalizadas por ATR
+        # MACD - normalización vectorizada
+        macd_cols = ['MACD_line', 'MACD_signal', 'MACD_hist']
+        for col in macd_cols:
+            df_norm[f'{col}_norm'] = df_norm[col] / atr
+
+        # Bandas de Bollinger - vectorización por grupos
         df_norm['BB_dist_upper_norm'] = (df_norm['BB_upper'] - close) / atr
         df_norm['BB_dist_lower_norm'] = (close - df_norm['BB_lower']) / atr
-        # Ancho de BB normalizado por ATR o por la media móvil (BB_middle)
-        df_norm['BB_width_norm'] = df_norm['BB_width'] / atr  # o df_norm['BB_width'] / df_norm['BB_middle'].replace(0,1e-9)
+        df_norm['BB_width_norm'] = df_norm['BB_width'] / atr
 
-        # CCI (Z-score móvil puede ser bueno aquí, o dividir por constante empírica)
+        # CCI - Z-score vectorizado
         mean_cci = df_norm['CCI'].rolling(window=self.norm_window, min_periods=min_p).mean()
         std_cci = df_norm['CCI'].rolling(window=self.norm_window, min_periods=min_p).std().replace(0, 1e-9)
         df_norm['CCI_norm'] = (df_norm['CCI'] - mean_cci) / std_cci
 
-        df_norm['STOCH_slowk_scaled'] = df_norm['STOCH_slowk'] / 100.0
-        df_norm['STOCH_slowd_scaled'] = df_norm['STOCH_slowd'] / 100.0
+        # Estocástico - escalado simple
+        stoch_cols = ['STOCH_slowk', 'STOCH_slowd']
+        for col in stoch_cols:
+            df_norm[f'{col}_scaled'] = df_norm[col] / 100.0
         
         # Seleccionar solo las columnas finales especificadas en la configuración
         try:
@@ -161,7 +230,16 @@ class DataPreprocessor:
         return df_final_selection
 
     def _create_sequences(self, df_final_features: pd.DataFrame) -> tuple:
-        logger.info(f"Creando secuencias de longitud L={self.L}.")
+        """
+        Crea secuencias de datos a partir del DataFrame procesado utilizando operaciones vectorizadas.
+        
+        Args:
+            df_final_features: DataFrame con características finales
+            
+        Returns:
+            Tupla con arrays de secuencias y timestamps
+        """
+        logger.info(f"Creando secuencias de longitud L={self.L} con operaciones vectorizadas.")
         
         # Convertir a NumPy array para eficiencia
         data_values = df_final_features.values
@@ -173,16 +251,22 @@ class DataPreprocessor:
             logger.warning("No hay suficientes datos para crear ni una sola secuencia después del preprocesamiento y recorte de NaNs.")
             return np.array([]), np.array([])
 
-        # Alternativa con bucle (más clara, potencialmente más lenta pero más segura para empezar)
-        X_list, ts_list = [], []
-        for i in range(num_samples):
-            X_list.append(data_values[i : i + self.L])
-            ts_list.append(timestamps_values[i + self.L - 1])  # Timestamp del último elemento
-
-        sequences_X = np.array(X_list)
-        sequences_ts = np.array(ts_list)
+        # Método vectorizado para crear secuencias
+        # Crear un array 3D directamente con la forma correcta (muestras, longitud de secuencia, features)
+        n_features = data_values.shape[1]
         
-        return sequences_X, sequences_ts
+        # Preasignar array para mejor rendimiento, usando float32 si está configurado
+        dtype = np.float32 if self.mcfg.get('use_float32', False) else np.float64
+        X_sequences = np.zeros((num_samples, self.L, n_features), dtype=dtype)
+        
+        # Para cada posición en la secuencia, copiar los datos de manera eficiente
+        for i in range(self.L):
+            X_sequences[:, i, :] = data_values[i:i+num_samples]
+            
+        # Extraer timestamps de las últimas posiciones de cada secuencia
+        ts_sequences = timestamps_values[self.L-1:self.L-1+num_samples]
+        
+        return X_sequences, ts_sequences
 
     def process_data(self, raw_data_filename: str, output_filename_base: str = None):
         logger.info(f"Iniciando preprocesamiento para el archivo: {raw_data_filename}")
@@ -223,8 +307,39 @@ class DataPreprocessor:
         output_filename = f"{output_filename_base}_L{self.L}_market_features.npz"
         output_path = os.path.join(self.processed_data_path, output_filename)
         try:
-            np.savez_compressed(output_path, X_market=X_sequences, timestamps=ts_sequences)
+            # Guardamos también las series originales de 'Close' y 'ATR' sin normalizar para cálculos más precisos
+            close_series = df_with_features['Close'].values
+            atr_series = df_with_features['ATR'].values
+            
+            # Aseguramos que tengamos los mismos puntos de tiempo que en las secuencias
+            # Tomamos los últimos valores de cada secuencia (el punto actual para cada secuencia)
+            seq_count = X_sequences.shape[0]
+            close_for_sequences = np.array([close_series[i + self.L - 1] for i in range(seq_count)], dtype=np.float32)
+            atr_for_sequences = np.array([atr_series[i + self.L - 1] for i in range(seq_count)], dtype=np.float32)
+            
+            # Guardamos en formato comprimido
+            np.savez_compressed(
+                output_path, 
+                X_market=X_sequences, 
+                timestamps=ts_sequences,
+                close_prices=close_for_sequences,
+                atr_values=atr_for_sequences,
+                feature_names=np.array(self.final_feature_columns)
+            )
             logger.info(f"Secuencias procesadas ({X_sequences.shape[0]} muestras de forma {X_sequences.shape}) guardadas en: {output_path}")
+            logger.info(f"También se guardaron series de Close y ATR sin normalizar para cálculos precisos de slippage y liquidación")
+            
+            # Guardar también en formato Parquet para datasets muy grandes
+            if self.mcfg.get('use_parquet_storage', False) and len(df_cleaned) > 100000:
+                import pyarrow as pa
+                import pyarrow.parquet as pq
+                
+                parquet_filename = f"{output_filename_base}_processed.parquet"
+                parquet_path = os.path.join(self.processed_data_path, parquet_filename)
+                
+                # Guardamos el DataFrame completo en formato Parquet
+                df_cleaned.to_parquet(parquet_path, compression='snappy')
+                logger.info(f"Datos también guardados en formato Parquet para mejor eficiencia: {parquet_path}")
         except Exception as e:
             logger.error(f"Error guardando las secuencias procesadas: {e}")
             raise

@@ -4,6 +4,10 @@ sequence_length_L: 96
 # Multiplicador para la ventana de normalización Z-score (ventana = L * multiplicador)
 normalization_window_multiplier_for_L: 2
 
+# Optimizaciones de rendimiento y almacenamiento
+use_float32: true  # Usar float32 en lugar de float64 para reducir uso de memoria
+use_parquet_storage: true  # Guardar también en formato Parquet para mejor compresión y velocidad
+
 # Parámetros para el procesamiento de OHLCV
 ohlcv_processing:
   volume_sma_period: 20

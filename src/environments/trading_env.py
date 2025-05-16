@@ -184,6 +184,25 @@ class TradingEnvironment(gym.Env):
         else:
             raise KeyError(f"No se encontró ninguna clave válida para datos de mercado en {data_file}")
         
+        # Cargar datos adicionales si están disponibles (para optimización)
+        self.close_prices = None
+        self.atr_values = None
+        
+        # Verificar si tenemos precios de cierre y ATR no normalizados
+        if 'close_prices' in data:
+            self.close_prices = data['close_prices']
+            logger.info(f"Precios de cierre no normalizados cargados: {len(self.close_prices)} valores")
+            
+        if 'atr_values' in data:
+            self.atr_values = data['atr_values']
+            logger.info(f"Valores ATR no normalizados cargados: {len(self.atr_values)} valores")
+            
+        # Si alguno de los dos no está disponible, eliminamos ambos para consistencia
+        if self.close_prices is None or self.atr_values is None:
+            self.close_prices = None
+            self.atr_values = None
+            logger.warning("No se encontraron datos de precio y ATR sin normalizar. Usando aproximaciones.")
+        
         logger.info(f"Datos de mercado cargados: {market_features.shape}")
         return market_features, feature_names
     
@@ -254,7 +273,7 @@ class TradingEnvironment(gym.Env):
         Returns:
             Tuple con (observación, recompensa, terminado, truncado, info)
         """
-        # Extrae la señal de acción del array
+        # Extrae la señal de acción del array (evitando copias innecesarias)
         action_signal = float(action[0])
         
         # Guarda el equity anterior para el cálculo de la recompensa
@@ -263,24 +282,79 @@ class TradingEnvironment(gym.Env):
         # Avanza al siguiente paso en los datos de mercado
         self.current_step_index += 1
         
-        # Obtiene los datos actuales del mercado
+        # Obtiene los datos actuales del mercado (referencia, no copia)
         current_market_data = self.market_data[self.current_step_index]
         
-        # Obtiene el precio de cierre usando nuestro método auxiliar
+        # Obtiene el precio de cierre usando nuestro método optimizado
         close_price = self._get_current_close_price()
         
-        # Intenta obtener el ATR si está disponible
-        atr_idx = self.feature_names.index('ATR_norm') if 'ATR_norm' in self.feature_names else -1
-        
-        # Si no tenemos ATR directamente, usamos un valor por defecto
-        if atr_idx >= 0:
-            # Des-normalizar si ATR_norm = ATR / Close
-            atr_value = current_market_data[-1, atr_idx] * close_price
-            logger.debug(f"ATR extraído: {atr_value:.2f}")
+        # Obtiene el ATR eficientemente
+        # Usar ATR pre-calculado si está disponible
+        if hasattr(self, 'atr_values') and self.atr_values is not None:
+            try:
+                atr_value = float(self.atr_values[self.current_step_index - self.L + 1])
+            except (IndexError, TypeError):
+                # Fallback a método estándar
+                atr_value = self._get_atr_value_optimized(current_market_data, close_price)
         else:
-            # Valor por defecto o calcular ATR en tiempo real
-            atr_value = close_price * 0.01  # 1% del precio como aproximación
-            logger.debug(f"ATR aproximado: {atr_value:.2f} (1% del precio {close_price:.2f})")
+            # Si no tenemos ATR preprocesado, usar método optimizado con caché
+            atr_value = self._get_atr_value_optimized(current_market_data, close_price)
+            
+        # Procesa la acción y actualiza el estado del entorno
+        info = self._process_action(action_signal, close_price, atr_value)
+        
+        # Comprueba si hubo liquidación
+        liquidated = self._check_liquidation(current_market_data)
+        
+        # Actualiza estadísticas de episodio
+        self.episode_stats['max_equity'] = max(self.episode_stats['max_equity'], self.current_equity)
+        self.episode_stats['min_equity'] = min(self.episode_stats['min_equity'], self.current_equity)
+        
+        # Calcula la recompensa (retorno logarítmico del equity)
+        reward = np.log(self.current_equity / self.last_equity)
+        
+        # Comprueba condiciones de fin de episodio
+        terminated = False
+        truncated = False
+        
+        # Condición 1: Drawdown máximo
+        current_drawdown = (self.current_equity / self.initial_equity_episode) - 1.0
+        if current_drawdown <= self.equity_drawdown_threshold:
+            terminated = True
+            info['termination_reason'] = 'max_drawdown'
+        
+        # Condición 2: Liquidación
+        if liquidated:
+            terminated = True
+            info['termination_reason'] = 'liquidation'
+        
+        # Condición 3: Fin de datos disponibles
+        if self.current_step_index >= len(self.market_data) - self.L:
+            truncated = True
+            info['termination_reason'] = 'data_end'
+        
+        # Obtiene la siguiente observación
+        observation = self._get_observation()
+        
+        # Actualiza info con estadísticas de episodio
+        info.update({
+            'current_equity': self.current_equity,
+            'episode_return': self.current_equity / self.initial_equity_episode - 1.0,
+            'current_drawdown': current_drawdown,
+            'trades_count': self.episode_stats['trades'],
+            'win_rate': self.episode_stats['profitable_trades'] / max(1, self.episode_stats['trades']),
+            'position_side': self.active_position_side,
+            'position_size': self.active_position_size_contracts,
+            'entry_price': self.active_position_entry_price,
+            'unrealized_pnl': self.unrealized_pnl,
+            'episode_stats': self.episode_stats
+        })
+        
+        # Renderiza si está configurado
+        if self.render_mode == 'human':
+            self.render()
+        
+        return observation, reward, terminated, truncated, info
         
         # Procesa la acción y actualiza el estado del entorno
         info = self._process_action(action_signal, close_price, atr_value)
@@ -529,45 +603,72 @@ class TradingEnvironment(gym.Env):
         Returns:
             True si la posición fue liquidada, False en caso contrario
         """
-        # Si no hay posición activa, no hay nada que liquidar
+        # Comprobación rápida: si no hay posición activa, retornar inmediatamente
         if self.active_position_side == 0:
             return False
-        
-        # Busca los índices para High y Low en los datos
-        # Suponemos que las primeras 4 características pueden ser OHLC o extractos de ellas
-        # Si no están disponibles directamente, usamos el precio de cierre como aproximación
+            
+        # Si no hay precio de liquidación válido, no puede haber liquidación
+        if self.liquidation_price <= 0:
+            return False
+            
+        # Comprobación rápida con precio de cierre
         close_price = self._get_current_close_price()
         
-        # Aproximamos high y low como ±1% del cierre si no están disponibles directamente
-        high_price = close_price * 1.01  # Aproximación
-        low_price = close_price * 0.99   # Aproximación
-        
-        # Intentamos extraer high y low si están disponibles
-        try:
-            # Los precios probablemente estén codificados como retornos log o normalizados
-            # Revirtiendo la normalización aproximadamente
-            high_feat_idx = self.feature_names.index('log_ret_H_O_norm') if 'log_ret_H_O_norm' in self.feature_names else -1
-            low_feat_idx = self.feature_names.index('log_ret_L_O_norm') if 'log_ret_L_O_norm' in self.feature_names else -1
-            
-            if high_feat_idx >= 0 and low_feat_idx >= 0:
-                # Si tenemos estos valores, podemos aproximar high y low
-                open_price = close_price  # Aproximación, usamos close como open
-                high_price = open_price * np.exp(current_market_data[-1, high_feat_idx])
-                low_price = open_price * np.exp(current_market_data[-1, low_feat_idx])
-                logger.debug(f"Precios High/Low calculados: {high_price:.2f}/{low_price:.2f}")
-        except Exception as e:
-            logger.warning(f"No se pudieron extraer High/Low de los datos: {e}")
-            logger.warning("Usando aproximación de High/Low")
-        
-        # Para posición larga, comprueba si el precio mínimo del periodo bajó del precio de liquidación
-        if self.active_position_side == 1 and low_price <= self.liquidation_price:
-            # Ejecuta liquidación a precio de liquidación
+        # Para posiciones largas, liquidación cuando precio <= liquidation_price
+        if self.active_position_side == 1 and close_price <= self.liquidation_price:
             self._liquidate_position(self.liquidation_price)
             return True
+            
+        # Para posiciones cortas, liquidación cuando precio >= liquidation_price
+        if self.active_position_side == -1 and close_price >= self.liquidation_price:
+            self._liquidate_position(self.liquidation_price)
+            return True
+            
+        # Si hemos llegado aquí, no hay liquidación con el precio de cierre.
+        # Para optimizar, evitamos cálculos adicionales si la diferencia con el precio 
+        # de liquidación es suficientemente grande
+        margin_to_liquidation = abs(close_price - self.liquidation_price) / close_price
+        if margin_to_liquidation > 0.02:  # 2% de margen es suficientemente seguro
+            return False
+            
+        # Si estamos cerca de la liquidación, hacemos una verificación más precisa
+        # Cache para índices de características - calculamos una vez y reutilizamos
+        if not hasattr(self, '_price_indices_cache'):
+            self._price_indices_cache = {
+                'high_feat_idx': self.feature_names.index('log_ret_H_O_norm') if 'log_ret_H_O_norm' in self.feature_names else -1,
+                'low_feat_idx': self.feature_names.index('log_ret_L_O_norm') if 'log_ret_L_O_norm' in self.feature_names else -1
+            }
         
-        # Para posición corta, comprueba si el precio máximo del periodo subió del precio de liquidación
-        if self.active_position_side == -1 and high_price >= self.liquidation_price:
-            # Ejecuta liquidación a precio de liquidación
+        # Inicializar high/low con valores por defecto (siendo conservadores)
+        high_price = close_price * 1.01
+        low_price = close_price * 0.99
+        
+        # Usar ATR directamente desde datos preprocesados si están disponibles (más rápido)
+        if hasattr(self, 'atr_values') and self.atr_values is not None:
+            try:
+                atr = float(self.atr_values[self.current_step_index - self.L + 1])
+                # Usar ATR para aproximaciones más precisas de high y low
+                high_price = close_price + atr * 0.5
+                low_price = close_price - atr * 0.5
+            except (IndexError, AttributeError):
+                pass
+        
+        # Si tenemos índices para high/low, usarlos para cálculo más preciso
+        high_feat_idx = self._price_indices_cache['high_feat_idx']
+        low_feat_idx = self._price_indices_cache['low_feat_idx']
+        
+        if high_feat_idx >= 0 and low_feat_idx >= 0:
+            try:
+                # Acceso directo a los datos con comprobaciones para evitar errores
+                open_price = close_price
+                high_price = open_price * np.exp(current_market_data[-1, high_feat_idx])
+                low_price = open_price * np.exp(current_market_data[-1, low_feat_idx])
+            except Exception:
+                pass
+        
+        # Comprobación de liquidación final
+        if ((self.active_position_side == 1 and low_price <= self.liquidation_price) or
+           (self.active_position_side == -1 and high_price >= self.liquidation_price)):
             self._liquidate_position(self.liquidation_price)
             return True
         
@@ -580,28 +681,38 @@ class TradingEnvironment(gym.Env):
         Returns:
             Precio de cierre actual
         """
-        # Buscamos si existe una columna específica para Close
-        close_idx = -1
+        # Primero intentamos usar close_prices no normalizados si están disponibles
+        try:
+            if hasattr(self, 'close_prices') and self.close_prices is not None:
+                return float(self.close_prices[self.current_step_index - self.L + 1])
+        except (IndexError, AttributeError) as e:
+            # Si hay un error, continuamos con el método anterior
+            pass
+            
+        # Si no tenemos close_prices, usamos el método anterior (optimizado)
+        if not hasattr(self, '_close_idx_cache'):
+            # Cache the index to avoid repeated searches
+            self._close_idx_cache = -1
+            for possible_name in ['close', 'Close', 'price', 'Price', 'log_ret_C_O_norm', 'log_ret_C_C_prev_norm']:
+                if possible_name in self.feature_names:
+                    self._close_idx_cache = self.feature_names.index(possible_name)
+                    break
         
-        # Intenta localizar la columna del precio de cierre en las características disponibles
-        for possible_name in ['close', 'Close', 'price', 'Price', 'log_ret_C_O_norm', 'log_ret_C_C_prev_norm']:
-            if possible_name in self.feature_names:
-                close_idx = self.feature_names.index(possible_name)
-                break
+        close_idx = self._close_idx_cache
         
-        # Si no se encuentra, usamos un valor promedio o aproximado
+        # Si no se encuentra, usamos un valor por defecto
         if close_idx == -1:
-            # Usamos el último precio conocido o un valor arbitrario para simulación
-            return 30000.0  # Valor por defecto para BTC si no hay datos
+            return 30000.0  # Valor por defecto para BTC
         
-        # Si es un retorno log, necesitamos convertirlo a precio absoluto
-        # Esto es una aproximación, ya que necesitaríamos el precio anterior
+        # Acceso directo al dato usando el índice cacheado
+        current_market_data = self.market_data[self.current_step_index]
+        
+        # Si es un retorno log, aproximamos el precio absoluto
         if 'log_ret' in self.feature_names[close_idx]:
-            # Asumiendo una base de precio aproximada para Bitcoin
-            return 30000.0 * (1 + self.market_data[self.current_step_index, -1, close_idx])
+            return 30000.0 * (1 + current_market_data[-1, close_idx])
         else:
             # Si es el precio directo
-            return float(self.market_data[self.current_step_index, -1, close_idx])
+            return float(current_market_data[-1, close_idx])
     
     def _liquidate_position(self, liquidation_price: float) -> None:
         """
@@ -655,19 +766,35 @@ class TradingEnvironment(gym.Env):
             Dict con características de mercado y cartera
         """
         try:
-            # Extrae la secuencia de datos de mercado de longitud L
-            market_features = self.market_data[self.current_step_index - self.L + 1:self.current_step_index + 1]
+            # Si ya tenemos las características del mercado en float32, podemos usarlas directamente
+            # sin conversión adicional
+            start_idx = self.current_step_index - self.L + 1
+            end_idx = self.current_step_index + 1
             
-            # Normaliza las características de cartera
+            # Extrae la secuencia de datos de mercado de longitud L usando vista en lugar de copia
+            # si es posible (depende de si market_data está en memoria contigua)
+            if self.market_data.flags.c_contiguous:
+                # Usamos una vista directa sin crear copia
+                market_features = self.market_data[start_idx:end_idx]
+            else:
+                # Si no es contiguo, necesitamos crear una copia
+                market_features = self.market_data[start_idx:end_idx].copy()
+            
+            # Normaliza las características de cartera (ya en float32)
             portfolio_features = self._get_normalized_portfolio_features()
             
-            # Construye la observación como un Dict
-            observation = {
-                'market_features': market_features.astype(np.float32),
-                'portfolio_features': portfolio_features.astype(np.float32)
-            }
+            # Construye la observación como un Dict (reusamos el mismo diccionario si ya existe)
+            if not hasattr(self, '_observation_cache'):
+                self._observation_cache = {
+                    'market_features': market_features,
+                    'portfolio_features': portfolio_features
+                }
+            else:
+                # Actualizamos el diccionario existente sin crear uno nuevo
+                self._observation_cache['market_features'] = market_features
+                self._observation_cache['portfolio_features'] = portfolio_features
             
-            return observation
+            return self._observation_cache
         except Exception as e:
             logger.error(f"Error al construir observación: {e}")
             logger.error(f"Índice actual: {self.current_step_index}, L: {self.L}, Forma market_data: {self.market_data.shape}")
@@ -675,58 +802,55 @@ class TradingEnvironment(gym.Env):
     
     def _get_normalized_portfolio_features(self) -> np.ndarray:
         """
-        Normaliza las características de la cartera.
+        Normaliza las características de la cartera optimizado con buffer preasignado.
         
         Returns:
             Array con 8 características normalizadas
         """
+        # Inicializar buffer de características si no existe
+        if not hasattr(self, '_portfolio_features_buffer'):
+            self._portfolio_features_buffer = np.zeros(8, dtype=np.float32)
+            
+        # Ref para más claridad en el código
+        features = self._portfolio_features_buffer
+        
         # 1. Estado Posición: {-1, 0, 1}
-        position_state = self.active_position_side
+        features[0] = self.active_position_side
+        
+        is_neutral = self.active_position_side == 0
         
         # 2. Tamaño Posición Normalizado
-        if self.active_position_side == 0:
-            normalized_position_size = 0.0
+        if is_neutral:
+            features[1] = 0.0
         else:
-            normalized_position_size = (self.active_position_size_contracts * self.active_position_entry_price) / self.initial_equity_episode
+            features[1] = (self.active_position_size_contracts * self.active_position_entry_price) / self.initial_equity_episode
         
         # 3. Precio Entrada Normalizado
-        if self.active_position_side == 0:
-            normalized_entry_price = 0.0
+        if is_neutral:
+            features[2] = 0.0
         else:
-            # Obtiene el precio de cierre actual usando nuestro método auxiliar
+            # Calculamos close_price una sola vez y lo reutilizamos
             close_price = self._get_current_close_price()
-            normalized_entry_price = self.active_position_entry_price / close_price - 1.0
+            features[2] = self.active_position_entry_price / close_price - 1.0
         
         # 4. P&L No Realizado Normalizado
-        normalized_unrealized_pnl = self.unrealized_pnl / max(self.current_equity, 1.0)  # Evita división por cero
+        features[3] = self.unrealized_pnl / max(self.current_equity, 1.0)  # Evita división por cero
         
         # 5. Retorno Log Equity (último paso)
-        if self.last_equity > 0:
-            log_equity_return = np.log(self.current_equity / self.last_equity)
-        else:
-            log_equity_return = 0.0
+        features[4] = np.log(self.current_equity / max(self.last_equity, 1.0))  # max evita división por cero
         
         # 6. Ratio de Margen Disponible
-        margin_ratio = self.available_margin / max(self.current_equity, 1.0)  # Evita división por cero
+        features[5] = self.available_margin / max(self.current_equity, 1.0)
         
         # 7. Pasos en Posición Normalizados
         max_steps = self.config['portfolio_features_normalization']['max_steps_in_position']
-        normalized_steps = self.steps_in_current_position / max_steps
+        features[6] = min(self.steps_in_current_position / max_steps, 1.0)  # Clamp a 1.0
         
         # 8. Apalancamiento Configurado
-        leverage = self.leverage
+        features[7] = self.leverage
         
-        # Combina las características en un array
-        portfolio_features = np.array([
-            position_state,
-            normalized_position_size,
-            normalized_entry_price,
-            normalized_unrealized_pnl,
-            log_equity_return,
-            margin_ratio,
-            normalized_steps,
-            leverage
-        ], dtype=np.float32)
+        # Devolver la referencia al buffer ya rellenado (sin crear copias)
+        return features
         
         return portfolio_features
     
@@ -761,3 +885,29 @@ class TradingEnvironment(gym.Env):
         Cierra el entorno y libera recursos.
         """
         pass
+    
+    def _get_atr_value_optimized(self, current_market_data, close_price):
+        """
+        Método auxiliar para obtener el valor ATR con caché de índices.
+        
+        Args:
+            current_market_data: Datos de mercado actuales
+            close_price: Precio de cierre actual
+            
+        Returns:
+            Valor ATR (desnormalizado)
+        """
+        # Cachear el índice ATR para evitar búsquedas repetidas
+        if not hasattr(self, '_atr_idx_cache'):
+            self._atr_idx_cache = self.feature_names.index('ATR_norm') if 'ATR_norm' in self.feature_names else -1
+            
+        atr_idx = self._atr_idx_cache
+        
+        # Si tenemos el índice, extraer el valor
+        if atr_idx >= 0:
+            # Des-normalizar si ATR_norm = ATR / Close
+            atr_value = current_market_data[-1, atr_idx] * close_price
+            return atr_value
+        else:
+            # Valor por defecto
+            return close_price * 0.01  # 1% del precio como aproximación
