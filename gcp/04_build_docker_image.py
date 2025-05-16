@@ -1,5 +1,5 @@
 """
-Script para construir y subir la imagen Docker a Artifact Registry.
+Script para construir y subir la imagen Docker a Artifact Registry usando Google Cloud Build.
 """
 import argparse
 import os
@@ -45,7 +45,7 @@ def create_artifact_repo():
 
 def build_and_push_image(tag, use_gpu=False):
     """
-    Construye y sube la imagen Docker a Artifact Registry.
+    Construye y sube la imagen Docker a Artifact Registry usando Google Cloud Build.
     
     Args:
         tag: Etiqueta para la imagen (ej: "latest", "v1", etc).
@@ -54,37 +54,50 @@ def build_and_push_image(tag, use_gpu=False):
     # Obtener la ruta del proyecto
     project_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     
-    # Seleccionar el Dockerfile adecuado y crear la etiqueta correspondiente
-    dockerfile = os.path.join(project_dir, "Dockerfile.gpu" if use_gpu else "Dockerfile")
+    # Seleccionar el Dockerfile adecuado
+    dockerfile_name = "Dockerfile.gpu" if use_gpu else "Dockerfile"
     image_suffix = "-gpu" if use_gpu else ""
     training_image_tag = f"{config.TRAINING_IMAGE_NAME}{image_suffix}:{tag}"
     
-    # Configurar el acceso a Artifact Registry
-    subprocess.run(["gcloud", "auth", "configure-docker", f"{config.REGION}-docker.pkg.dev"], check=True)
+    # Construir la imagen con Cloud Build
+    print(f"Construyendo imagen{'GPU' if use_gpu else ''} con Cloud Build: {training_image_tag}")
     
-    # Construir la imagen Docker
-    build_command = [
-        "docker", "build",
-        "-t", training_image_tag,
-        "-f", dockerfile,
-        project_dir
-    ]
+    # Crear un cloudbuild.yaml temporal
+    cloudbuild_content = f"""
+steps:
+- name: 'gcr.io/cloud-builders/docker'
+  args: ['build', '-t', '{training_image_tag}', '-f', '{dockerfile_name}', '.']
+images: ['{training_image_tag}']
+    """
     
-    print(f"Construyendo imagen{'GPU' if use_gpu else ''}: {training_image_tag}")
-    subprocess.run(build_command, check=True)
+    cloudbuild_file = os.path.join(project_dir, "cloudbuild.yaml")
+    try:
+        # Guardar el archivo temporalmente
+        with open(cloudbuild_file, "w") as f:
+            f.write(cloudbuild_content)
+        
+        # Comando con el archivo de configuración
+        build_command = [
+            "gcloud", "builds", "submit",
+            "--project", config.PROJECT_ID,
+            # No especificamos la región para usar la región global por defecto
+            "--config", "cloudbuild.yaml",
+            project_dir
+        ]
+        
+        subprocess.run(build_command, check=True)
+        
+    finally:
+        # Eliminar el archivo temporal si existe
+        if os.path.exists(cloudbuild_file):
+            os.remove(cloudbuild_file)
     
-    # Subir la imagen
-    push_command = ["docker", "push", training_image_tag]
-    
-    print(f"Subiendo imagen a Artifact Registry: {training_image_tag}")
-    subprocess.run(push_command, check=True)
-    
-    print(f"Imagen {training_image_tag} construida y subida exitosamente.")
+    print(f"Imagen {training_image_tag} construida y subida exitosamente con Cloud Build.")
     return training_image_tag
 
 def main(tag, use_gpu=False):
     """
-    Función principal para construir y subir la imagen Docker.
+    Función principal para construir y subir la imagen Docker usando Cloud Build.
     
     Args:
         tag: Etiqueta para la imagen.
@@ -99,10 +112,9 @@ def main(tag, use_gpu=False):
     print(f"Proceso completado. Imagen disponible en: {image_uri}")
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Construir y subir imagen Docker a Artifact Registry")
+    parser = argparse.ArgumentParser(description="Construir y subir imagen Docker a Artifact Registry usando Cloud Build")
     parser.add_argument("--tag", default="latest", help="Etiqueta para la imagen Docker (default: latest)")
     parser.add_argument("--gpu", action="store_true", help="Construir imagen con soporte para GPU")
     
     args = parser.parse_args()
     main(args.tag, args.gpu)
-    main(args.tag)
