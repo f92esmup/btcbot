@@ -107,5 +107,37 @@ python gcp/09_deploy_model.py --model_id $MODEL_ID
 Para eliminar los recursos creados por estos scripts y evitar cargos innecesarios:
 
 ```bash
-# TODO: Implementar script de limpieza para eliminar recursos
+# Eliminar todos los recursos de GCP asociados con el proyecto BTCBot
+# Esto incluye:
+# - Endpoints de Vertex AI
+# - Modelos desplegados
+# - Jobs de entrenamiento
+# - Servicios de Cloud Run
+# - Buckets de almacenamiento
+# - Secretos de Secret Manager
+# - Cuentas de servicio personalizadas
+# - Imágenes de Docker en Artifact Registry
+
+python gcp/10_cleanup_resources.py --force
+```
+
+> **⚠️ ADVERTENCIA**: Este comando eliminará permanentemente todos los recursos relacionados con BTCBot en GCP. Úsalo con precaución y asegúrate de haber respaldado cualquier dato importante antes de ejecutarlo.
+
+También puedes eliminar recursos específicos según sea necesario:
+
+```bash
+# Eliminar solo los endpoints de modelo
+python gcp/10_cleanup_resources.py --resources endpoints
+
+# Eliminar solo los buckets de almacenamiento
+python gcp/10_cleanup_resources.py --resources storage
+
+# Eliminar solo las imágenes de Docker
+python gcp/10_cleanup_resources.py --resources docker_images
+```
+
+Para más información sobre las opciones disponibles:
+
+```bash
+python gcp/10_cleanup_resources.py --help
 ```

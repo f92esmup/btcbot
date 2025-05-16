@@ -3,13 +3,15 @@
 Para poder utilizar la funcionalidad de migración a Google Cloud Platform, necesitas instalar las siguientes dependencias:
 
 ```bash
-pip install google-cloud-storage google-cloud-aiplatform google-cloud-secretmanager kfp
+pip install google-cloud-storage google-cloud-aiplatform google-cloud-secretmanager google-cloud-artifact-registry google-api-python-client kfp
 ```
 
 Estas bibliotecas son necesarias para los siguientes componentes:
 - `google-cloud-storage`: Para interactuar con buckets de Cloud Storage
 - `google-cloud-aiplatform`: Para utilizar Vertex AI (entrenamiento, modelado, etc.)
 - `google-cloud-secretmanager`: Para gestionar secretos como las API keys
+- `google-cloud-artifact-registry`: Para manejar imágenes Docker en Artifact Registry
+- `google-api-python-client`: Para interactuar con varias APIs de Google (IAM, Cloud Run)
 - `kfp`: Para crear y ejecutar pipelines de Vertex AI
 
 ## Requisitos adicionales
