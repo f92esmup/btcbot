@@ -29,11 +29,11 @@ data/processed/*
 
 # Logs
 *.log
-logs/*
+logs/
 !logs/.gitkeep
 
 # Modelos entrenados (excepto ejemplo)
-models/*
+models/
 !models/.gitkeep
 !models/sac_transformer_trading_agent_final_1000_steps.zip
 

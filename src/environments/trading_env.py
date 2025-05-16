@@ -45,9 +45,11 @@ class TradingEnvironment(gym.Env):
         # Configura el render_mode
         self.render_mode = render_mode
         
+        # Initialize sequence length before loading data
+        self.L = self.config['sequence_length_L']
+        
         # Carga los datos de mercado preprocesados
         self.market_data, self.feature_names = self._load_market_data()
-        self.L = self.config['sequence_length_L']
         
         # Inicializa el broker simulado
         self.broker = SimulatedBroker(
@@ -211,7 +213,29 @@ class TradingEnvironment(gym.Env):
             self.atr_values = None
             logger.warning("No se encontraron datos de precio y ATR sin normalizar. Usando aproximaciones.")
         
-        logger.info(f"Datos de mercado cargados: {market_features.shape}")
+        # Asegurar que market_features sea float32
+        if market_features.dtype != np.float32:
+            logger.info(f"Convirtiendo market_features de {market_features.dtype} a float32")
+            market_features = market_features.astype(np.float32)
+            
+        # Verificar que self.L coincide con la dimensión secuencial de los datos
+        if market_features.shape[1] != self.L:
+            logger.warning(f"Advertencia: La longitud de secuencia en los datos ({market_features.shape[1]}) no coincide con self.L ({self.L})")
+            logger.warning(f"Ajustando self.L para que coincida con los datos")
+            self.L = market_features.shape[1]
+            
+            # También actualizar el observation_space
+            market_features_dim = market_features.shape[2]
+            self.observation_space = spaces.Dict({
+                'market_features': spaces.Box(
+                    low=-np.inf, high=np.inf, shape=(self.L, market_features_dim), dtype=np.float32
+                ),
+                'portfolio_features': spaces.Box(
+                    low=-np.inf, high=np.inf, shape=(8,), dtype=np.float32
+                )
+            })
+            
+        logger.info(f"Datos de mercado cargados: {market_features.shape}, dtype: {market_features.dtype}")
         return market_features, feature_names
     
     def reset(self, seed: Optional[int] = None, options: Optional[Dict[str, Any]] = None) -> Tuple[Dict[str, np.ndarray], Dict[str, Any]]:
@@ -242,12 +266,13 @@ class TradingEnvironment(gym.Env):
         
         # Selecciona un punto de inicio aleatorio en el conjunto de datos si está configurado
         if self.config['allow_random_episode_start']:
-            # Asegura que haya suficientes datos para al menos una secuencia completa
-            max_start_idx = len(self.market_data) - self.L * 2  # * 2 para tener espacio para al menos un episodio razonable
+            # Asegura que haya suficientes datos para al menos un episodio razonable
+            min_episode_steps = 10  # Número mínimo de pasos para un episodio
+            max_start_idx = len(self.market_data) - min_episode_steps
             self.current_step_index = self.np_random.integers(0, max_start_idx) if max_start_idx > 0 else 0
         else:
-            # Comienza desde el principio (asegura al menos una secuencia de longitud L)
-            self.current_step_index = self.L
+            # Comienza desde la primera secuencia disponible
+            self.current_step_index = 0
         
         # Reinicia el estado de la cartera
         self.initial_equity_episode = self.initial_equity
@@ -296,17 +321,8 @@ class TradingEnvironment(gym.Env):
         # Obtiene el precio de cierre usando nuestro método optimizado
         close_price = self._get_current_close_price()
         
-        # Obtiene el ATR eficientemente
-        # Usar ATR pre-calculado si está disponible
-        if hasattr(self, 'atr_values') and self.atr_values is not None:
-            try:
-                atr_value = float(self.atr_values[self.current_step_index - self.L + 1])
-            except (IndexError, TypeError):
-                # Fallback a método estándar
-                atr_value = self._get_atr_value_optimized(current_market_data, close_price)
-        else:
-            # Si no tenemos ATR preprocesado, usar método optimizado con caché
-            atr_value = self._get_atr_value_optimized(current_market_data, close_price)
+        # Obtiene el ATR usando el método optimizado que ya maneja atr_values
+        atr_value = self._get_atr_value_optimized(current_market_data, close_price)
             
         # Procesa la acción y actualiza el estado del entorno
         info = self._process_action(action_signal, close_price, atr_value)
@@ -337,7 +353,7 @@ class TradingEnvironment(gym.Env):
             info['termination_reason'] = 'liquidation'
         
         # Condición 3: Fin de datos disponibles
-        if self.current_step_index >= len(self.market_data) - self.L:
+        if self.current_step_index >= len(self.market_data) - 1:
             truncated = True
             info['termination_reason'] = 'data_end'
         
@@ -393,7 +409,7 @@ class TradingEnvironment(gym.Env):
             info['termination_reason'] = 'liquidation'
         
         # Condición 3: Fin de datos disponibles
-        if self.current_step_index >= len(self.market_data) - self.L:
+        if self.current_step_index >= len(self.market_data) - 1:
             truncated = True
             info['termination_reason'] = 'data_end'
         
@@ -654,7 +670,7 @@ class TradingEnvironment(gym.Env):
         # Usar ATR directamente desde datos preprocesados si están disponibles (más rápido)
         if hasattr(self, 'atr_values') and self.atr_values is not None:
             try:
-                atr = float(self.atr_values[self.current_step_index - self.L + 1])
+                atr = float(self.atr_values[self.current_step_index])
                 # Usar ATR para aproximaciones más precisas de high y low
                 high_price = close_price + atr * 0.5
                 low_price = close_price - atr * 0.5
@@ -692,9 +708,10 @@ class TradingEnvironment(gym.Env):
         # Primero intentamos usar close_prices no normalizados si están disponibles
         try:
             if hasattr(self, 'close_prices') and self.close_prices is not None:
-                return float(self.close_prices[self.current_step_index - self.L + 1])
+                return float(self.close_prices[self.current_step_index])
         except (IndexError, AttributeError) as e:
             # Si hay un error, continuamos con el método anterior
+            logger.warning(f"Error al acceder a self.close_prices[{self.current_step_index}]: {e}. Usando fallback.")
             pass
             
         # Si no tenemos close_prices, usamos el método anterior (optimizado)
@@ -774,19 +791,15 @@ class TradingEnvironment(gym.Env):
             Dict con características de mercado y cartera
         """
         try:
-            # Si ya tenemos las características del mercado en float32, podemos usarlas directamente
-            # sin conversión adicional
-            start_idx = self.current_step_index - self.L + 1
-            end_idx = self.current_step_index + 1
+            # Cada índice en market_data ya representa una secuencia completa de longitud L
+            # Seleccionamos la secuencia actual directamente
             
-            # Extrae la secuencia de datos de mercado de longitud L usando vista en lugar de copia
-            # si es posible (depende de si market_data está en memoria contigua)
-            if self.market_data.flags.c_contiguous:
-                # Usamos una vista directa sin crear copia
-                market_features = self.market_data[start_idx:end_idx]
-            else:
-                # Si no es contiguo, necesitamos crear una copia
-                market_features = self.market_data[start_idx:end_idx].copy()
+            # Extraemos la secuencia actual de datos de mercado
+            market_features = self.market_data[self.current_step_index]
+            
+            # Aseguramos que sea float32
+            if market_features.dtype != np.float32:
+                market_features = market_features.astype(np.float32)
             
             # Normaliza las características de cartera (ya en float32)
             portfolio_features = self._get_normalized_portfolio_features()
@@ -933,6 +946,14 @@ class TradingEnvironment(gym.Env):
         Returns:
             Valor ATR (desnormalizado)
         """
+        # Intentar usar ATR pre-calculado primero si está disponible
+        try:
+            if hasattr(self, 'atr_values') and self.atr_values is not None:
+                return float(self.atr_values[self.current_step_index])
+        except (IndexError, AttributeError, TypeError):
+            # Si falla, continuamos con el método basado en features
+            pass
+            
         # Cachear el índice ATR para evitar búsquedas repetidas
         if not hasattr(self, '_atr_idx_cache'):
             self._atr_idx_cache = self.feature_names.index('ATR_norm') if 'ATR_norm' in self.feature_names else -1
