@@ -7,7 +7,9 @@ certifi==2025.4.26
 charset-normalizer==3.4.2
 dateparser==1.2.1
 frozenlist==1.6.0
+gymnasium==0.29.1
 idna==3.10
+matplotlib==3.9.1
 multidict==6.4.3
 numpy==2.2.5
 pandas==2.2.3
