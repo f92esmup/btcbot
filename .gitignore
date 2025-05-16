@@ -1,0 +1,46 @@
+# Entorno virtual
+venv/
+env/
+ENV/
+
+# Archivos de Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+*.egg
+.ipynb_checkpoints
+
+# Archivos de configuración con información sensible
+.env
+
+# Datos descargados y archivos grandes
+data/raw/*.csv
+data/processed/*.csv
+*.parquet
+*.pkl
+
+# Logs
+*.log
+logs/
+
+# Archivos de sistema
+.DS_Store
+Thumbs.db
+
+# IDEs y editores
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Archivos de distribución
+dist/
+build/
+
+# Otros
+.coverage
+htmlcov/
