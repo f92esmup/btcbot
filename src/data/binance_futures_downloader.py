@@ -1,5 +1,5 @@
 import pandas as pd
-from binance.um_futures import UMFutures
+from binance.client import Client
 from datetime import datetime, timezone
 import time
 import logging
@@ -19,12 +19,12 @@ class BinanceFuturesDownloader:
             raise ValueError("API Key o Secret de Binance Futuros no configuradas.")
 
         try:
-            self.client = UMFutures(key=self.api_key, secret=self.api_secret)
-            self.client.ping() # Verificar conexión
-            logger.info("Conexión con Binance UMFutures API establecida exitosamente.")
+            self.client = Client(self.api_key, self.api_secret)
+            self.client.futures_ping()  # Verificar conexión con la API de futuros
+            logger.info("Conexión con Binance Futures API establecida exitosamente.")
         except Exception as e:
-            logger.error(f"Error al conectar con Binance UMFutures API: {e}")
-            raise ConnectionError(f"Error al conectar con Binance UMFutures API: {e}")
+            logger.error(f"Error al conectar con Binance Futures API: {e}")
+            raise ConnectionError(f"Error al conectar con Binance Futures API: {e}")
 
 
         self.raw_data_path = self.config_manager.get_config_value('data_paths.raw')
@@ -85,7 +85,7 @@ class BinanceFuturesDownloader:
             try:
                 logger.debug(f"Obteniendo velas para {symbol} desde {datetime.fromtimestamp(fetch_start_time/1000, tz=timezone.utc).strftime('%Y-%m-%d %H:%M:%S')} UTC...")
                 
-                klines = self.client.klines(
+                klines = self.client.futures_klines(
                     symbol=symbol,
                     interval=interval,
                     startTime=fetch_start_time,
