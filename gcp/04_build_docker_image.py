@@ -43,13 +43,15 @@ def create_artifact_repo():
     subprocess.run(create_command, check=True)
     print(f"Repositorio {repo_name} creado exitosamente.")
 
-def build_and_push_image(tag, use_gpu=False):
+def build_and_push_image(tag, use_gpu=False, build_region=None, use_global=False):
     """
     Construye y sube la imagen Docker a Artifact Registry usando Google Cloud Build.
     
     Args:
         tag: Etiqueta para la imagen (ej: "latest", "v1", etc).
         use_gpu: Indica si se debe construir la imagen con soporte para GPU.
+        build_region: Región en la que ejecutar Cloud Build. Si es None, usa la región por defecto.
+        use_global: Si es True, usa Cloud Build global sin especificar región.
     """
     # Obtener la ruta del proyecto
     project_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -59,8 +61,12 @@ def build_and_push_image(tag, use_gpu=False):
     image_suffix = "-gpu" if use_gpu else ""
     training_image_tag = f"{config.TRAINING_IMAGE_NAME}{image_suffix}:{tag}"
     
+    # Determinar la región de construcción
+    region_to_use = build_region if build_region else config.REGION
+    
     # Construir la imagen con Cloud Build
     print(f"Construyendo imagen{'GPU' if use_gpu else ''} con Cloud Build: {training_image_tag}")
+    print(f"Usando {'Cloud Build global' if use_global else f'región: {region_to_use}'}")
     
     # Crear un cloudbuild.yaml temporal
     cloudbuild_content = f"""
@@ -92,20 +98,28 @@ options:
         build_command = [
             "gcloud", "builds", "submit",
             "--project", config.PROJECT_ID,
-            "--region", config.REGION,
             "--verbosity", "info",
             "--log-http",
             "--config", "cloudbuild.yaml",
             project_dir
         ]
         
+        # Añadir la región solo si no estamos usando la configuración global
+        if not use_global:
+            build_command.extend(["--region", region_to_use])
+        
         print(f"Ejecutando: {' '.join(build_command)}")
         try:
             subprocess.run(build_command, check=True)
         except subprocess.CalledProcessError as e:
             print(f"Error al construir la imagen: {e}")
-            print(f"Comando: {' '.join(build_command)}")
-            raise
+            if not use_global and region_to_use == config.REGION:
+                print("Error con la región por defecto. Intentando con Cloud Build global...")
+                # Intentar sin especificar región (global)
+                return build_and_push_image(tag, use_gpu, None, True)
+            else:
+                print(f"Comando: {' '.join(build_command)}")
+                raise
         
     finally:
         # Eliminar el archivo temporal si existe
@@ -115,19 +129,21 @@ options:
     print(f"Imagen {training_image_tag} construida y subida exitosamente con Cloud Build.")
     return training_image_tag
 
-def main(tag, use_gpu=False):
+def main(tag, use_gpu=False, build_region=None, use_global=False):
     """
     Función principal para construir y subir la imagen Docker usando Cloud Build.
     
     Args:
         tag: Etiqueta para la imagen.
         use_gpu: Indica si se debe construir la imagen con soporte para GPU.
+        build_region: Región específica para Cloud Build.
+        use_global: Si es True, usa Cloud Build global sin especificar región.
     """
     # Crear repositorio si no existe
     create_artifact_repo()
     
     # Construir y subir imagen
-    image_uri = build_and_push_image(tag, use_gpu)
+    image_uri = build_and_push_image(tag, use_gpu, build_region, use_global)
     
     print(f"Proceso completado. Imagen disponible en: {image_uri}")
 
@@ -135,6 +151,9 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Construir y subir imagen Docker a Artifact Registry usando Cloud Build")
     parser.add_argument("--tag", default="latest", help="Etiqueta para la imagen Docker (default: latest)")
     parser.add_argument("--gpu", action="store_true", help="Construir imagen con soporte para GPU")
+    parser.add_argument("--region", help=f"Región específica para Cloud Build (default: {config.REGION})")
+    parser.add_argument("--global", dest="use_global", action="store_true", 
+                        help="Usar Cloud Build global sin especificar región (útil para evitar restricciones de cuota)")
     
     args = parser.parse_args()
-    main(args.tag, args.gpu)
+    main(args.tag, args.gpu, args.region, args.use_global)
