@@ -8,7 +8,8 @@ import uuid
 from google.cloud import aiplatform
 from common import config, clients
 
-def launch_training_job(training_image_uri, output_dir, job_name_suffix=None, machine_type="n1-standard-4"):
+def launch_training_job(training_image_uri, output_dir, job_name_suffix=None, machine_type="n1-standard-4",
+                   accelerator_type=None, accelerator_count=0):
     """
     Lanza un trabajo de entrenamiento personalizado en Vertex AI.
     
@@ -17,6 +18,8 @@ def launch_training_job(training_image_uri, output_dir, job_name_suffix=None, ma
         output_dir: Directorio en GCS para guardar los artefactos del modelo.
         job_name_suffix: Sufijo opcional para el nombre del trabajo.
         machine_type: Tipo de máquina para el entrenamiento.
+        accelerator_type: Tipo de acelerador (GPU) a utilizar. Opciones: NVIDIA_TESLA_T4, NVIDIA_TESLA_V100, etc.
+        accelerator_count: Número de GPUs a utilizar (1-8).
         
     Returns:
         CustomJobRunOp: El objeto del trabajo personalizado.
@@ -40,16 +43,25 @@ def launch_training_job(training_image_uri, output_dir, job_name_suffix=None, ma
         ]
     }
     
+    # Configurar especificaciones de máquina con o sin GPU
+    machine_spec = {
+        "machine_type": machine_type,
+    }
+    
+    # Añadir GPUs si se solicitan
+    if accelerator_type and accelerator_count > 0:
+        machine_spec["accelerator_type"] = accelerator_type
+        machine_spec["accelerator_count"] = accelerator_count
+    else:
+        machine_spec["accelerator_type"] = "ACCELERATOR_TYPE_UNSPECIFIED"
+        machine_spec["accelerator_count"] = 0
+    
     # Configurar el trabajo personalizado
     job = aiplatform.CustomJob(
         display_name=job_name,
         worker_pool_specs=[
             {
-                "machine_spec": {
-                    "machine_type": machine_type,
-                    "accelerator_type": "ACCELERATOR_TYPE_UNSPECIFIED",
-                    "accelerator_count": 0
-                },
+                "machine_spec": machine_spec,
                 "replica_count": 1,
                 "container_spec": container_spec
             }
@@ -94,7 +106,8 @@ def register_model(model_artifacts_uri, model_name, model_description=None, fram
     print(f"Modelo registrado en Vertex AI Model Registry con ID: {model.resource_name}")
     return model
 
-def main(job_name_suffix=None, machine_type="n1-standard-4", image_tag="latest"):
+def main(job_name_suffix=None, machine_type="n1-standard-4", image_tag="latest", 
+         use_gpu=False, gpu_type="NVIDIA_TESLA_T4", gpu_count=1):
     """
     Función principal para lanzar un trabajo de entrenamiento y registrar el modelo.
     
@@ -102,13 +115,21 @@ def main(job_name_suffix=None, machine_type="n1-standard-4", image_tag="latest")
         job_name_suffix: Sufijo opcional para el nombre del trabajo.
         machine_type: Tipo de máquina para el entrenamiento.
         image_tag: Etiqueta de la imagen Docker a utilizar.
+        use_gpu: Si se debe utilizar GPU para el entrenamiento.
+        gpu_type: Tipo de GPU a utilizar (si use_gpu=True).
+        gpu_count: Número de GPUs a utilizar (si use_gpu=True).
     """
-    # Construir el URI de la imagen Docker
-    training_image_uri = f"{config.TRAINING_IMAGE_NAME}:{image_tag}"
+    # Construir el URI de la imagen Docker (usar la imagen GPU si corresponde)
+    image_suffix = "-gpu" if use_gpu else ""
+    training_image_uri = f"{config.TRAINING_IMAGE_NAME}{image_suffix}:{image_tag}"
     
     # Generar la ruta de salida en GCS
     timestamp = time.strftime("%Y%m%d_%H%M%S", time.localtime())
     output_dir = f"gs://{config.MODELS_STAGING_BUCKET}/training_{timestamp}"
+    
+    # Determinar acelerador
+    accelerator_type = gpu_type if use_gpu else None
+    accelerator_count = gpu_count if use_gpu else 0
     
     try:
         # Lanzar el trabajo de entrenamiento
@@ -116,7 +137,9 @@ def main(job_name_suffix=None, machine_type="n1-standard-4", image_tag="latest")
             training_image_uri=training_image_uri,
             output_dir=output_dir,
             job_name_suffix=job_name_suffix,
-            machine_type=machine_type
+            machine_type=machine_type,
+            accelerator_type=accelerator_type,
+            accelerator_count=accelerator_count
         )
         
         # Registrar el modelo en Vertex AI Model Registry
@@ -126,7 +149,8 @@ def main(job_name_suffix=None, machine_type="n1-standard-4", image_tag="latest")
         model = register_model(
             model_artifacts_uri=model_artifacts_uri,
             model_name=model_name,
-            model_description=f"Agente de trading entrenado el {timestamp}",
+            model_description=f"Agente de trading entrenado el {timestamp}" + 
+                              (f" con GPU {gpu_type}" if use_gpu else ""),
             framework="custom"
         )
         
@@ -145,6 +169,12 @@ if __name__ == "__main__":
     parser.add_argument("--job_suffix", help="Sufijo opcional para el nombre del trabajo")
     parser.add_argument("--machine_type", default="n1-standard-4", help="Tipo de máquina para el entrenamiento")
     parser.add_argument("--image_tag", default="latest", help="Etiqueta de la imagen Docker a utilizar")
+    parser.add_argument("--use_gpu", action="store_true", help="Utilizar GPU para el entrenamiento")
+    parser.add_argument("--gpu_type", default="NVIDIA_TESLA_T4", 
+                        choices=["NVIDIA_TESLA_T4", "NVIDIA_TESLA_V100", "NVIDIA_TESLA_P100", "NVIDIA_TESLA_P4", "NVIDIA_TESLA_K80"],
+                        help="Tipo de GPU a utilizar (si --use_gpu está activado)")
+    parser.add_argument("--gpu_count", type=int, default=1, choices=range(1, 9),
+                        help="Número de GPUs a utilizar (1-8, si --use_gpu está activado)")
     
     args = parser.parse_args()
-    main(args.job_suffix, args.machine_type, args.image_tag)
+    main(args.job_suffix, args.machine_type, args.image_tag, args.use_gpu, args.gpu_type, args.gpu_count)

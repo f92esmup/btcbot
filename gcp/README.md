@@ -59,7 +59,14 @@ Tienes dos opciones para entrenar el modelo:
 #### Opción 1: Trabajo de Entrenamiento Individual
 
 ```bash
+# Entrenamiento con CPU
 python gcp/06_launch_training_job.py --machine_type n1-standard-8
+
+# Entrenamiento con GPU NVIDIA T4
+python gcp/06_launch_training_job.py --machine_type n1-standard-8 --use_gpu --gpu_type NVIDIA_TESLA_T4 --gpu_count 1
+
+# Entrenamiento con múltiples GPUs (por ejemplo, 2 GPUs V100)
+python gcp/06_launch_training_job.py --machine_type n1-standard-8 --use_gpu --gpu_type NVIDIA_TESLA_V100 --gpu_count 2
 ```
 
 #### Opción 2: Pipeline de Entrenamiento Completo
