@@ -3,6 +3,7 @@ Script para configurar IAM y cuentas de servicio en GCP.
 """
 import argparse
 import time
+import subprocess
 from google.cloud import iam_admin_v1
 from google.api_core.exceptions import AlreadyExists, PermissionDenied
 from common import config, clients
@@ -39,58 +40,31 @@ def create_service_account(project_id, name, display_name, description):
 
 def add_role_to_service_account(project_id, service_account_email, role):
     """
-    Añade un rol a una cuenta de servicio.
+    Añade un rol a una cuenta de servicio usando gcloud.
     
     Args:
         project_id: ID del proyecto GCP.
         service_account_email: Email de la cuenta de servicio.
         role: Rol a añadir (ej: roles/storage.admin).
     """
-    from google.cloud import resourcemanager_v3
-    
-    client = resourcemanager_v3.ProjectsClient()
-    project_name = f"projects/{project_id}"
-    
-    # Obtener la política IAM actual
-    request = resourcemanager_v3.GetIamPolicyRequest(
-        resource=project_name
-    )
-    policy = client.get_iam_policy(request=request)
-    
-    # Crear un binding para el rol
-    from google.iam.v1 import iam_policy_pb2
-    binding = iam_policy_pb2.Binding()
-    binding.role = role
-    binding.members.append(f"serviceAccount:{service_account_email}")
-    
-    # Verificar si ya existe un binding para este rol
-    role_exists = False
-    for existing_binding in policy.bindings:
-        if existing_binding.role == role:
-            if f"serviceAccount:{service_account_email}" not in existing_binding.members:
-                existing_binding.members.append(f"serviceAccount:{service_account_email}")
-            role_exists = True
-            break
-    
-    # Si el rol no existe, añadirlo
-    if not role_exists:
-        policy.bindings.append(binding)
-    
-    # Actualizar la política
-    request = resourcemanager_v3.SetIamPolicyRequest(
-        resource=project_name,
-        policy=policy
-    )
-    
     try:
-        updated_policy = client.set_iam_policy(request=request)
-        print(f"Rol {role} asignado a {service_account_email}.")
+        # Usar gcloud para asignar el rol a la cuenta de servicio
+        cmd = [
+            "gcloud", "projects", "add-iam-policy-binding", project_id,
+            "--member", f"serviceAccount:{service_account_email}",
+            "--role", role
+        ]
+        
+        print(f"Asignando rol {role} a {service_account_email}...")
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        print(f"Rol {role} asignado a {service_account_email} correctamente.")
+        
         # Esperar a que se propaguen los permisos
         time.sleep(2)
-        return updated_policy
-    except PermissionDenied as e:
-        print(f"Error al asignar rol: {e}")
-        return None
+        return True
+    except subprocess.CalledProcessError as e:
+        print(f"Error al asignar rol {role}: {e.stderr}")
+        return False
 
 def setup_iam():
     """
