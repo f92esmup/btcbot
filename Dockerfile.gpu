@@ -16,6 +16,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-dev \
     build-essential \
     wget \
+    cmake \
+    libssl-dev \
+    autoconf \
+    automake \
+    pkg-config \
+    # libtool es generalmente parte de build-essential o autoconf/automake, pero por si acaso:
+    libtool \ 
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
@@ -23,7 +30,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN ln -sf /usr/bin/python3.10 /usr/bin/python3 && \
     ln -sf /usr/bin/python3 /usr/bin/python
 
-# Descargar e instalar TA-Lib
+# Descargar, compilar e instalar TA-Lib (C library)
 RUN wget http://prdownloads.sourceforge.net/ta-lib/ta-lib-0.4.0-src.tar.gz && \
     tar -xvzf ta-lib-0.4.0-src.tar.gz && \
     cd ta-lib && \
@@ -31,9 +38,11 @@ RUN wget http://prdownloads.sourceforge.net/ta-lib/ta-lib-0.4.0-src.tar.gz && \
     make && \
     make install && \
     cd .. && \
-    rm -rf ta-lib ta-lib-0.4.0-src.tar.gz
+    rm -rf ta-lib ta-lib-0.4.0-src.tar.gz && \
+    ldconfig # <--- MUY IMPORTANTE: Actualiza el caché del enlazador
 
-# Crear enlaces simbólicos para asegurar que ta-lib se encuentre correctamente
+# El siguiente enlace simbólico puede ser redundante si ldconfig funciona bien,
+# pero no hace daño como doble seguro.
 RUN ln -sf /usr/lib/libta_lib.so.0 /usr/lib/libta_lib.so
 
 WORKDIR /app
@@ -43,13 +52,30 @@ COPY requirements.txt /app/
 COPY src/ /app/src/
 COPY scripts/ /app/scripts/
 
-# Instalar tensorflow-gpu y otras dependencias 
+# Variables de entorno para ayudar a CMake a encontrar OpenSSL (para la compilación del paquete Python 'cmake' si ocurre)
+ENV OPENSSL_ROOT_DIR=/usr
+ENV OPENSSL_INCLUDE_DIRS=/usr/include/openssl
+ENV OPENSSL_LIBRARIES=/usr/lib/x86_64-linux-gnu
+# Podrías también intentar añadir explícitamente las rutas de la biblioteca C de TA-Lib
+# ENV TA_LIBRARY_PATH=/usr/lib
+# ENV TA_INCLUDE_PATH=/usr/include
+
+# Instalar tensorflow-gpu y otras dependencias
 RUN pip3 install --no-cache-dir --upgrade pip && \
+    echo "INFO: Iniciando instalación de requirements.txt" && \
+    # Primero instala numpy que es necesario para la compilación de TA-Lib
+    pip3 install --no-cache-dir numpy==1.26.4 && \
     (pip3 install --no-cache-dir -r requirements.txt || \
-    (echo "Error installing requirements. Trying ta-lib separately..." && \
+    (echo "ERROR: Falló la instalación directa de requirements.txt. Intentando TA-Lib por separado..." && \
+     echo "INFO: Instalando TA-Lib (Python wrapper)..." && \
+     # La opción --no-binary :all: fuerza la compilación, puede ser necesaria
+     # si no hay wheels para tu plataforma específica.
      pip3 install --no-cache-dir --no-binary :all: TA-Lib==0.6.3 && \
+     echo "INFO: Reintentando instalar requirements.txt (asumiendo que TA-Lib ya está o se instalará)..." && \
      pip3 install --no-cache-dir -r requirements.txt)) && \
-    pip3 install --no-cache-dir tensorflow==2.15.0
+    echo "INFO: Instalando TensorFlow..." && \
+    pip3 install --no-cache-dir tensorflow==2.15.0 && \
+    echo "INFO: Instalación de paquetes Python completada."
 
 # Variables de entorno predeterminadas
 ENV PYTHONPATH=/app

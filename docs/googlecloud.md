@@ -1,1 +1,99 @@
-Plan de Migración del Proyecto BTCBot a Google Cloud Platform (v2)1. Introducción y Objetivos de la MigraciónEste documento detalla la estrategia para migrar el proyecto btcbot a Google Cloud Platform (GCP). El objetivo principal es construir una infraestructura de Machine Learning (ML) de nivel profesional, aprovechando los servicios gestionados de GCP para mejorar la escalabilidad, la fiabilidad, la automatización y la observabilidad del sistema de trading algorítmico.Objetivos Específicos:Centralización Completa en GCP: Todos los componentes del proyecto, desde la adquisición de datos hasta el entrenamiento, el versionado de modelos y la monitorización, residirán y operarán en GCP.Infraestructura como Código (IaC): La configuración y el aprovisionamiento de los recursos de GCP se gestionarán mediante scripts Python ubicados en una carpeta gcp/ en la raíz del proyecto.Mejores Prácticas de MLOps: Implementar principios de MLOps, incluyendo la automatización de builds (Cloud Build), el versionado de datos (GCS con control de versiones), el versionado formal de modelos (Vertex AI Model Registry), y pipelines de ML (Vertex AI Pipelines).Escalabilidad y Rendimiento: Utilizar servicios que puedan escalar según las necesidades, especialmente para el preprocesamiento de datos y el entrenamiento de modelos de RL.Seguridad: Gestionar de forma segura las credenciales y los accesos mediante Identity and Access Management (IAM) y Secret Manager.Logging y Monitorización Integrados: Utilizar Cloud Logging y Cloud Monitoring para una observabilidad completa del sistema.2. Arquitectura General en GCPLa arquitectura propuesta en GCP se centrará en la modularidad y el uso de servicios gestionados para minimizar la sobrecarga operativa.[Imagen de Diagrama de Arquitectura de BTCBot en GCP]Fuente de Datos: API de Binance (externa a GCP).Ingesta y Procesamiento de Datos: Cloud Functions/Run para descarga, Cloud Storage para almacenamiento de datos crudos y procesados (con versionado habilitado), Vertex AI Pipelines para orquestar el preprocesamiento.Entrenamiento de Modelos: Vertex AI Training para trabajos de entrenamiento de RL, utilizando imágenes Docker personalizadas.Almacenamiento de Artefactos:Cloud Storage: Para datasets, logs, y artefactos intermedios de los pipelines.Artifact Registry: Para imágenes Docker.Vertex AI Model Registry: Para el versionado, almacenamiento y gestión formal de los modelos entrenados.Orquestación y CI/CD: Cloud Build para la construcción y el despliegue, Vertex AI Pipelines para flujos de trabajo de ML.Gestión de Configuración y Secretos: Secret Manager para claves API, archivos de configuración empaquetados o en Cloud Storage.Observabilidad: Cloud Logging y Cloud Monitoring.3. Mapeo de Componentes del Proyecto a Servicios GCPA continuación, se detalla cómo cada componente de tu proyecto btcbot se integrará con los servicios de GCP:Módulo de Adquisición de Datos (scripts/download_data.py)Ejecución: Cloud Functions (2nd gen) o Cloud Run, programados con Cloud Scheduler.Almacenamiento de Datos Crudos (data/raw/): Google Cloud Storage (GCS) (ej. btcbot-raw-data-<project-id>), con control de versiones habilitado en el bucket para trazabilidad.Gestión de Secretos (API Keys de Binance): Secret Manager.Módulo de Preprocesamiento de Datos (scripts/preprocess_data.py)Ejecución:Vertex AI Pipelines: Orquestará el preprocesamiento como un componente personalizado. Este es el enfoque preferido para la formalidad de MLOps. El componente tomará datos de btcbot-raw-data, ejecutará el script de preprocesamiento en un contenedor Docker y guardará los datos procesados.Dataflow: Opción para volúmenes de datos masivos que requieran procesamiento paralelo intensivo.Almacenamiento de Datos Procesados (data/processed/): Google Cloud Storage (GCS) (ej. btcbot-processed-data-<project-id>), con control de versiones habilitado en el bucket.Módulo de Entrenamiento del Agente (scripts/train_rl_agent.py)Ejecución: Vertex AI Training (Custom Jobs).Imágenes Docker:Cloud Build para la construcción automática.Artifact Registry para el almacenamiento de imágenes.Almacenamiento de Modelos Entrenados y Artefactos:Vertex AI Model Registry: Será el repositorio central y formal para los modelos entrenados. Al finalizar un trabajo de entrenamiento exitoso, el modelo (archivo .zip de SB3 y cualquier metadato relevante) se registrará como una nueva versión en el Model Registry. Esto permite un versionado claro, facilita el rollback y la auditoría.Google Cloud Storage (GCS): Se utilizará para el almacenamiento temporal o intermedio de los artefactos del modelo durante el trabajo de entrenamiento (ej. gs://btcbot-models-staging-<project-id>/<job-id>/model.zip) antes de su registro formal en Vertex AI Model Registry. También para checkpoints del modelo durante el entrenamiento.Logs de Entrenamiento (logs/): Cloud Logging y TensorBoard en Vertex AI Experiments.Módulo de Evaluación del Agente (scripts/evaluate_rl_agent.py)Ejecución: Vertex AI Training (Custom Jobs) o como un componente en Vertex AI Pipelines. El pipeline puede tomar una versión específica del modelo desde Vertex AI Model Registry para la evaluación.Almacenamiento de Resultados de Evaluación (results/): Google Cloud Storage (GCS) (ej. btcbot-evaluation-results-<project-id>).Código Fuente (src/) y Archivos de Configuración (*.yaml)Se empaquetarán en imágenes Docker. Las configuraciones pueden leerse de GCS si se requiere dinamismo.4. Infraestructura como Código (IaC) con Scripts Python en gcp/La carpeta gcp/ contendrá scripts Python utilizando google-cloud-python para el aprovisionamiento.Ejemplos de Scripts en gcp/ (ajustes para mayor formalidad):gcp/common/clients.py y gcp/common/config.py: Sin cambios.gcp/01_setup_secrets.py: Sin cambios.gcp/02_setup_storage.py: Asegurar que los buckets de datos (btcbot-raw-data, btcbot-processed-data) se creen con el control de versiones habilitado. Crear un bucket de staging para modelos si es necesario (ej. btcbot-models-staging-<project-id>).gcp/03_setup_iam.py: Sin cambios significativos, asegurar que la cuenta de servicio de Vertex AI Training tenga permisos para escribir en GCS (staging) y para registrar modelos en Vertex AI Model Registry.gcp/04_build_docker_image.py: Sin cambios.gcp/05_deploy_data_acquisition.py: Sin cambios.gcp/06_launch_training_pipeline.py (o ..._job.py): Este script será crucial.Al lanzar un trabajo de Vertex AI Training, se configurará para que los artefactos del modelo se guarden en el bucket de GCS de staging.Después de un entrenamiento exitoso, el script (o un paso final en el pipeline de Vertex AI) utilizará el cliente de google.cloud.aiplatform para:Subir el modelo a Vertex AI Model Registry: Esto implica crear un recurso Model en Vertex AI, apuntando a los artefactos del modelo en GCS (el archivo .zip y potencialmente un contenedor de predicción si se va a desplegar).Versionar el modelo automáticamente o con un esquema de versionado explícito.gcp/utils/cleanup.py: Sin cambios.Estructura de Dockerfile: El ejemplo proporcionado sigue siendo válido.5. CI/CD con Cloud Build y Vertex AI PipelinesCloud Build: Sin cambios significativos en su rol, pero los cloudbuild.yaml que lancen pipelines de entrenamiento se asegurarán de que estos pipelines incluyan el paso de registro del modelo.Vertex AI Pipelines (énfasis en la formalidad):El pipeline de ML será el orquestador central:Componente de Adquisición de Datos (opcional, puede ser independiente).Componente de Validación de Datos.Componente de Preprocesamiento.Componente de Entrenamiento (Vertex AI Custom Job).Salida: URI a los artefactos del modelo en GCS (staging).Componente de Carga y Registro de Modelo:Toma el URI de los artefactos del modelo.Utiliza aiplatform.Model.upload(...) para registrar el modelo en Vertex AI Model Registry. Se pueden añadir etiquetas, descripción, etc.Componente de Evaluación (puede tomar el modelo registrado de Vertex AI Model Registry por su ID/versión).(Opcional) Componente de Despliegue Condicional: Si la evaluación es satisfactoria, desplegar el modelo a un Vertex AI Endpoint.6. Logging y MonitorizaciónSin cambios significativos, pero se puede añadir monitorización específica para Vertex AI Model Registry si es necesario (ej. número de modelos, versiones).7. Consideraciones de SeguridadSin cambios significativos.8. Pasos de Migración Propuestos (ajustes para mayor formalidad)Configuración Inicial de GCP: Sin cambios.Desarrollar Scripts IaC (gcp/):En 02_setup_storage.py, habilitar versionado en buckets de datos.Asegurar que 03_setup_iam.py otorga permisos para Vertex AI Model Registry.Adaptar Código para GCP: Sin cambios.Crear Dockerfile y Configurar Cloud Build: Sin cambios.Migrar Adquisición de Datos: Sin cambios.Migrar Entrenamiento y Evaluación a Vertex AI:Modificar scripts/train_rl_agent.py (o el RLAgentManager) para que, al guardar el modelo, lo haga en una ruta de GCS que Vertex AI pueda acceder (generalmente una variable de entorno AIP_MODEL_DIR que proporciona Vertex AI Training).El script gcp/06_launch_training_job.py o el componente del pipeline de Vertex AI se encargará de tomar este artefacto de GCS y registrarlo en Vertex AI Model Registry.Implementar Logging y Monitorización Personalizados: Sin cambios.Configurar Vertex AI Pipelines: Asegurar que el pipeline incluya el paso de registro del modelo en Vertex AI Model Registry.Iterar y Refinar: Sin cambios.Al adoptar Vertex AI Model Registry de forma central, estás alineándote con las mejores prácticas de MLOps para el ciclo de vida de tus modelos de trading. Esto facilitará la experimentación, el despliegue, el rollback y la auditoría de tus modelos a medida que el proyecto evolucione.Este plan revisado debería estar más alineado con tu visión de formalidad. 
+# Guía de Ejecución de Scripts para la Implementación de BTCBot en GCP
+
+Esta guía detalla el orden recomendado y el propósito de cada script en la carpeta `gcp/` para desplegar y gestionar tu proyecto BTCBot en Google Cloud Platform.
+
+## Fase 1: Configuración Inicial de la Infraestructura (Ejecutar una vez)
+
+Estos scripts preparan tu entorno de GCP. Generalmente, solo necesitas ejecutarlos una vez, o cuando haya cambios en la configuración fundamental.
+
+1.  **`gcp/enable_apis.sh`**
+    * **Propósito:** Activa todas las APIs de Google Cloud necesarias para el proyecto (Cloud Resource Manager, IAM, Storage, Secret Manager, Vertex AI, etc.).
+    * **Cuándo ejecutar:** Al inicio de la configuración de tu proyecto en GCP.
+    * **Comando Ejemplo:** `bash gcp/enable_apis.sh`
+    * **Nota:** Después de este script, el `03_setup_iam.py` se ejecuta automáticamente por el `enable_apis.sh`. Si lo ejecutas por separado, asegúrate de que las APIs estén habilitadas.
+
+2.  **`gcp/01_setup_secrets.py`**
+    * **Propósito:** Configura de forma segura tus claves API de Binance en Google Secret Manager.
+    * **Cuándo ejecutar:** Una vez, para almacenar tus credenciales. Repetir solo si necesitas actualizar las claves.
+    * **Comando Ejemplo:** `python gcp/01_setup_secrets.py --api_key TU_BINANCE_API_KEY --api_secret TU_BINANCE_API_SECRET`
+
+3.  **`gcp/02_setup_storage.py`**
+    * **Propósito:** Crea los buckets necesarios en Google Cloud Storage (GCS) para datos crudos, datos procesados, staging de modelos y resultados de evaluación. Habilita el control de versiones en estos buckets.
+    * **Cuándo ejecutar:** Una vez, para configurar el almacenamiento.
+    * **Comando Ejemplo:** `python gcp/02_setup_storage.py`
+
+4.  **`gcp/03_setup_iam.py`**
+    * **Propósito:** Crea una cuenta de servicio dedicada para el proyecto BTCBot y le asigna los roles y permisos necesarios para interactuar con los servicios de GCP (Storage, Secret Manager, Vertex AI, Artifact Registry, etc.).
+    * **Cuándo ejecutar:** Una vez, para configurar los permisos. El script `enable_apis.sh` ya lo invoca.
+    * **Comando Ejemplo:** `python gcp/03_setup_iam.py` (si se ejecuta independientemente de `enable_apis.sh`).
+
+## Fase 2: Empaquetado y Despliegue de Servicios Base
+
+Estos scripts se encargan de empaquetar tu código y desplegar servicios fundamentales.
+
+5.  **`gcp/04_build_docker_image.py`**
+    * **Propósito:** Construye las imágenes Docker para tu código de entrenamiento (y opcionalmente para preprocesamiento si tienes un Dockerfile separado) usando Google Cloud Build. Las imágenes resultantes se almacenan en Artifact Registry.
+    * **Cuándo ejecutar:** Cada vez que realices cambios significativos en tu código fuente (`src/`, `scripts/`), `requirements.txt`, o en los `Dockerfile` (`Dockerfile`, `Dockerfile.gpu`).
+    * **Comando Ejemplo (para imagen GPU con tag 'latest'):** `python gcp/04_build_docker_image.py --gpu --tag latest`
+    * **Comando Ejemplo (para imagen CPU con tag 'latest'):** `python gcp/04_build_docker_image.py --tag latest`
+
+6.  **`gcp/05_deploy_data_acquisition.py`**
+    * **Propósito:** Despliega un servicio en Cloud Run que ejecuta tu script de adquisición de datos (`scripts/download_data.py`). También configura un Cloud Scheduler para invocar este servicio periódicamente (actualmente, la configuración por defecto en el script es una vez al día para descargar datos con intervalo "1h").
+    * **Cuándo ejecutar:** Una vez para configurar el servicio de adquisición de datos y su programación. Puedes reejecutarlo si cambias la lógica del servicio de adquisición o su programación.
+    * **Comando Ejemplo:** `python gcp/05_deploy_data_acquisition.py`
+    * **Nota:** Considera si la frecuencia y el intervalo fijados en este script son los adecuados para tu necesidad de actualización de datos (ver discusión previa sobre hacerlo dinámico o para descargas incrementales).
+
+## Fase 3: Ciclo de Vida del Modelo (MLOps)
+
+Aquí tienes dos enfoques principales: ejecutar trabajos individuales o un pipeline completo.
+
+### Opción A: Flujo Manual/Individual (Bueno para Desarrollo y Pruebas)
+
+7.  **`gcp/06_launch_training_job.py`**
+    * **Propósito:** Lanza un trabajo de entrenamiento personalizado en Vertex AI utilizando una de las imágenes Docker construidas en el paso 5. Al finalizar, registra el modelo entrenado en Vertex AI Model Registry.
+    * **Cuándo ejecutar:** Cuando quieras entrenar un modelo de forma individual, fuera de un pipeline completo.
+    * **Comando Ejemplo (con GPU):** `python gcp/06_launch_training_job.py --use_gpu --gpu_type NVIDIA_TESLA_T4 --machine_type n1-standard-8 --image_tag latest`
+
+8.  **`gcp/08_evaluate_model.py`**
+    * **Propósito:** Descarga un modelo específico de Vertex AI Model Registry y (presumiblemente, según su estructura actual) lo evalúa localmente o en un entorno similar, registrando luego las métricas.
+    * **Cuándo ejecutar:** Cuando quieras evaluar un modelo específico que ya está registrado, independientemente del ciclo de entrenamiento.
+    * **Comando Ejemplo:** `python gcp/08_evaluate_model.py --model_id "projects/PROJECT_ID/locations/REGION/models/MODEL_NUMERIC_ID" --data_path "ruta/a/tus/datos_procesados.npz"`
+    * **Nota:** Para una evaluación más integrada en MLOps, el pipeline (`07`) es preferible. Este script es más para evaluaciones ad-hoc.
+
+9.  **`gcp/09_deploy_model.py`**
+    * **Propósito:** Despliega un modelo específico desde Vertex AI Model Registry a un Vertex AI Endpoint, haciéndolo disponible para servir predicciones en tiempo real.
+    * **Cuándo ejecutar:** Cuando tienes un modelo registrado y evaluado que consideras listo para ser usado para inferencia (ya sea para paper trading o una futura operativa en vivo).
+    * **Comando Ejemplo:** `python gcp/09_deploy_model.py --model_id "projects/PROJECT_ID/locations/REGION/models/MODEL_NUMERIC_ID"`
+    * **Importante:** Necesitarás un contenedor de predicción personalizado para que esto funcione correctamente con tu modelo SB3/PyTorch.
+
+### Opción B: Flujo Automatizado con Pipeline (Práctica Recomendada para MLOps)
+
+7.  **`gcp/07_create_training_pipeline.py`**
+    * **Propósito:** Define y ejecuta un pipeline completo en Vertex AI Pipelines. Este pipeline orquesta varios pasos: preprocesamiento de datos, entrenamiento del modelo, registro del modelo, evaluación del modelo y, opcionalmente, despliegue condicional a un endpoint.
+    * **Cuándo ejecutar:** Este es el script principal para ejecutar tu ciclo de MLOps de forma regular y automatizada cada vez que quieras reentrenar y potencialmente desplegar un nuevo modelo.
+    * **Comando Ejemplo:** `python gcp/07_create_training_pipeline.py --raw-data-bucket "tu-bucket-de-datos-crudos" --symbol BTCUSDT --deploy-model`
+    * **Nota:** Si usas este script, **generalmente no necesitas ejecutar `06` ni `08` por separado**, ya que el pipeline se encarga de esas funcionalidades.
+
+## Fase 4: Limpieza (Cuando sea necesario)
+
+10. **`gcp/10_cleanup_resources.py`**
+    * **Propósito:** Elimina los recursos de GCP creados por los scripts anteriores para evitar costos innecesarios. Permite eliminar todos los recursos o categorías específicas.
+    * **Cuándo ejecutar:** Cuando quieras desmantelar el entorno o partes de él. Úsalo con precaución.
+    * **Comando Ejemplo (para eliminar todo, requiere confirmación):** `python gcp/10_cleanup_resources.py --force` (sin `--force` pedirá confirmación).
+    * **Comando Ejemplo (para eliminar solo endpoints):** `python gcp/10_cleanup_resources.py --resources endpoints`
+
+## Flujo de Trabajo Típico para MLOps:
+
+1.  **Configuración Inicial:** Ejecutar scripts de la Fase 1 (una vez).
+2.  **Desarrollo/Actualización de Código:**
+    * Modificar `src/` o `scripts/`.
+    * Reconstruir imagen Docker con `gcp/04_build_docker_image.py`.
+3.  **Adquisición de Nuevos Datos:** El servicio desplegado por `gcp/05_deploy_data_acquisition.py` se encarga de esto automáticamente según su programación. Puedes invocarlo manualmente si es necesario.
+4.  **Reentrenamiento y Evaluación del Modelo:**
+    * Ejecutar el pipeline completo con `gcp/07_create_training_pipeline.py`. Esto preprocesará los datos más recientes, entrenará, registrará y evaluará el nuevo modelo.
+5.  **Despliegue del Modelo (si no se hizo condicionalmente en el pipeline):**
+    * Si el pipeline no incluyó el despliegue o quieres desplegar manualmente una versión específica, usa `gcp/09_deploy_model.py`.
+6.  **Bot de Ejecución en Vivo (Componente a Desarrollar):**
+    * Un script/servicio separado (desplegado en Cloud Run o GCE) que consume predicciones del endpoint de Vertex AI para operar.
+
+Esta guía debería ayudarte a navegar el proceso de despliegue en GCP. ¡Mucha suerte!

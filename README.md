@@ -206,3 +206,46 @@ Para información más detallada sobre cada componente, consulta los archivos en
 ## Licencia
 
 MIT
+
+
+## Próximos Pasos y Mejoras Futuras
+
+Si bien la versión actual del bot se centra en la toma de decisiones del agente de Reinforcement Learning basadas en velas completas de un timeframe específico, existen varias vías interesantes para futuras mejoras y una mayor sofisticación:
+
+### 1. Gestión de Riesgo Avanzada y Monitorización Continua de Precios (Recomendado)
+
+* **Objetivo:** Implementar una capa de gestión de riesgo más granular que opere entre las decisiones estratégicas del agente de RL.
+* **Enfoque Propuesto:**
+    * El bot de ejecución principal (desplegado, por ejemplo, en una VM de Google Compute Engine) mantendría una conexión **WebSocket** con Binance para recibir actualizaciones de precios en tiempo real (ej., a través del stream `@trade` o `@bookTicker`).
+    * Paralelamente a las decisiones del agente RL (que seguirían basándose en velas completas del timeframe principal y se obtendrían del endpoint de Vertex AI), este bot monitorizaría continuamente el precio actual.
+    * Si una posición abierta alcanza un nivel de **Stop-Loss (SL)** o **Take-Profit (TP)** predefinido, el bot ejecutaría inmediatamente una orden de cierre, sin esperar a la siguiente señal del agente RL.
+    * Esto combina las decisiones estratégicas del RL con una gestión de riesgo táctica y reactiva.
+
+### 2. Transición a un Agente de RL Basado en Datos de Mercado de Mayor Frecuencia (Investigación Avanzada)
+
+* **Objetivo:** Explorar si el agente de RL puede tomar decisiones directamente basadas en datos de mercado de mayor frecuencia, como datos de trades (tick data) o actualizaciones del libro de órdenes, en lugar de velas OHLCV.
+* **Implicaciones y Desafíos:**
+    * **Adquisición y Almacenamiento de Datos Históricos:** Se requerirían grandes volúmenes de datos históricos de trades o del libro de órdenes para el entrenamiento, lo cual puede ser un desafío obtener de forma gratuita y completa desde las APIs públicas para periodos extensos.
+    * **Ingeniería de Características:** Las características de entrada para el agente de RL necesitarían ser rediseñadas completamente para reflejar la naturaleza de estos datos de alta frecuencia (ej., desequilibrios del libro de órdenes, flujo de órdenes, micro-volatilidad).
+    * **Diseño del Entorno de Simulación:** El `TradingEnvironment` necesitaría una simulación mucho más compleja y computacionalmente intensiva para operar a nivel de tick o evento del libro de órdenes, modelando con precisión la latencia y el slippage.
+    * **Arquitectura del Agente:** Aunque el Transformer es adaptable, la forma exacta de procesar secuencias de eventos de mercado (en lugar de velas) podría requerir ajustes.
+    * **Costos Computacionales:** El entrenamiento y la simulación serían significativamente más demandantes.
+* **Estado Actual:** Esta es una línea de investigación considerablemente más compleja y se considera una mejora a muy largo plazo, una vez que el sistema actual esté completamente validado y operativo.
+
+### 3. Optimización Avanzada de Hiperparámetros
+
+* Utilizar técnicas como la optimización bayesiana o algoritmos genéticos (con herramientas como Optuna o Ray Tune) para encontrar conjuntos de hiperparámetros óptimos tanto para el agente de RL como para la arquitectura del Transformer.
+
+### 4. Incorporación de Múltiples Timeframes o Fuentes de Datos
+
+* Mejorar el extractor de características para que el Transformer pueda procesar y fusionar información de múltiples timeframes de velas (ej., 15min, 1h, 4h) simultáneamente.
+* Explorar la incorporación de otras fuentes de datos relevantes (ej., análisis de sentimiento, datos on-chain, datos macroeconómicos) si se pueden cuantificar y alinear temporalmente.
+
+### 5. Desarrollo de un Módulo de Paper Trading y Transición a Trading en Vivo
+
+* Crear un módulo robusto de "paper trading" que simule operaciones con una cuenta ficticia pero utilizando datos de mercado en tiempo real y latencias de ejecución realistas.
+* Tras una validación exhaustiva en paper trading, planificar cuidadosamente la transición a trading en vivo con capital real, comenzando con tamaños de posición muy pequeños.
+
+### 6. Monitorización y Alertas en Profundidad
+
+* Expandir la monitorización en GCP para incluir métricas de negocio específicas del bot (ej., P&L realizado, drawdown, número de operaciones, slippage promedio) y configurar alertas para desviaciones significativas o errores del sistema.
