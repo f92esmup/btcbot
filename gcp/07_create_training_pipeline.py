@@ -1,12 +1,23 @@
 #!/usr/bin/env python
 """
 Script para crear y ejecutar un pipeline de entrenamiento en Vertex AI.
+Este pipeline completo integra las funcionalidades de los scripts 06_launch_training_job.py y 08_evaluate_model.py
+en un único flujo de trabajo automatizado y dinámico.
+
 Este pipeline incluye los siguientes componentes:
-1. Preprocesamiento de datos
-2. Entrenamiento del modelo
-3. Registro del modelo en Vertex AI Model Registry
-4. Evaluación del modelo
-5. (Opcional) Despliegue condicional
+1. Preprocesamiento de datos - Prepara los datos históricos para el entrenamiento
+2. Entrenamiento del modelo - Entrena el agente de RL con opciones para CPU o GPU
+3. Registro del modelo en Vertex AI Model Registry - Registra el modelo con metadatos completos
+4. Evaluación del modelo - Calcula métricas detalladas de rendimiento del agente
+5. (Opcional) Despliegue condicional - Despliega el modelo solo si cumple criterios de calidad
+
+Características dinámicas:
+- Soporte para entrenamiento con GPU (configurable por tipo y cantidad)
+- Múltiples métricas de evaluación (Sharpe, Sortino, Drawdown, Win Rate)
+- Criterios flexibles para despliegue automático
+- Opciones de hardware para el despliegue (CPU/GPU)
+- Control de tráfico para despliegues canary
+- Registro detallado de metadatos en cada paso
 """
 import os
 import argparse
@@ -110,7 +121,10 @@ def train_model(
     model_staging_bucket: str,
     input_dataset: Input[Dataset],
     output_model: Output[Model],
-    total_timesteps: int = 1000000
+    total_timesteps: int = 1000000,
+    use_gpu: bool = False,
+    gpu_type: str = "NVIDIA_TESLA_T4",
+    gpu_count: int = 1
 ):
     """
     Componente para entrenar el modelo de RL.
@@ -145,7 +159,15 @@ def train_model(
     
     # Crear el entorno y el agente
     env = TradingEnv(data_path=local_file_path, config_path="/app/src/environments/environment_config.yaml")
-    agent_manager = RLAgentManager(config_path="/app/src/agent/agent_config.yaml")
+    
+    # Configuración del agente con información de hardware
+    agent_config = {
+        "use_gpu": use_gpu,
+        "gpu_type": gpu_type if use_gpu else None,
+        "gpu_count": gpu_count if use_gpu else 0
+    }
+    
+    agent_manager = RLAgentManager(config_path="/app/src/agent/agent_config.yaml", **agent_config)
     
     # Entrenar el modelo
     trained_model = agent_manager.train(env, total_timesteps=total_timesteps)
@@ -167,7 +189,10 @@ def train_model(
         "framework": "stable-baselines3",
         "algorithm": "SAC",
         "training_steps": total_timesteps,
-        "training_id": training_id
+        "training_id": training_id,
+        "use_gpu": use_gpu,
+        "gpu_type": gpu_type if use_gpu else "none",
+        "gpu_count": gpu_count if use_gpu else 0
     }
 
 
@@ -182,28 +207,42 @@ def register_model(
     model_display_name: str,
     model_description: str,
     input_model: Input[Model],
-    registered_model: Output[Model]
+    registered_model: Output[Model],
+    serving_container_image_uri: str = "us-docker.pkg.dev/vertex-ai/prediction/sklearn-cpu.1-0:latest",
+    labels: dict = None
 ):
     """
     Componente para registrar el modelo en Vertex AI Model Registry.
     """
     from google.cloud import aiplatform
+    import json
     
     # Inicializar el cliente de Vertex AI
     aiplatform.init(project=project_id, location=region)
+    
+    # Obtener metadatos del modelo de entrada
+    metadata = input_model.metadata.copy() if hasattr(input_model, "metadata") else {}
+    
+    # Crear etiquetas predeterminadas si no se proporcionan
+    if labels is None:
+        labels = {}
+    
+    # Añadir información básica a las etiquetas
+    labels.update({
+        "framework": metadata.get("framework", "stable-baselines3"),
+        "algorithm": metadata.get("algorithm", "SAC"),
+        "created_by": "vertex_pipeline"
+    })
     
     # Registrar el modelo
     registered_model_obj = aiplatform.Model.upload(
         display_name=model_display_name,
         artifact_uri=model_artifact_uri,
-        serving_container_image_uri="us-docker.pkg.dev/vertex-ai/prediction/sklearn-cpu.1-0:latest",  # Placeholder, se debe usar una imagen compatible con tu modelo
+        serving_container_image_uri=serving_container_image_uri,
         description=model_description,
-        metadata={
-            "framework": input_model.metadata["framework"],
-            "algorithm": input_model.metadata["algorithm"],
-            "training_steps": input_model.metadata["training_steps"],
-            "training_id": input_model.metadata["training_id"]
-        }
+        labels=labels,
+        metadata=metadata,
+        sync=True
     )
     
     # Guardar el ID del modelo registrado
@@ -211,10 +250,14 @@ def register_model(
     registered_model.metadata = {
         "model_id": registered_model_obj.resource_name,
         "model_display_name": model_display_name,
-        "framework": input_model.metadata["framework"],
-        "algorithm": input_model.metadata["algorithm"],
-        "training_steps": input_model.metadata["training_steps"],
-        "training_id": input_model.metadata["training_id"]
+        "framework": metadata.get("framework", "stable-baselines3"),
+        "algorithm": metadata.get("algorithm", "SAC"),
+        "training_steps": metadata.get("training_steps", 0),
+        "training_id": metadata.get("training_id", ""),
+        "use_gpu": metadata.get("use_gpu", False),
+        "gpu_type": metadata.get("gpu_type", "none"),
+        "gpu_count": metadata.get("gpu_count", 0),
+        "registry_uri": f"https://console.cloud.google.com/vertex-ai/models/{registered_model_obj.name}?project={project_id}"
     }
 
 
@@ -228,7 +271,8 @@ def evaluate_model(
     model_uri: str,
     evaluation_bucket: str,
     input_model: Input[Model],
-    evaluation_metrics: Output[Artifact]
+    evaluation_metrics: Output[Artifact],
+    num_episodes: int = 10
 ):
     """
     Componente para evaluar el modelo entrenado.
@@ -238,9 +282,11 @@ def evaluate_model(
     import tempfile
     from google.cloud import storage
     import uuid
+    from datetime import datetime
     
     # Crear un ID único para esta evaluación
     eval_id = uuid.uuid4().hex[:8]
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     
     # Crear cliente de Storage
     storage_client = storage.Client(project=project_id)
@@ -273,36 +319,48 @@ def evaluate_model(
     from src.agent.rl_agent_manager import RLAgentManager
     from src.environments.trading_env import TradingEnv
     
-    # Crear el entorno de evaluación
+    # Crear el entorno de evaluación con modo explícito de evaluación
     eval_env = TradingEnv(data_path=data_local_path, config_path="/app/src/environments/environment_config.yaml", mode="eval")
     
     # Cargar el modelo entrenado
     agent_manager = RLAgentManager(config_path="/app/src/agent/agent_config.yaml")
     model = agent_manager.load(model_local_path)
     
-    # Evaluar el modelo
-    evaluation_results = agent_manager.evaluate(model, eval_env, num_episodes=10)
+    # Evaluar el modelo con el número de episodios especificado
+    evaluation_results = agent_manager.evaluate(model, eval_env, num_episodes=num_episodes)
     
-    # Guardar los resultados de evaluación
-    eval_results_path = os.path.join(tempfile.mkdtemp(), f"evaluation_results_{eval_id}.json")
+    # Añadir información adicional a los resultados
+    evaluation_results["evaluation_timestamp"] = timestamp
+    evaluation_results["model_id"] = input_model.metadata.get("model_id", "")
+    evaluation_results["training_id"] = input_model.metadata.get("training_id", "")
+    
+    # Guardar los resultados completos de evaluación
+    eval_results_path = os.path.join(tempfile.mkdtemp(), f"evaluation_results_{eval_id}_{timestamp}.json")
     with open(eval_results_path, "w") as f:
-        json.dump(evaluation_results, f)
+        json.dump(evaluation_results, f, indent=2)
     
     # Subir los resultados al bucket de evaluación
     eval_bucket = storage_client.bucket(evaluation_bucket)
-    eval_blob = eval_bucket.blob(f"evaluation_results_{eval_id}.json")
+    eval_blob_name = f"evaluation_results_{eval_id}_{timestamp}.json"
+    eval_blob = eval_bucket.blob(eval_blob_name)
     eval_blob.upload_from_filename(eval_results_path)
     
     # Metadata para el componente de salida
-    evaluation_uri = f"gs://{evaluation_bucket}/evaluation_results_{eval_id}.json"
+    evaluation_uri = f"gs://{evaluation_bucket}/{eval_blob_name}"
     evaluation_metrics.uri = evaluation_uri
     evaluation_metrics.metadata = {
         "mean_reward": evaluation_results.get("mean_reward", 0),
         "std_reward": evaluation_results.get("std_reward", 0),
         "max_drawdown": evaluation_results.get("max_drawdown", 0),
         "sharpe_ratio": evaluation_results.get("sharpe_ratio", 0),
+        "sortino_ratio": evaluation_results.get("sortino_ratio", 0),
+        "win_rate": evaluation_results.get("win_rate", 0),
         "model_id": input_model.metadata.get("model_id", ""),
-        "training_id": input_model.metadata.get("training_id", "")
+        "training_id": input_model.metadata.get("training_id", ""),
+        "evaluation_id": eval_id,
+        "evaluation_timestamp": timestamp,
+        "num_episodes": num_episodes,
+        "results_file": eval_blob_name
     }
 
 
@@ -316,48 +374,123 @@ def conditional_deployment(
     model_id: str,
     evaluation_metrics: Input[Artifact],
     deployed_model: Output[Model],
-    min_sharpe_ratio: float = 0.5
+    min_sharpe_ratio: float = 0.5,
+    min_sortino_ratio: float = 0.75,
+    max_drawdown_threshold: float = -0.2,
+    min_win_rate: float = 0.5,
+    machine_type: str = "n1-standard-2",
+    accelerator_type: str = None,
+    accelerator_count: int = 0,
+    traffic_percentage: int = 0,
+    deploy_all: bool = False
 ):
     """
     Componente para desplegar condicionalmente el modelo si cumple con los criterios.
     """
     from google.cloud import aiplatform
+    import json
     
     # Inicializar el cliente de Vertex AI
     aiplatform.init(project=project_id, location=region)
     
-    # Verificar si el modelo cumple con los criterios
+    # Obtener métricas de evaluación
     sharpe_ratio = evaluation_metrics.metadata.get("sharpe_ratio", 0)
+    sortino_ratio = evaluation_metrics.metadata.get("sortino_ratio", 0)
+    max_drawdown = evaluation_metrics.metadata.get("max_drawdown", -1)
+    win_rate = evaluation_metrics.metadata.get("win_rate", 0)
     
-    if sharpe_ratio >= min_sharpe_ratio:
+    # Verificar si el modelo cumple con los criterios
+    meets_sharpe = sharpe_ratio >= min_sharpe_ratio
+    meets_sortino = sortino_ratio >= min_sortino_ratio
+    meets_drawdown = max_drawdown >= max_drawdown_threshold
+    meets_win_rate = win_rate >= min_win_rate
+    
+    # Preparar registro de criterios
+    deployment_criteria = {
+        "sharpe_ratio": {"value": sharpe_ratio, "threshold": min_sharpe_ratio, "passed": meets_sharpe},
+        "sortino_ratio": {"value": sortino_ratio, "threshold": min_sortino_ratio, "passed": meets_sortino},
+        "max_drawdown": {"value": max_drawdown, "threshold": max_drawdown_threshold, "passed": meets_drawdown},
+        "win_rate": {"value": win_rate, "threshold": min_win_rate, "passed": meets_win_rate}
+    }
+    
+    # Determinar si se debe desplegar
+    should_deploy = deploy_all or (meets_sharpe and meets_sortino and meets_drawdown and meets_win_rate)
+    
+    # Preparar configuración de acelerador (GPU) si se proporciona
+    machine_spec = {"machine_type": machine_type}
+    if accelerator_type and accelerator_count > 0:
+        machine_spec["accelerator_type"] = accelerator_type
+        machine_spec["accelerator_count"] = accelerator_count
+    
+    if should_deploy:
         # Obtener el modelo
         model = aiplatform.Model(model_id)
         
-        # Desplegar el modelo a un endpoint
-        endpoint = model.deploy(
-            machine_type="n1-standard-2",
-            min_replica_count=1,
-            max_replica_count=1,
-            deploy_request_timeout=1800,
-            sync=True
-        )
+        # Crear un endpoint o usar uno existente
+        endpoint_name = f"btcbot-agent-endpoint-{model.display_name.lower().replace('_', '-')}"
         
-        # Guardar información del despliegue
-        deployed_model.uri = model.uri
-        deployed_model.metadata = {
-            "model_id": model_id,
-            "endpoint_id": endpoint.resource_name,
-            "sharpe_ratio": sharpe_ratio,
-            "deployed": True
-        }
+        try:
+            # Intentar obtener un endpoint existente
+            endpoints = aiplatform.Endpoint.list(
+                filter=f'display_name="{endpoint_name}"',
+                order_by="create_time desc"
+            )
+            
+            if endpoints:
+                endpoint = endpoints[0]
+                print(f"Usando endpoint existente: {endpoint.resource_name}")
+            else:
+                # Crear nuevo endpoint
+                endpoint = aiplatform.Endpoint.create(display_name=endpoint_name)
+                print(f"Creado nuevo endpoint: {endpoint.resource_name}")
+            
+            # Desplegar el modelo al endpoint
+            deployment = model.deploy(
+                endpoint=endpoint,
+                deployed_model_display_name=model.display_name,
+                machine_type=machine_type,
+                accelerator_type=accelerator_type,
+                accelerator_count=accelerator_count,
+                traffic_percentage=traffic_percentage,
+                deploy_request_timeout=1800,
+                sync=True
+            )
+            
+            # Guardar información del despliegue
+            deployed_model.uri = model.uri
+            deployed_model.metadata = {
+                "model_id": model_id,
+                "endpoint_id": endpoint.resource_name,
+                "endpoint_name": endpoint_name,
+                "deployment_criteria": deployment_criteria,
+                "evaluation_metrics": dict(evaluation_metrics.metadata),
+                "deployed": True,
+                "machine_type": machine_type,
+                "accelerator_type": accelerator_type or "none",
+                "accelerator_count": accelerator_count,
+                "traffic_percentage": traffic_percentage
+            }
+            
+        except Exception as e:
+            # Registrar error pero no fallar el pipeline
+            print(f"Error al desplegar modelo: {e}")
+            deployed_model.uri = model.uri
+            deployed_model.metadata = {
+                "model_id": model_id,
+                "deployment_criteria": deployment_criteria,
+                "evaluation_metrics": dict(evaluation_metrics.metadata),
+                "deployed": False,
+                "error": str(e)
+            }
     else:
         # No desplegar el modelo
         deployed_model.uri = ""
         deployed_model.metadata = {
             "model_id": model_id,
-            "sharpe_ratio": sharpe_ratio,
+            "deployment_criteria": deployment_criteria,
+            "evaluation_metrics": dict(evaluation_metrics.metadata),
             "deployed": False,
-            "reason": f"Sharpe ratio {sharpe_ratio} below threshold {min_sharpe_ratio}"
+            "reason": "No cumple con los criterios de despliegue"
         }
 
 
@@ -377,8 +510,20 @@ def btcbot_training_pipeline(
     timeframe: str = "1h",
     lookback_window: int = 96,
     total_timesteps: int = 1000000,
+    num_eval_episodes: int = 10,
+    use_gpu: bool = False,
+    gpu_type: str = "NVIDIA_TESLA_T4",
+    gpu_count: int = 1,
     min_sharpe_ratio: float = 0.5,
-    deploy_model: bool = False
+    min_sortino_ratio: float = 0.75,
+    max_drawdown_threshold: float = -0.2,
+    min_win_rate: float = 0.5,
+    deploy_model: bool = False,
+    deployment_machine_type: str = "n1-standard-2",
+    deployment_accelerator_type: str = None,
+    deployment_accelerator_count: int = 0,
+    deployment_traffic_percentage: int = 0,
+    serving_container_image_uri: str = "us-docker.pkg.dev/vertex-ai/prediction/sklearn-cpu.1-0:latest"
 ):
     # Paso 1: Preprocesamiento de datos
     preprocess_task = preprocess_data(
@@ -396,13 +541,16 @@ def btcbot_training_pipeline(
         processed_data_uri=preprocess_task.outputs["output_dataset"].uri,
         model_staging_bucket=model_staging_bucket,
         total_timesteps=total_timesteps,
-        input_dataset=preprocess_task.outputs["output_dataset"]
+        input_dataset=preprocess_task.outputs["output_dataset"],
+        use_gpu=use_gpu,
+        gpu_type=gpu_type,
+        gpu_count=gpu_count
     )
     
     # Paso 3: Registro del modelo en Vertex AI Model Registry
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    model_display_name = f"btcbot_trading_agent_{timestamp}"
-    model_description = f"Modelo de RL para trading de {symbol} con {lookback_window} periodos de lookback"
+    model_display_name = f"btcbot_trading_agent_{symbol}_{timeframe}_{timestamp}"
+    model_description = f"Modelo de RL para trading de {symbol} con timeframe {timeframe}, {lookback_window} periodos de lookback y {total_timesteps} pasos de entrenamiento"
     
     register_task = register_model(
         project_id=project_id,
@@ -410,7 +558,15 @@ def btcbot_training_pipeline(
         model_artifact_uri=train_task.outputs["output_model"].uri,
         model_display_name=model_display_name,
         model_description=model_description,
-        input_model=train_task.outputs["output_model"]
+        input_model=train_task.outputs["output_model"],
+        serving_container_image_uri=serving_container_image_uri,
+        labels={
+            "symbol": symbol,
+            "timeframe": timeframe,
+            "lookback_window": str(lookback_window),
+            "total_timesteps": str(total_timesteps),
+            "use_gpu": str(use_gpu).lower()
+        }
     )
     
     # Paso 4: Evaluación del modelo
@@ -419,7 +575,8 @@ def btcbot_training_pipeline(
         processed_data_uri=preprocess_task.outputs["output_dataset"].uri,
         model_uri=train_task.outputs["output_model"].uri,
         evaluation_bucket=evaluation_bucket,
-        input_model=register_task.outputs["registered_model"]
+        input_model=register_task.outputs["registered_model"],
+        num_episodes=num_eval_episodes
     )
     
     # Paso 5 (Opcional): Despliegue condicional
@@ -429,25 +586,68 @@ def btcbot_training_pipeline(
             region=region,
             model_id=register_task.outputs["registered_model"].metadata["model_id"],
             evaluation_metrics=evaluate_task.outputs["evaluation_metrics"],
-            min_sharpe_ratio=min_sharpe_ratio
+            min_sharpe_ratio=min_sharpe_ratio,
+            min_sortino_ratio=min_sortino_ratio,
+            max_drawdown_threshold=max_drawdown_threshold,
+            min_win_rate=min_win_rate,
+            machine_type=deployment_machine_type,
+            accelerator_type=deployment_accelerator_type,
+            accelerator_count=deployment_accelerator_count,
+            traffic_percentage=deployment_traffic_percentage,
+            deploy_all=(min_sharpe_ratio <= 0 and min_sortino_ratio <= 0 and max_drawdown_threshold <= -1 and min_win_rate <= 0)
         )
 
 
 def main():
     """Función principal para compilar y ejecutar el pipeline."""
     parser = argparse.ArgumentParser(description="Crea y ejecuta un pipeline de entrenamiento en Vertex AI")
+    # Opciones básicas
     parser.add_argument("--compile-only", action="store_true", help="Solo compilar el pipeline sin ejecutarlo")
     parser.add_argument("--raw-data-bucket", type=str, help="Bucket para datos raw", required=True)
+    
+    # Parámetros de datos
     parser.add_argument("--symbol", type=str, default="BTCUSDT", help="Símbolo a procesar")
     parser.add_argument("--timeframe", type=str, default="1h", help="Timeframe a procesar")
     parser.add_argument("--lookback-window", type=int, default=96, help="Ventana de lookback")
+    
+    # Parámetros de entrenamiento
     parser.add_argument("--total-timesteps", type=int, default=1000000, help="Pasos totales de entrenamiento")
+    parser.add_argument("--use-gpu", action="store_true", help="Utilizar GPU para el entrenamiento")
+    parser.add_argument("--gpu-type", type=str, default="NVIDIA_TESLA_T4", 
+                       choices=["NVIDIA_TESLA_T4", "NVIDIA_TESLA_V100", "NVIDIA_TESLA_P100", "NVIDIA_TESLA_P4", "NVIDIA_TESLA_K80"],
+                       help="Tipo de GPU a utilizar (si use-gpu está activado)")
+    parser.add_argument("--gpu-count", type=int, default=1, choices=range(1, 9),
+                       help="Número de GPUs a utilizar (1-8, si use-gpu está activado)")
+    
+    # Parámetros de evaluación
+    parser.add_argument("--num-eval-episodes", type=int, default=10, help="Número de episodios para evaluación")
+    
+    # Parámetros de despliegue
     parser.add_argument("--deploy-model", action="store_true", help="Desplegar el modelo si la evaluación es satisfactoria")
     parser.add_argument("--min-sharpe-ratio", type=float, default=0.5, help="Sharpe ratio mínimo para despliegue")
+    parser.add_argument("--min-sortino-ratio", type=float, default=0.75, help="Sortino ratio mínimo para despliegue")
+    parser.add_argument("--max-drawdown-threshold", type=float, default=-0.2, help="Drawdown máximo permitido para despliegue")
+    parser.add_argument("--min-win-rate", type=float, default=0.5, help="Win rate mínimo para despliegue")
+    parser.add_argument("--deployment-machine-type", type=str, default="n1-standard-2", help="Tipo de máquina para despliegue")
+    parser.add_argument("--deployment-use-gpu", action="store_true", help="Utilizar GPU para el despliegue")
+    parser.add_argument("--deployment-gpu-type", type=str, default="NVIDIA_TESLA_T4",
+                       choices=["NVIDIA_TESLA_T4", "NVIDIA_TESLA_V100", "NVIDIA_TESLA_P100", "NVIDIA_TESLA_P4", "NVIDIA_TESLA_K80"],
+                       help="Tipo de GPU a utilizar para despliegue")
+    parser.add_argument("--deployment-gpu-count", type=int, default=1, choices=range(1, 9),
+                       help="Número de GPUs a utilizar para despliegue")
+    parser.add_argument("--deployment-traffic", type=int, default=0, 
+                       help="Porcentaje de tráfico a dirigir al nuevo modelo desplegado (0-100)")
+    
+    # Parámetros avanzados
+    parser.add_argument("--serving-container", type=str, 
+                       default="us-docker.pkg.dev/vertex-ai/prediction/sklearn-cpu.1-0:latest",
+                       help="Imagen contenedora para servir el modelo")
+    
     args = parser.parse_args()
     
     # Ruta para el archivo del pipeline compilado
-    pipeline_path = "btcbot_training_pipeline.json"
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    pipeline_path = f"btcbot_training_pipeline_{timestamp}.json"
     
     # Compilar el pipeline
     compiler.Compiler().compile(
@@ -461,6 +661,10 @@ def main():
         # Inicializar cliente de Vertex AI
         aiplatform.init(project=PROJECT_ID, location=REGION)
         
+        # Configurar aceleradores para despliegue si se requiere
+        deployment_accelerator_type = args.deployment_gpu_type if args.deployment_use_gpu else None
+        deployment_accelerator_count = args.deployment_gpu_count if args.deployment_use_gpu else 0
+        
         # Parámetros del pipeline
         pipeline_params = {
             "project_id": PROJECT_ID,
@@ -470,14 +674,26 @@ def main():
             "timeframe": args.timeframe,
             "lookback_window": args.lookback_window,
             "total_timesteps": args.total_timesteps,
+            "num_eval_episodes": args.num_eval_episodes,
+            "use_gpu": args.use_gpu,
+            "gpu_type": args.gpu_type,
+            "gpu_count": args.gpu_count,
             "deploy_model": args.deploy_model,
-            "min_sharpe_ratio": args.min_sharpe_ratio
+            "min_sharpe_ratio": args.min_sharpe_ratio,
+            "min_sortino_ratio": args.min_sortino_ratio,
+            "max_drawdown_threshold": args.max_drawdown_threshold,
+            "min_win_rate": args.min_win_rate,
+            "deployment_machine_type": args.deployment_machine_type,
+            "deployment_accelerator_type": deployment_accelerator_type,
+            "deployment_accelerator_count": deployment_accelerator_count,
+            "deployment_traffic_percentage": args.deployment_traffic,
+            "serving_container_image_uri": args.serving_container
         }
         
         # Ejecutar el pipeline
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        job_name = f"btcbot-training-{args.symbol}-{args.timeframe}-{timestamp}"
         job = aiplatform.PipelineJob(
-            display_name=f"btcbot-training-{timestamp}",
+            display_name=job_name,
             template_path=pipeline_path,
             pipeline_root=f"gs://{MODELS_STAGING_BUCKET}/pipeline_root",
             parameter_values=pipeline_params
@@ -485,7 +701,19 @@ def main():
         
         job.run(sync=True)
         print(f"Pipeline ejecutado con ID: {job.resource_name}")
-
-
-if __name__ == "__main__":
-    main()
+        print(f"Ver en la consola: https://console.cloud.google.com/vertex-ai/pipelines/runs/{job.name}?project={PROJECT_ID}")
+        
+        # Mostrar resumen de configuración
+        print("\nResumen de configuración del pipeline:")
+        print(f"- Símbolo: {args.symbol}")
+        print(f"- Timeframe: {args.timeframe}")
+        print(f"- Lookback window: {args.lookback_window}")
+        print(f"- Pasos de entrenamiento: {args.total_timesteps}")
+        print(f"- GPU para entrenamiento: {'Sí - ' + args.gpu_type + ' x' + str(args.gpu_count) if args.use_gpu else 'No'}")
+        print(f"- Episodios de evaluación: {args.num_eval_episodes}")
+        print(f"- Despliegue automático: {'Sí' if args.deploy_model else 'No'}")
+        if args.deploy_model:
+            print(f"  - Criterios mínimos: Sharpe>{args.min_sharpe_ratio}, Sortino>{args.min_sortino_ratio}, DrawDown>{args.max_drawdown_threshold}, WinRate>{args.min_win_rate}")
+            print(f"  - Hardware para despliegue: {args.deployment_machine_type} " + 
+                 (f"con {args.deployment_gpu_type} x{args.deployment_gpu_count}" if args.deployment_use_gpu else "sin GPU"))
+            print(f"  - Tráfico asignado: {args.deployment_traffic}%")
