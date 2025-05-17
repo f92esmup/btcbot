@@ -1,6 +1,10 @@
 #!/bin/bash
 # Activar las APIs necesarias antes de ejecutar el script principal
-echo "Activando APIs necesarias para el proyecto btcbot276299..."
+
+# Usar variable de entorno GCP_PROJECT_ID si está definida, de lo contrario usar el valor por defecto
+PROJECT_ID=${GCP_PROJECT_ID:-"btcbot276299"}
+
+echo "Activando APIs necesarias para el proyecto $PROJECT_ID..."
 
 # Lista de APIs a habilitar
 APIS=(
@@ -10,15 +14,18 @@ APIS=(
     "storage.googleapis.com"
     "secretmanager.googleapis.com"
     "aiplatform.googleapis.com"
+    "artifactregistry.googleapis.com"
+    "cloudbuild.googleapis.com"
+    "run.googleapis.com"
+    "cloudscheduler.googleapis.com"
 )
 
 for api in "${APIS[@]}"; do
     echo "Activando API: $api"
-    gcloud services enable $api --project=btcbot276299
+    gcloud services enable $api --project=$PROJECT_ID
     
     # Esperar un momento para que los cambios se propaguen
     sleep 2
 done
 
-echo "Todas las APIs han sido activadas. Ahora ejecutando el script principal..."
-/Users/f92esmup/btcbot/.venv/bin/python /Users/f92esmup/btcbot/gcp/03_setup_iam.py
+echo "Todas las APIs han sido activadas."

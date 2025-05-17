@@ -5,7 +5,7 @@ Este directorio contiene los scripts necesarios para implementar el proyecto BTC
 ## Contenido del Directorio
 
 - `common/` - Módulos comunes para los scripts
-  - `config.py` - Configuración centralizada
+  - `config.py` - Configuración centralizada basada en variables de entorno
   - `clients.py` - Clientes para servicios de GCP
 
 - `01_setup_secrets.py` - Configura secretos en Secret Manager
@@ -13,18 +13,35 @@ Este directorio contiene los scripts necesarios para implementar el proyecto BTC
 - `03_setup_iam.py` - Configura IAM y cuentas de servicio
 - `04_build_docker_image.py` - Construye y sube imágenes Docker a Artifact Registry
 - `05_deploy_data_acquisition.py` - Despliega el servicio de adquisición de datos
-- `06_launch_training_job.py` - Lanza un trabajo de entrenamiento en Vertex AI
-- `07_create_training_pipeline.py` - Crea un pipeline de entrenamiento en Vertex AI
-- `08_evaluate_model.py` - Evalúa un modelo desde Vertex AI Model Registry
-- `09_deploy_model.py` - Despliega un modelo a un endpoint de Vertex AI
+- `06_create_training_pipeline.py` - Crea un pipeline de entrenamiento en Vertex AI
+- `07_deploy_model.py` - Despliega un modelo a un endpoint de Vertex AI
+- `08_cleanup_resources.py` - Limpia recursos de GCP (cuando sea necesario)
 
 ## Proceso de Migración
+
+### 0. Configuración de Variables de Entorno
+
+Este proyecto está diseñado para trabajar con variables de entorno. Copia el archivo `.env.example` a `.env` y personaliza las variables:
+
+```bash
+cp .env.example .env
+# Editar .env con tus propios valores
+```
+
+Luego, carga las variables de entorno en tu sesión:
+
+```bash
+source .env
+```
 
 ### 1. Configuración Inicial
 
 Ejecuta los siguientes comandos para configurar la infraestructura base:
 
 ```bash
+# Habilitar APIs necesarias de GCP
+./gcp/enable_apis.sh
+
 # Configurar secretos (reemplaza con tus propias claves API)
 python gcp/01_setup_secrets.py --api_key YOUR_BINANCE_API_KEY --api_secret YOUR_BINANCE_API_SECRET
 
@@ -40,8 +57,8 @@ python gcp/03_setup_iam.py
 Construye las imágenes Docker necesarias:
 
 ```bash
-# Construir imagen para entrenamiento
-python gcp/04_build_docker_image.py --tag latest
+# Opcionalmente, añade --gpu para una imagen compatible con GPU
+python gcp/04_build_docker_image.py --tag latest --gpu
 ```
 
 ### 3. Despliegue del Servicio de Adquisición de Datos
@@ -52,80 +69,90 @@ Despliega el servicio que descargará datos automáticamente:
 python gcp/05_deploy_data_acquisition.py
 ```
 
-### 4. Entrenamiento del Modelo
+### 4. Entrenamiento y Evaluación del Modelo con Pipeline Unificado
 
-Tienes dos opciones para entrenar el modelo:
-
-#### Opción 1: Trabajo de Entrenamiento Individual
+Utilizamos un pipeline de Vertex AI para orquestar todo el proceso:
 
 ```bash
-# Entrenamiento con CPU
-python gcp/06_launch_training_job.py --machine_type n1-standard-8
+# Variables de entorno para configurar el entrenamiento (opcional)
+export AGENT_LEARNING_RATE=0.0005
+export PIPELINE_TOTAL_TIMESTEPS=500000
 
-# Entrenamiento con GPU NVIDIA T4
-python gcp/06_launch_training_job.py --machine_type n1-standard-8 --use_gpu --gpu_type NVIDIA_TESLA_T4 --gpu_count 1
+# Ejecutar el pipeline con CPU
+python gcp/06_create_training_pipeline.py \
+    --symbol BTCUSDT \
+    --timeframe 1h \
+    --total-timesteps 500000 \
+    --deploy-model \
+    --min-sharpe-ratio 0.6
 
-# Entrenamiento con múltiples GPUs (por ejemplo, 2 GPUs V100)
-python gcp/06_launch_training_job.py --machine_type n1-standard-8 --use_gpu --gpu_type NVIDIA_TESLA_V100 --gpu_count 2
+# Opcional: Ejecutar con GPU
+python gcp/06_create_training_pipeline.py \
+    --symbol BTCUSDT \
+    --timeframe 1h \
+    --total-timesteps 500000 \
+    --use-gpu \
+    --gpu-type NVIDIA_TESLA_T4 \
+    --gpu-count 1 \
+    --deploy-model \
+    --min-sharpe-ratio 0.6
 ```
 
-#### Opción 2: Pipeline de Entrenamiento Completo
+### 5. Despliegue Manual de Modelo (Opcional)
+
+Si deseas desplegar manualmente un modelo específico:
 
 ```bash
-python gcp/07_create_training_pipeline.py --raw-data-bucket btcbot-raw-data-btcbot276299 --symbol BTCUSDT --timeframe 1h
-```
-
-### 5. Evaluación del Modelo
-
-Una vez entrenado, puedes evaluar el modelo:
-
-```bash
-# Obtén el ID del modelo de la salida del trabajo de entrenamiento
+# Obtén el ID del modelo de la salida del pipeline o desde la consola de Vertex AI
 MODEL_ID=projects/btcbot276299/locations/europe-southwest1/models/XXXXXX
 
-# Evalúa el modelo con datos históricos
-python gcp/08_evaluate_model.py --model_id $MODEL_ID --data_path /path/to/processed/data.npz
+# Despliegue manual de un modelo específico
+python gcp/07_deploy_model.py --model_id $MODEL_ID
 ```
 
-### 6. Despliegue del Modelo
+### 6. Limpieza de Recursos (cuando sea necesario)
 
-Finalmente, puedes desplegar el modelo a un endpoint:
+Para eliminar los recursos creados y evitar cargos innecesarios:
 
 ```bash
-python gcp/09_deploy_model.py --model_id $MODEL_ID
+# Eliminar todos los recursos de GCP asociados con el proyecto
+python gcp/08_cleanup_resources.py --force
 ```
+
+## Configuración Centralizada y Uso de Variables de Entorno
+
+Este proyecto está diseñado para funcionar con configuración centralizada y basada en variables de entorno siguiendo las mejores prácticas de MLOps:
+
+1. **Prioridad de configuración**:
+   - Variables de entorno (.env o exportadas en sesión)
+   - Valores por defecto en `common/config.py`
+
+2. **Centralización del acceso a config**:
+   - Los scripts en `gcp/` usan `common.config` para acceder a valores como `PROJECT_ID`, `REGION`, etc.
+   - El código del bot en `src/` usa `ConfigManager` que ahora prioriza variables de entorno
+
+3. **Configuración específica del agente**:
+   - Variables como `AGENT_LEARNING_RATE`, `AGENT_BUFFER_SIZE` se pueden configurar vía env vars
 
 ## Notas Importantes
 
-- Todos los scripts utilizan la configuración centralizada en `common/config.py`.
+- La configuración centralizada permite desplegar en múltiples entornos GCP cambiando únicamente las variables de entorno.
 - Los buckets de Cloud Storage tienen el versionado habilitado para garantizar la trazabilidad.
 - Los modelos se registran en Vertex AI Model Registry para un versionado formal.
-- Los trabajos de entrenamiento y evaluación usan contenedores Docker personalizados.
-- Asegúrate de tener permisos suficientes en tu proyecto GCP para ejecutar estos scripts.
+- Los pipelines automatizan todo el proceso de MLOps desde el preprocesamiento hasta el despliegue condicional.
 
 ## Monitorización y Logging
 
 - Los logs de los servicios desplegados están disponibles en Cloud Logging.
+- Los pipeline de entrenamiento pueden verse en Vertex AI Pipelines.
 - Las métricas del modelo se pueden visualizar en Vertex AI Experiments.
-- Los resultados de evaluación se guardan en el bucket `btcbot-evaluation-results-btcbot276299`.
+- Los resultados de evaluación se guardan en el bucket configurado en `EVALUATION_RESULTS_BUCKET`.
 
-## Limpieza de Recursos
+## Consideraciones de Seguridad
 
-Para eliminar los recursos creados por estos scripts y evitar cargos innecesarios:
-
-```bash
-# Eliminar todos los recursos de GCP asociados con el proyecto BTCBot
-# Esto incluye:
-# - Endpoints de Vertex AI
-# - Modelos desplegados
-# - Jobs de entrenamiento
-# - Servicios de Cloud Run
-# - Buckets de almacenamiento
-# - Secretos de Secret Manager
-# - Cuentas de servicio personalizadas
-# - Imágenes de Docker en Artifact Registry
-
-python gcp/10_cleanup_resources.py --force
+- Las credenciales de API de Binance se almacenan en Secret Manager.
+- El acceso a secretos y recursos se gestiona mediante una cuenta de servicio con permisos específicos.
+- La configuración sensible como claves API nunca debe incluirse directamente en el código fuente.
 ```
 
 > **⚠️ ADVERTENCIA**: Este comando eliminará permanentemente todos los recursos relacionados con BTCBot en GCP. Úsalo con precaución y asegúrate de haber respaldado cualquier dato importante antes de ejecutarlo.

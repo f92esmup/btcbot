@@ -11,7 +11,14 @@ Este pipeline incluye los siguientes componentes:
 4. Evaluación del modelo - Calcula métricas detalladas de rendimiento del agente
 5. (Opcional) Despliegue condicional - Despliega el modelo solo si cumple criterios de calidad
 
-Características dinámicas:
+    print(f"\n📊 Resumen de configuración del pipeline:")
+        print(f"- Símbolo: {args.symbol}")
+        print(f"- Timeframe: {args.timeframe}")
+        print(f"- Lookback window: {args.lookback_window}")
+        print(f"- Pasos de entrenamiento: {total_timesteps:,}")
+        print(f"- Hardware de entrenamiento: {'🖥️ GPU ' + args.gpu_type + ' x' + str(args.gpu_count) if args.use_gpu else '💻 CPU'}")
+        print(f"- Episodios de evaluación: {args.num_eval_episodes}")
+        print(f"- Despliegue automático: {'✅ Sí' if args.deploy_model else '❌ No'}")ísticas dinámicas:
 - Soporte para entrenamiento con GPU (configurable por tipo y cantidad)
 - Múltiples métricas de evaluación (Sharpe, Sortino, Drawdown, Win Rate)
 - Criterios flexibles para despliegue automático
@@ -666,6 +673,7 @@ def main():
                              help="Imagen contenedora para servir el modelo (default: sklearn-cpu.1-0)")
     
     args = parser.parse_args()
+    args.total_timesteps_provided = "--total-timesteps" in " ".join(sys.argv)
     
     # Advertencia sobre GPU
     if args.use_gpu:
@@ -696,18 +704,32 @@ def main():
         deployment_accelerator_type = args.deployment_gpu_type if args.deployment_use_gpu else None
         deployment_accelerator_count = args.deployment_gpu_count if args.deployment_use_gpu else 0
         
+        # Obtener valores de variables de entorno para parámetros de RL si están definidos
+        agent_learning_rate = os.getenv("AGENT_LEARNING_RATE")
+        agent_buffer_size = os.getenv("AGENT_BUFFER_SIZE")
+        agent_batch_size = os.getenv("AGENT_BATCH_SIZE")
+        agent_gamma = os.getenv("AGENT_GAMMA")
+        pipeline_total_timesteps = os.getenv("PIPELINE_TOTAL_TIMESTEPS")
+        
+        # Usar valores de línea de comandos o variables de entorno
+        if pipeline_total_timesteps and not args.total_timesteps_provided:
+            total_timesteps = int(pipeline_total_timesteps)
+            print(f"Usando PIPELINE_TOTAL_TIMESTEPS de variables de entorno: {total_timesteps}")
+        else:
+            total_timesteps = args.total_timesteps
+        
         # Parámetros del pipeline
         pipeline_params = {
             "project_id": PROJECT_ID,
             "region": REGION,
-            "raw_data_bucket": args.raw_data_bucket,
+            "raw_data_bucket": args.raw_data_bucket or RAW_DATA_BUCKET,
             "processed_data_bucket": PROCESSED_DATA_BUCKET,  # Usar valor de config.py
             "model_staging_bucket": MODELS_STAGING_BUCKET,   # Usar valor de config.py
             "evaluation_bucket": EVALUATION_RESULTS_BUCKET,  # Usar valor de config.py
             "symbol": args.symbol,
             "timeframe": args.timeframe,
             "lookback_window": args.lookback_window,
-            "total_timesteps": args.total_timesteps,
+            "total_timesteps": total_timesteps,
             "num_eval_episodes": args.num_eval_episodes,
             "use_gpu": args.use_gpu,
             "gpu_type": args.gpu_type,

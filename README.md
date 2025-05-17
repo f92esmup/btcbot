@@ -14,6 +14,8 @@ Este proyecto implementa un agente de trading basado en Reinforcement Learning p
 - Agente de RL (Soft Actor-Critic) con extractor de características basado en Transformers
 - Visualización de resultados y métricas de rendimiento
 - Infraestructura en Google Cloud Platform para entrenamiento y despliegue a escala
+- **Configuración Flexible**: Sistema centralizado basado en variables de entorno para fácil adaptación a diferentes contextos
+- **Pipeline de MLOps Completo**: Automatización de entrenamiento, evaluación y despliegue en GCP
 
 ## Estructura del Proyecto
 
@@ -59,6 +61,23 @@ btcbot/
    pip install -r requirements.txt
    ```
 
+4. **Configurar Variables de Entorno**:
+   
+   Copiar el archivo `.env.example` a `.env` y modificarlo con tus valores:
+   
+   ```bash
+   cp .env.example .env
+   # Editar el archivo .env con tus valores
+   ```
+   
+   Variables esenciales para ejecución local:
+   ```
+   BINANCE_API_KEY_FUTURES="TU_CLAVE_AQUI"
+   BINANCE_API_SECRET_FUTURES="TU_SECRETO_AQUI"
+   ```
+   
+   > **Nota**: Las claves API reales de Binance solo son necesarias para `download_data.py`. Para el resto de los scripts (preprocesamiento, entrenamiento, evaluación) puedes usar valores de placeholder si ya tienes datos descargados.
+
 ## Uso Local
 
 ### 1. Descarga de Datos
@@ -76,6 +95,12 @@ python scripts/preprocess_data.py --input_file data/raw/BTCUSDT_FUTURES_1h_20220
 ### 3. Entrenamiento del Modelo
 
 ```bash
+# Opción 1: Usar valores por defecto desde config.yaml
+python scripts/train_rl_agent.py --timesteps 100000
+
+# Opción 2: Usar variables de entorno para configuración
+export AGENT_LEARNING_RATE=0.0003
+export AGENT_BUFFER_SIZE=100000
 python scripts/train_rl_agent.py --timesteps 100000
 ```
 
@@ -87,22 +112,27 @@ python scripts/evaluate_rl_agent.py --model_path models/sac_transformer_trading_
 
 ## Implementación en Google Cloud Platform
 
-Este proyecto incluye implementación completa en Google Cloud Platform (GCP) para entrenamiento a escala, versionado de modelos y despliegue automatizado. Consulta el directorio `gcp/` y su [README](gcp/README.md) para obtener instrucciones detalladas sobre:
+Este proyecto incluye implementación completa en Google Cloud Platform (GCP) para entrenamiento a escala, versionado de modelos y despliegue automatizado con configuración centralizada basada en variables de entorno. 
 
-- Configuración de la infraestructura en GCP
-- Ejecución de trabajos de entrenamiento en Vertex AI
-- Registro y versionado de modelos en Vertex AI Model Registry  
-- Evaluación de modelos con métricas de trading
-- Despliegue de modelos a endpoints para inferencia
-- Pipelines de MLOps automatizados
+### Características de la Implementación en GCP
+
+- **Configuración centralizada** mediante variables de entorno
+- **Automatización completa** con pipelines en Vertex AI
+- **Entrenamiento distribuido** con soporte para GPUs
+- **Registro y versionado de modelos** en Vertex AI Model Registry
+- **Despliegue condicional** basado en métricas de rendimiento
+- **Monitorización** y logging integrados
+
+Consulta el directorio `gcp/` y su [README](gcp/README.md) para obtener instrucciones detalladas sobre la implementación paso a paso.
+
+Para más información sobre la migración a GCP y la configuración centralizada, consulta [Google Cloud Integration](docs/googlecloud.md).
 
 ### Requisitos para GCP
 
 - Cuenta de Google Cloud Platform
 - Google Cloud SDK instalado y configurado
-- APIs necesarias habilitadas (consulta la documentación)
-   source .venv/bin/activate  # En Windows: .venv\Scripts\activate
-   ```
+- Proyecto GCP con facturación habilitada
+- Variables de entorno configuradas (ver `.env.example`)
 
 3. **Instalar dependencias**:
    ```
@@ -221,31 +251,4 @@ Si bien la versión actual del bot se centra en la toma de decisiones del agente
     * Si una posición abierta alcanza un nivel de **Stop-Loss (SL)** o **Take-Profit (TP)** predefinido, el bot ejecutaría inmediatamente una orden de cierre, sin esperar a la siguiente señal del agente RL.
     * Esto combina las decisiones estratégicas del RL con una gestión de riesgo táctica y reactiva.
 
-### 2. Transición a un Agente de RL Basado en Datos de Mercado de Mayor Frecuencia (Investigación Avanzada)
-
-* **Objetivo:** Explorar si el agente de RL puede tomar decisiones directamente basadas en datos de mercado de mayor frecuencia, como datos de trades (tick data) o actualizaciones del libro de órdenes, en lugar de velas OHLCV.
-* **Implicaciones y Desafíos:**
-    * **Adquisición y Almacenamiento de Datos Históricos:** Se requerirían grandes volúmenes de datos históricos de trades o del libro de órdenes para el entrenamiento, lo cual puede ser un desafío obtener de forma gratuita y completa desde las APIs públicas para periodos extensos.
-    * **Ingeniería de Características:** Las características de entrada para el agente de RL necesitarían ser rediseñadas completamente para reflejar la naturaleza de estos datos de alta frecuencia (ej., desequilibrios del libro de órdenes, flujo de órdenes, micro-volatilidad).
-    * **Diseño del Entorno de Simulación:** El `TradingEnvironment` necesitaría una simulación mucho más compleja y computacionalmente intensiva para operar a nivel de tick o evento del libro de órdenes, modelando con precisión la latencia y el slippage.
-    * **Arquitectura del Agente:** Aunque el Transformer es adaptable, la forma exacta de procesar secuencias de eventos de mercado (en lugar de velas) podría requerir ajustes.
-    * **Costos Computacionales:** El entrenamiento y la simulación serían significativamente más demandantes.
-* **Estado Actual:** Esta es una línea de investigación considerablemente más compleja y se considera una mejora a muy largo plazo, una vez que el sistema actual esté completamente validado y operativo.
-
-### 3. Optimización Avanzada de Hiperparámetros
-
-* Utilizar técnicas como la optimización bayesiana o algoritmos genéticos (con herramientas como Optuna o Ray Tune) para encontrar conjuntos de hiperparámetros óptimos tanto para el agente de RL como para la arquitectura del Transformer.
-
-### 4. Incorporación de Múltiples Timeframes o Fuentes de Datos
-
-* Mejorar el extractor de características para que el Transformer pueda procesar y fusionar información de múltiples timeframes de velas (ej., 15min, 1h, 4h) simultáneamente.
-* Explorar la incorporación de otras fuentes de datos relevantes (ej., análisis de sentimiento, datos on-chain, datos macroeconómicos) si se pueden cuantificar y alinear temporalmente.
-
-### 5. Desarrollo de un Módulo de Paper Trading y Transición a Trading en Vivo
-
-* Crear un módulo robusto de "paper trading" que simule operaciones con una cuenta ficticia pero utilizando datos de mercado en tiempo real y latencias de ejecución realistas.
-* Tras una validación exhaustiva en paper trading, planificar cuidadosamente la transición a trading en vivo con capital real, comenzando con tamaños de posición muy pequeños.
-
-### 6. Monitorización y Alertas en Profundidad
-
-* Expandir la monitorización en GCP para incluir métricas de negocio específicas del bot (ej., P&L realizado, drawdown, número de operaciones, slippage promedio) y configurar alertas para desviaciones significativas o errores del sistema.
+### 2. Transición a un Agente de RL Basado en Datos de Mercado de Mayor Frecuencia (Investigación Advan

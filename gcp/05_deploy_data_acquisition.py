@@ -206,7 +206,14 @@ if __name__ == "__main__":
             "--min-instances=0",
             "--max-instances=1",
             "--service-account", config.SERVICE_ACCOUNT_EMAIL,
-            "--set-env-vars", f"PROJECT_ID={config.PROJECT_ID}",
+            "--set-env-vars", ",".join([
+                f"PROJECT_ID={config.PROJECT_ID}",
+                f"RAW_DATA_BUCKET={config.RAW_DATA_BUCKET}",
+                f"BINANCE_API_KEY_SECRET_NAME={config.BINANCE_API_KEY_SECRET_NAME}",
+                f"BINANCE_API_SECRET_SECRET_NAME={config.BINANCE_API_SECRET_SECRET_NAME}",
+                f"DEFAULT_SYMBOL={config.DEFAULT_SYMBOL}",
+                f"DEFAULT_INTERVAL={config.DEFAULT_INTERVAL}"
+            ]),
             "--allow-unauthenticated"
         ], check=True)
         

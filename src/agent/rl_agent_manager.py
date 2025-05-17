@@ -48,8 +48,11 @@ class RLAgentManager:
             config_path: Ruta al archivo de configuración YAML del agente
         """
         self.config_path = config_path
-        config_manager_instance = ConfigManager(config_path=config_path)
-        self.config = config_manager_instance.config
+        self.config_manager = ConfigManager()
+        
+        # Cargar configuración con prioridad para variables de entorno
+        self.config = self._load_config_with_env_override()
+        
         self.model = None
         self.env = None
         self.eval_env = None
@@ -60,6 +63,45 @@ class RLAgentManager:
         # Crear directorios para guardar modelos si no existen
         save_path_prefix = self.config.get("save_path_prefix", "models/sac_transformer_trading_agent")
         os.makedirs(os.path.dirname(save_path_prefix), exist_ok=True)
+    
+    def _load_config_with_env_override(self) -> Dict[str, Any]:
+        """
+        Carga la configuración del agente, sobrescribiendo con variables de entorno si existen.
+        
+        Returns:
+            Diccionario con la configuración del agente
+        """
+        try:
+            # Cargar configuración base desde YAML
+            with open(self.config_path, 'r') as f:
+                config = yaml.safe_load(f)
+            
+            # Sobrescribir con variables de entorno si existen
+            for key in config.keys():
+                env_value = self.config_manager.get_agent_config(key)
+                if env_value is not None:
+                    config[key] = env_value
+                    logger.info(f"Usando valor de variable de entorno para {key}: {env_value}")
+            
+            return config
+                
+        except FileNotFoundError:
+            logger.warning(f"Archivo de configuración {self.config_path} no encontrado. Usando valores por defecto.")
+            # Si no hay archivo YAML, intentar cargar todo desde variables de entorno
+            default_config = {
+                "learning_rate": self.config_manager.get_agent_config("learning_rate", default=0.0003),
+                "buffer_size": self.config_manager.get_agent_config("buffer_size", default=100000),
+                "batch_size": self.config_manager.get_agent_config("batch_size", default=256),
+                "gamma": self.config_manager.get_agent_config("gamma", default=0.99),
+                "tau": self.config_manager.get_agent_config("tau", default=0.005),
+                "train_freq": self.config_manager.get_agent_config("train_freq", default=1),
+                "gradient_steps": self.config_manager.get_agent_config("gradient_steps", default=1),
+                "learning_starts": self.config_manager.get_agent_config("learning_starts", default=10000),
+                "save_path_prefix": self.config_manager.get_agent_config("save_path_prefix", default="models/sac_transformer_trading_agent"),
+                "total_timesteps": self.config_manager.get_agent_config("total_timesteps", default=500000),
+                "use_gpu": self.config_manager.get_agent_config("use_gpu", default=True),
+            }
+            return default_config
         
     def _setup_device(self) -> str:
         """
