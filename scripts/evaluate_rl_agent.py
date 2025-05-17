@@ -1,247 +1,253 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 """
-Script para evaluar un agente RL de trading entrenado.
-Optimizado para ejecutarse como un componente de Vertex AI Pipelines.
+Script para evaluar un agente de RL previamente entrenado
+en el entorno de trading simulado.
 """
-import argparse
-import logging
+
 import os
-import json
-import time
+import argparse
 import numpy as np
+import gymnasium as gym
+import logging
+from pathlib import Path
 import pandas as pd
 import matplotlib.pyplot as plt
-from google.cloud import storage
 
-from src.agent.rl_agent_manager import RLAgentManagerCloud
+# Importaciones locales
+from src.agent.rl_agent_manager import RLAgentManager
+from src.environments.trading_env import TradingEnvironment
+from src.utils.config import ConfigManager
 
 # Configurar logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("EvaluateRLAgent")
 
-def main():
-    """Función principal para evaluar un agente RL."""
-    parser = argparse.ArgumentParser(description="Evalúa un agente RL para trading")
+
+def parse_arguments():
+    """
+    Parsea los argumentos de la línea de comandos.
     
-    # Parámetros básicos
-    parser.add_argument("--model-gcs-path", type=str, required=True,
-                        help="Ruta GCS completa al modelo entrenado")
-    parser.add_argument("--test-data-gcs", type=str, required=True,
-                        help="Ruta GCS a los datos de prueba")
-    parser.add_argument("--output-metrics-path", type=str, required=False,
-                        default="/tmp/metrics.json",
-                        help="Ruta para guardar métricas de evaluación (local o GCS)")
-    parser.add_argument("--output-plots-dir", type=str, required=False,
-                        default="/tmp/eval_plots",
-                        help="Directorio para guardar gráficos de evaluación")
+    Returns:
+        Argumentos parseados
+    """
+    parser = argparse.ArgumentParser(description="Evalúa un agente de RL para trading")
     
-    # Parámetros de GCP
-    parser.add_argument("--project-id", type=str, required=False,
-                        default=os.getenv("GCP_PROJECT_ID"),
-                        help="ID del proyecto GCP (default: desde variable GCP_PROJECT_ID)")
-    parser.add_argument("--evaluation-bucket", type=str, required=False,
-                        default=os.getenv("EVALUATION_RESULTS_BUCKET"),
-                        help="Bucket para resultados (default: desde variable EVALUATION_RESULTS_BUCKET)")
+    parser.add_argument(
+        "--agent-config",
+        type=str,
+        default="src/agent/agent_config.yaml",
+        help="Ruta al archivo de configuración del agente"
+    )
     
-    # Parámetros de evaluación
-    parser.add_argument("--num-episodes", type=int, required=False,
-                        default=int(os.getenv("EVAL_NUM_EPISODES", "10")),
-                        help="Número de episodios para evaluación")
-    parser.add_argument("--sequence-length", type=int, required=False,
-                        default=int(os.getenv("SEQUENCE_LENGTH_L", "96")),
-                        help="Longitud de la secuencia (default: desde SEQUENCE_LENGTH_L o 96)")
-    parser.add_argument("--initial-equity", type=float, required=False,
-                        default=float(os.getenv("INITIAL_EQUITY", "10000.0")),
-                        help="Equity inicial (default: desde INITIAL_EQUITY o 10000.0)")
-    parser.add_argument("--leverage", type=int, required=False,
-                        default=int(os.getenv("LEVERAGE", "1")),
-                        help="Apalancamiento (default: desde LEVERAGE o 1)")
-    parser.add_argument("--position-size", type=float, required=False,
-                        default=float(os.getenv("POSITION_SIZE_PERCENTAGE", "0.2")),
-                        help="Tamaño de posición como % de equity (default: 0.2)")
-    parser.add_argument("--trading-fees", type=float, required=False,
-                        default=float(os.getenv("TRADING_FEES", "0.0004")),
-                        help="Comisiones por trade (default: 0.0004)")
-    parser.add_argument("--success-threshold-sharpe", type=float, required=False,
-                        default=float(os.getenv("SUCCESS_THRESHOLD_SHARPE", "0.5")),
-                        help="Umbral de Sharpe ratio para despliegue (default: 0.5)")
-    parser.add_argument("--success-threshold-drawdown", type=float, required=False,
-                        default=float(os.getenv("SUCCESS_THRESHOLD_DRAWDOWN", "0.2")),
-                        help="Umbral máximo de drawdown para despliegue (default: 0.2)")
-    parser.add_argument("--success-threshold-winrate", type=float, required=False,
-                        default=float(os.getenv("SUCCESS_THRESHOLD_WINRATE", "0.5")),
-                        help="Umbral de win rate para despliegue (default: 0.5)")
+    parser.add_argument(
+        "--env-config",
+        type=str,
+        default="src/environments/environment_config.yaml",
+        help="Ruta al archivo de configuración del entorno"
+    )
     
-    args = parser.parse_args()
+    parser.add_argument(
+        "--model-path",
+        type=str,
+        required=True,
+        help="Ruta al modelo entrenado para evaluar"
+    )
     
-    # Verificar parámetros obligatorios
-    if not args.project_id:
-        raise ValueError("Se requiere --project-id o la variable de entorno GCP_PROJECT_ID")
+    parser.add_argument(
+        "--episodes",
+        type=int,
+        default=1,
+        help="Número de episodios para evaluar"
+    )
     
-    # Crear directorio para gráficos
-    os.makedirs(args.output_plots_dir, exist_ok=True)
+    parser.add_argument(
+        "--output-path",
+        type=str,
+        default="results",
+        help="Ruta donde guardar los resultados de evaluación"
+    )
     
-    try:
-        start_time = time.time()
-        logger.info(f"Iniciando evaluación del modelo: {args.model_gcs_path}")
-        logger.info(f"Datos de prueba: {args.test_data_gcs}")
+    parser.add_argument(
+        "--no-gpu",
+        action="store_true",
+        help="Desactivar el uso de GPU incluso si está disponible"
+    )
+    
+    return parser.parse_args()
+
+
+def visualize_episode_results(episode_data, output_dir, episode_idx):
+    """
+    Visualiza los resultados de un episodio.
+    
+    Args:
+        episode_data: Datos recopilados durante un episodio de evaluación
+        output_dir: Directorio donde guardar las visualizaciones
+        episode_idx: Índice del episodio
+    """
+    # Crear el directorio de salida si no existe
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # Construir un DataFrame para facilitar la visualización
+    df = pd.DataFrame(episode_data)
+    
+    # Figura 1: PnL acumulado y valor del portafolio
+    plt.figure(figsize=(12, 8))
+    
+    plt.subplot(2, 1, 1)
+    plt.plot(df['portfolio_value'], label='Valor del Portafolio ($)')
+    plt.title(f'Evaluación del Agente RL - Episodio {episode_idx+1}')
+    plt.ylabel('Valor ($)')
+    plt.legend()
+    plt.grid(True)
+    
+    plt.subplot(2, 1, 2)
+    plt.plot(df['position'], label='Posición')
+    plt.plot(df['actions'], label='Señal de Acción', linestyle='--', alpha=0.7)
+    plt.xlabel('Paso Temporal')
+    plt.ylabel('Valor')
+    plt.legend()
+    plt.grid(True)
+    
+    # Guardar la figura
+    plt.tight_layout()
+    plt.savefig(f"{output_dir}/episodio_{episode_idx+1}_resultados.png")
+    plt.close()
+    
+    # También guardar los datos numéricos
+    df.to_csv(f"{output_dir}/episodio_{episode_idx+1}_datos.csv", index=False)
+    
+    # Imprimir estadísticas de rendimiento
+    initial_value = df['portfolio_value'].iloc[0]
+    final_value = df['portfolio_value'].iloc[-1]
+    total_return = (final_value / initial_value - 1) * 100
+    
+    logger.info(f"Episodio {episode_idx+1} - Retorno Total: {total_return:.2f}%")
+    logger.info(f"Valor Inicial: ${initial_value:.2f}, Valor Final: ${final_value:.2f}")
+    
+    return {
+        'episode': episode_idx + 1,
+        'total_return': total_return,
+        'initial_value': initial_value,
+        'final_value': final_value,
+        'avg_reward': df['rewards'].mean(),
+        'cumulative_reward': df['rewards'].sum()
+    }
+
+
+def evaluate_agent(agent_manager, env, num_episodes=1, output_dir="results"):
+    """
+    Evalúa un agente en el entorno especificado.
+    
+    Args:
+        agent_manager: Instancia de RLAgentManager con el modelo cargado
+        env: Entorno de evaluación
+        num_episodes: Número de episodios para evaluar
+        output_dir: Directorio donde guardar los resultados
+    
+    Returns:
+        Resumen de resultados de evaluación
+    """
+    logger.info(f"Evaluando agente durante {num_episodes} episodios...")
+    
+    all_episode_stats = []
+    
+    for episode_idx in range(num_episodes):
+        logger.info(f"Iniciando episodio {episode_idx+1}/{num_episodes}")
         
-        # Inicializar el administrador del agente
-        agent_manager = RLAgentManagerCloud(
-            project_id=args.project_id,
-            device="cpu"  # Para evaluación es suficiente con CPU
-        )
-        
-        # Configurar el entorno y el agente con datos de prueba
-        agent_manager.setup_agent(
-            sequence_length_L=args.sequence_length,
-            initial_equity=args.initial_equity,
-            leverage=args.leverage,
-            position_size_percentage=args.position_size,
-            trading_fees=args.trading_fees,
-            data_gcs_path=args.test_data_gcs,
-            random_start=False  # Para evaluación, comenzar desde el principio
-        )
-        
-        # Cargar el modelo entrenado
-        agent_manager.load_model(args.model_gcs_path)
-        logger.info("Modelo cargado exitosamente")
-        
-        # Evaluar el modelo
-        eval_metrics = agent_manager.evaluate_agent(
-            n_eval_episodes=args.num_episodes,
-            deterministic=True
-        )
-        
-        # Crear visualizaciones
-        # (Simplificado - en una implementación real harías más gráficos)
-        equity_curve_data = []
-        
-        # Recopilar datos para equity curve
-        for i in range(min(5, args.num_episodes)):  # Limitamos a 5 episodios para la curva
-            obs, info = agent_manager.eval_env.reset()
-            done = False
-            truncated = False
-            equities = [args.initial_equity]
-            
-            while not (done or truncated):
-                action, _ = agent_manager.model.predict(obs, deterministic=True)
-                obs, reward, terminated, truncated, info = agent_manager.eval_env.step(action)
-                done = terminated or truncated
-                equities.append(info['equity'])
-            
-            equity_curve_data.append(equities)
-        
-        # Crear gráfico de equity curve
-        plt.figure(figsize=(12, 6))
-        for i, equity_curve in enumerate(equity_curve_data):
-            plt.plot(equity_curve, label=f"Episodio {i+1}")
-        plt.axhline(y=args.initial_equity, color='r', linestyle='--', label="Equity Inicial")
-        plt.title("Curvas de Equity durante Evaluación")
-        plt.xlabel("Pasos")
-        plt.ylabel("Equity ($)")
-        plt.legend()
-        plt.grid(True)
-        
-        # Guardar gráfico
-        equity_plot_path = os.path.join(args.output_plots_dir, "equity_curves.png")
-        plt.savefig(equity_plot_path)
-        
-        # Añadir informe de evaluación más detallado
-        plt.figure(figsize=(10, 8))
-        metrics_text = [
-            f"Evaluación del Modelo: {os.path.basename(args.model_gcs_path)}",
-            f"Episodios: {args.num_episodes}",
-            f"Equity Media Final: ${eval_metrics['avg_final_equity']:.2f}",
-            f"Cambio de Equity: {eval_metrics['equity_change_pct']:.2f}%",
-            f"Ratio de Sharpe: {eval_metrics['avg_sharpe_ratio']:.2f}",
-            f"Drawdown Máximo: {eval_metrics['avg_max_drawdown']*100:.2f}%",
-            f"Win Rate: {eval_metrics['avg_win_rate']*100:.2f}%"
-        ]
-        plt.text(0.5, 0.5, "\n".join(metrics_text), ha='center', va='center', fontsize=12)
-        plt.axis('off')
-        summary_plot_path = os.path.join(args.output_plots_dir, "evaluation_summary.png")
-        plt.savefig(summary_plot_path)
-        
-        # Determinar si el modelo cumple con los criterios de calidad para despliegue
-        success_threshold_met = (
-            eval_metrics['avg_sharpe_ratio'] >= args.success_threshold_sharpe and
-            eval_metrics['avg_max_drawdown'] <= args.success_threshold_drawdown and
-            eval_metrics['avg_win_rate'] >= args.success_threshold_winrate
-        )
-        
-        # Añadir recomendación de despliegue
-        eval_metrics['success_threshold_met'] = success_threshold_met
-        eval_metrics['deploy_recommendation'] = success_threshold_met
-        eval_metrics['thresholds'] = {
-            'sharpe': args.success_threshold_sharpe,
-            'drawdown': args.success_threshold_drawdown,
-            'win_rate': args.success_threshold_winrate
+        observation, info = env.reset()
+        done = False
+        truncated = False
+        episode_data = {
+            'rewards': [],
+            'actions': [],
+            'position': [],
+            'portfolio_value': [],
+            'market_price': []
         }
         
-        # Guardar métricas en JSON
-        with open(args.output_metrics_path, 'w') as f:
-            json.dump(eval_metrics, f, indent=2)
+        # Bucle principal del episodio
+        while not (done or truncated):
+            action = agent_manager.predict_action(observation, deterministic=True)
+            
+            next_observation, reward, done, truncated, info = env.step(action)
+            
+            # Recopilar datos para visualización
+            episode_data['rewards'].append(reward)
+            episode_data['actions'].append(float(action[0]))
+            episode_data['position'].append(info.get('position', 0))
+            episode_data['portfolio_value'].append(info.get('portfolio_value', 0))
+            episode_data['market_price'].append(info.get('current_price', 0))
+            
+            observation = next_observation
         
-        # Si evaluation_bucket está definido, subir los resultados a GCS
-        if args.evaluation_bucket:
-            timestamp = time.strftime("%Y%m%d_%H%M%S")
-            base_path = f"evaluation_results/{os.path.basename(args.model_gcs_path)}_{timestamp}"
-            
-            # Subir métricas JSON
-            storage_client = storage.Client(project=args.project_id)
-            bucket = storage_client.bucket(args.evaluation_bucket)
-            
-            # Subir archivo de métricas
-            metrics_blob_name = f"{base_path}/metrics.json"
-            metrics_blob = bucket.blob(metrics_blob_name)
-            metrics_blob.upload_from_filename(args.output_metrics_path)
-            
-            # Subir gráficos
-            for plot_file in os.listdir(args.output_plots_dir):
-                plot_path = os.path.join(args.output_plots_dir, plot_file)
-                plot_blob_name = f"{base_path}/plots/{plot_file}"
-                plot_blob = bucket.blob(plot_blob_name)
-                plot_blob.upload_from_filename(plot_path)
-            
-            logger.info(f"Resultados de evaluación subidos a gs://{args.evaluation_bucket}/{base_path}")
-            
-            # Actualizar ruta en métricas para KFP
-            eval_metrics['plots_gcs_path'] = f"gs://{args.evaluation_bucket}/{base_path}/plots"
-            
-            # Escribir archivo actualizado para KFP
-            with open('/tmp/kfp_metrics.json', 'w') as f:
-                json.dump(eval_metrics, f)
-                
-            # Para integrarse con Vertex AI Pipelines
-            if 'PIPELINE_OUTPUT_FILE' in os.environ:
-                with open(os.environ['PIPELINE_OUTPUT_FILE'], 'w') as f:
-                    json.dump({
-                        "model_path": args.model_gcs_path,
-                        "metrics": eval_metrics,
-                        "deploy_recommendation": success_threshold_met,
-                        "plots_gcs_path": f"gs://{args.evaluation_bucket}/{base_path}/plots"
-                    }, f)
-        
-        eval_duration = time.time() - start_time
-        logger.info(f"Evaluación completada en {eval_duration:.2f} segundos")
-        logger.info(f"Resumen: Equity final ${eval_metrics['avg_final_equity']:.2f} "
-                   f"({eval_metrics['equity_change_pct']:.2f}%), "
-                   f"Sharpe={eval_metrics['avg_sharpe_ratio']:.2f}")
-        
-        if success_threshold_met:
-            logger.info("✅ El modelo cumple con los criterios de calidad para despliegue")
-        else:
-            logger.warning("⚠️ El modelo NO cumple con los criterios de calidad para despliegue")
-        
-        return 0
-            
-    except Exception as e:
-        logger.exception(f"Error no controlado: {e}")
-        return 1
+        # Visualizar y guardar resultados del episodio
+        episode_stats = visualize_episode_results(episode_data, output_dir, episode_idx)
+        all_episode_stats.append(episode_stats)
+    
+    # Crear un resumen de todos los episodios
+    summary_df = pd.DataFrame(all_episode_stats)
+    summary_df.to_csv(f"{output_dir}/resumen_evaluacion.csv", index=False)
+    
+    # Imprimir estadísticas de rendimiento promedio
+    avg_return = summary_df['total_return'].mean()
+    avg_reward = summary_df['avg_reward'].mean()
+    
+    logger.info(f"=== Resumen de Evaluación ({num_episodes} episodios) ===")
+    logger.info(f"Retorno Promedio: {avg_return:.2f}%")
+    logger.info(f"Recompensa Promedio por Paso: {avg_reward:.4f}")
+    
+    return summary_df
+
+
+def main():
+    """
+    Función principal para evaluar un agente de RL.
+    """
+    # Parsear argumentos
+    args = parse_arguments()
+    
+    # Cargar la configuración del agente
+    config_manager = ConfigManager(config_path=args.agent_config)
+    agent_config = config_manager.config
+    
+    # Actualizar la configuración si se solicita no usar GPU
+    if args.no_gpu:
+        agent_config["use_gpu"] = False
+        logger.info("Uso de GPU desactivado por argumento de línea de comandos")
+    
+    # Crear el administrador del agente
+    agent_manager = RLAgentManager(config_path=args.agent_config)
+    
+    # Si se desactivó la GPU por argumento, aplicar la configuración al administrador
+    if args.no_gpu:
+        agent_manager.config["use_gpu"] = False
+        agent_manager.device = "cpu"
+    
+    # Cargar el modelo entrenado
+    agent_manager.setup_agent(
+        env_config_path=args.env_config,
+        load_model=True,
+        model_path=args.model_path
+    )
+    
+    # Configurar el entorno de evaluación (modo determinístico)
+    # Pasar directamente la ruta de configuración y establecer el modo de renderización
+    eval_env = TradingEnvironment(config_path=args.env_config, render_mode='human')
+    
+    # Evaluar el agente
+    evaluate_agent(
+        agent_manager=agent_manager,
+        env=eval_env,
+        num_episodes=args.episodes,
+        output_dir=args.output_path
+    )
+    
+    logger.info("Evaluación completada.")
+
 
 if __name__ == "__main__":
-    exit(main())
+    main()

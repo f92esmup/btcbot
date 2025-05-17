@@ -1,0 +1,47 @@
+# src/agent/agent_config.yaml
+
+# --- Configuración del Algoritmo SAC (para Stable Baselines3) ---
+algorithm: "SAC"
+# policy: "MlpPolicy" # Aunque usaremos una política con extractor personalizado, la base puede ser MlpPolicy
+learning_rate: 0.0003
+buffer_size: 100000
+learning_starts: 10000      # Pasos para llenar el buffer antes de entrenar
+batch_size: 256
+tau: 0.005                  # Coeficiente de actualización suave para redes objetivo
+gamma: 0.99                 # Factor de descuento
+train_freq: 1               # Frecuencia de entrenamiento (en pasos de entorno, ej., (1, "step"))
+gradient_steps: 1           # Pasos de gradiente por actualización
+ent_coef: "auto"            # Aprendizaje automático del coeficiente de entropía alpha
+# target_entropy: "auto"    # Calculado automáticamente por SB3 si ent_coef='auto'
+use_sde: false              # State-Dependent Exploration (SAC ya es estocástico)
+
+# --- Configuración de la Arquitectura de Red Personalizada (para policy_kwargs en SB3) ---
+policy_kwargs:
+  features_extractor_class: "CustomTransformerFeatureExtractor" # Nombre de tu clase extractor
+  features_extractor_kwargs:
+    market_features_key: "market_features"
+    portfolio_features_key: "portfolio_features"
+    # N_features_mercado = 20, N_features_cartera = 8 => N_features_entrada_transformer = 28
+    features_in_transformer: 28 # 20 (mercado) + 8 (cartera)
+    d_model: 128
+    n_heads: 4
+    n_encoder_layers: 3
+    dim_feedforward: 512 # d_model * 4
+    dropout_rate: 0.1
+    # features_dim: 128 # Dimensión de salida del extractor, usualmente d_model
+
+  # Arquitectura de las redes MLP del actor (pi) y crítico (qf) DESPUÉS del extractor
+  net_arch:
+    pi: [256, 256] # Capas ocultas para el actor
+    qf: [256, 256] # Capas ocultas para los críticos
+
+# --- Configuración de Entrenamiento ---
+total_training_timesteps: 1000000
+log_interval_episodes: 10 # Loguear cada N episodios
+save_path_prefix: "models/sac_transformer_trading_agent"
+save_frequency_steps: 50000
+use_gpu: true  # Activar para usar GPU (CUDA/MPS) si está disponible
+
+# --- Carga de Modelo (Opcional) ---
+# load_trained_model_on_start: false
+# model_path_to_load: "models/sac_transformer_trading_agent_XXXX_steps.zip"

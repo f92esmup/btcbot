@@ -4,7 +4,7 @@
 
 Este proyecto implementa un agente de trading basado en Reinforcement Learning para operar en el mercado de futuros de criptomonedas. Utiliza el algoritmo SAC (Soft Actor-Critic) con una arquitectura de red neuronal basada en Transformers para procesar datos históricos del mercado y tomar decisiones de trading.
 
-**Estado Actual del Proyecto**: Esta es una versión completa con integración en Google Cloud Platform. **No está lista para trading en vivo**.
+**Estado Actual del Proyecto**: Esta es una versión de desarrollo para entrenamiento local funcional. **No está lista para trading en vivo**.
 
 ## Características Principales
 
@@ -13,9 +13,6 @@ Este proyecto implementa un agente de trading basado en Reinforcement Learning p
 - Simulación de un entorno de trading de futuros BTCUSDT con Gymnasium
 - Agente de RL (Soft Actor-Critic) con extractor de características basado en Transformers
 - Visualización de resultados y métricas de rendimiento
-- **Infraestructura en Google Cloud Platform**: Totalmente integrado con GCP para entrenamiento y despliegue a escala
-- **Configuración Flexible**: Sistema centralizado basado en variables de entorno para fácil adaptación a diferentes contextos
-- **Pipeline de MLOps Completo**: Automatización de entrenamiento, evaluación y despliegue usando Kubeflow Pipelines
 
 ## Estructura del Proyecto
 
@@ -25,9 +22,6 @@ btcbot/
 │   ├── raw/                   # Datos sin procesar de Binance
 │   └── processed/             # Datos preprocesados con features
 ├── docs/                      # Documentación detallada
-├── gcp/                       # Scripts para Google Cloud Platform
-│   ├── common/                # Configuraciones y clientes compartidos
-│   └── serving/               # Archivos para despliegue en Cloud Run
 ├── logs/                      # Logs de entrenamiento y evaluación
 ├── models/                    # Modelos guardados
 ├── results/                   # Resultados de evaluación
@@ -43,16 +37,6 @@ btcbot/
 
 - Python 3.9+
 - Git
-- Docker (para contenedores)
-- Cuenta de Google Cloud Platform (para despliegue en la nube)
-
-## Instalación
-
-1. **Clonar el repositorio**:
-   ```
-   git clone https://github.com/yourusername/btcbot.git
-   cd btcbot
-   ```
 
 ## Instalación
 
@@ -67,115 +51,6 @@ btcbot/
    python3 -m venv .venv
    source .venv/bin/activate  # En Windows: .venv\Scripts\activate
    ```
-
-3. **Instalar dependencias**:
-   ```
-   pip install -r requirements.txt
-   ```
-
-4. **Configurar Variables de Entorno**:
-   
-   Copiar el archivo `.env.example` a `.env` y modificarlo con tus valores:
-   
-   ```bash
-   cp .env.example .env
-   # Editar el archivo .env con tus valores
-   ```
-   
-   Variables esenciales para ejecución local:
-   ```
-   BINANCE_API_KEY_FUTURES="TU_CLAVE_AQUI"
-   BINANCE_API_SECRET_FUTURES="TU_SECRETO_AQUI"
-   ```
-   
-   > **Nota**: Las claves API reales de Binance solo son necesarias para `download_data.py`. Para el resto de los scripts (preprocesamiento, entrenamiento, evaluación) puedes usar valores de placeholder si ya tienes datos descargados.
-
-## Uso Local
-
-### 1. Descarga de Datos
-
-```bash
-python scripts/download_data.py --symbol BTCUSDT --interval 1h --start_date 2022-01-01
-```
-
-### 2. Preprocesamiento
-
-```bash
-python scripts/preprocess_data.py --input_file data/raw/BTCUSDT_FUTURES_1h_20220101_*.csv
-```
-
-### 3. Entrenamiento del Modelo
-
-```bash
-# Opción 1: Usar valores por defecto desde config.yaml
-python scripts/train_rl_agent.py --timesteps 100000
-
-# Opción 2: Usar variables de entorno para configuración
-export AGENT_LEARNING_RATE=0.0003
-export AGENT_BUFFER_SIZE=100000
-python scripts/train_rl_agent.py --timesteps 100000
-```
-
-### 4. Evaluación del Modelo
-
-```bash
-python scripts/evaluate_rl_agent.py --model_path models/sac_transformer_trading_agent_*.zip
-```
-
-## Implementación en Google Cloud Platform
-
-Este proyecto incluye implementación completa en Google Cloud Platform (GCP) para entrenamiento a escala, versionado de modelos y despliegue automatizado con configuración centralizada basada en variables de entorno. 
-
-### Características de la Implementación en GCP
-
-- **Configuración centralizada** mediante variables de entorno
-- **Automatización completa** con Kubeflow Pipelines en Vertex AI
-- **Entrenamiento distribuido** con soporte para GPUs
-- **Registro y versionado de modelos** en Vertex AI Model Registry
-- **Despliegue condicional** basado en métricas de rendimiento
-- **Monitorización** y logging integrados
-- **Componentes parametrizados** para máxima flexibilidad
-
-### Despliegue en Google Cloud Platform
-
-Este proyecto utiliza Kubeflow Pipelines (KFP) en Vertex AI para automatizar el flujo de trabajo completo de entrenamiento y despliegue. El pipeline incluye los siguientes pasos:
-
-1. **Descarga de datos históricos** desde Binance (parametrizable por símbolo, intervalo y fechas)
-2. **Preprocesamiento de datos** con normalización y features avanzadas
-3. **Entrenamiento del modelo RL** con parámetros optimizables
-4. **Evaluación completa** con métricas de trading (Sharpe, Sortino, drawdown, win rate)
-5. **Despliegue condicional** basado en umbrales de calidad configurables
-
-#### Ejecutar el Pipeline Completo
-
-```bash
-# Navegar al directorio gcp
-cd gcp
-
-# Ejecutar el pipeline con configuración personalizada
-./run_pipeline.sh --symbol BTCUSDT --timeframe 1h --lookback-window 96 \
-  --total-timesteps 500000 --algorithm SAC --deploy --wait
-```
-
-Para una prueba rápida de toda la infraestructura, puedes usar el script de prueba end-to-end:
-
-```bash
-cd gcp
-./test_e2e_pipeline.sh
-```
-
-### Requisitos para GCP
-
-- Cuenta de Google Cloud Platform
-- Google Cloud SDK instalado y configurado
-- Proyecto GCP con facturación habilitada
-- APIs necesarias habilitadas (el script `enable_apis.sh` lo hace automáticamente)
-- Variables de entorno configuradas (ver `.env.example` o usar `gcp/common/config.py`)
-
-Para más información sobre la implementación en GCP, consulta:
-- [Guía de GCP](gcp/README.md): Instrucciones detalladas de configuración y uso
-- [Pipeline de Kubeflow](docs/kubeflow_pipeline.md): Detalles técnicos del pipeline
-- [Prueba End-to-End](docs/e2e_testing.md): Cómo verificar la integración completa
 
 3. **Instalar dependencias**:
    ```
@@ -279,19 +154,3 @@ Para información más detallada sobre cada componente, consulta los archivos en
 ## Licencia
 
 MIT
-
-
-## Próximos Pasos y Mejoras Futuras
-
-Si bien la versión actual del bot se centra en la toma de decisiones del agente de Reinforcement Learning basadas en velas completas de un timeframe específico, existen varias vías interesantes para futuras mejoras y una mayor sofisticación:
-
-### 1. Gestión de Riesgo Avanzada y Monitorización Continua de Precios (Recomendado)
-
-* **Objetivo:** Implementar una capa de gestión de riesgo más granular que opere entre las decisiones estratégicas del agente de RL.
-* **Enfoque Propuesto:**
-    * El bot de ejecución principal (desplegado, por ejemplo, en una VM de Google Compute Engine) mantendría una conexión **WebSocket** con Binance para recibir actualizaciones de precios en tiempo real (ej., a través del stream `@trade` o `@bookTicker`).
-    * Paralelamente a las decisiones del agente RL (que seguirían basándose en velas completas del timeframe principal y se obtendrían del endpoint de Vertex AI), este bot monitorizaría continuamente el precio actual.
-    * Si una posición abierta alcanza un nivel de **Stop-Loss (SL)** o **Take-Profit (TP)** predefinido, el bot ejecutaría inmediatamente una orden de cierre, sin esperar a la siguiente señal del agente RL.
-    * Esto combina las decisiones estratégicas del RL con una gestión de riesgo táctica y reactiva.
-
-### 2. Transición a un Agente de RL Basado en Datos de Mercado de Mayor Frecuencia (Investigación Advan
