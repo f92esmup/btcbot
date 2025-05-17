@@ -1,0 +1,19 @@
+
+steps:
+- name: 'gcr.io/cloud-builders/docker'
+  args: ['build', 
+         '-t', 'europe-southwest1-docker.pkg.dev/btcbot276299/btcbot-docker-repo/btcbot-training-gpu:latest', 
+         '-f', 'Dockerfile.gpu', 
+         '--build-arg', 'BUILDKIT_INLINE_CACHE=1',
+         '--progress=plain',  # Esta opción ayuda a tener una salida más estándar
+         '.']
+  timeout: '3600s'
+images: ['europe-southwest1-docker.pkg.dev/btcbot276299/btcbot-docker-repo/btcbot-training-gpu:latest']
+timeout: '3600s'
+options:
+  machineType: 'E2_HIGHCPU_8'
+  diskSizeGb: '100'
+  # logging: CLOUD_LOGGING_ONLY # Opcional: para enviar logs solo a Cloud Logging y no a GCS
+  env:
+    - 'DOCKER_BUILDKIT=1'
+    

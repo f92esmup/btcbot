@@ -38,7 +38,8 @@ except ImportError:
 
 from common.config import (
     PROJECT_ID, REGION, PROCESSED_DATA_BUCKET, MODELS_STAGING_BUCKET,
-    EVALUATION_RESULTS_BUCKET, TRAINING_IMAGE_NAME, PREPROCESSING_IMAGE_NAME
+    EVALUATION_RESULTS_BUCKET, TRAINING_IMAGE_NAME, PREPROCESSING_IMAGE_NAME,
+    RAW_DATA_BUCKET, TRAINING_JOB_NAME_PREFIX
 )
 from common.clients import get_aiplatform_client
 
@@ -502,7 +503,7 @@ def conditional_deployment(
 def btcbot_training_pipeline(
     project_id: str = PROJECT_ID,
     region: str = REGION,
-    raw_data_bucket: str = "",
+    raw_data_bucket: str = RAW_DATA_BUCKET,
     processed_data_bucket: str = PROCESSED_DATA_BUCKET,
     model_staging_bucket: str = MODELS_STAGING_BUCKET,
     evaluation_bucket: str = EVALUATION_RESULTS_BUCKET,
@@ -601,49 +602,79 @@ def btcbot_training_pipeline(
 def main():
     """Función principal para compilar y ejecutar el pipeline."""
     parser = argparse.ArgumentParser(description="Crea y ejecuta un pipeline de entrenamiento en Vertex AI")
+    
     # Opciones básicas
-    parser.add_argument("--compile-only", action="store_true", help="Solo compilar el pipeline sin ejecutarlo")
-    parser.add_argument("--raw-data-bucket", type=str, help="Bucket para datos raw", required=True)
+    parser.add_argument("--compile-only", action="store_true", 
+                       help="Solo compilar el pipeline sin ejecutarlo")
+    parser.add_argument("--raw-data-bucket", type=str, default=RAW_DATA_BUCKET, 
+                       help=f"Bucket para datos raw (default: {RAW_DATA_BUCKET})")
     
     # Parámetros de datos
-    parser.add_argument("--symbol", type=str, default="BTCUSDT", help="Símbolo a procesar")
-    parser.add_argument("--timeframe", type=str, default="1h", help="Timeframe a procesar")
-    parser.add_argument("--lookback-window", type=int, default=96, help="Ventana de lookback")
+    data_group = parser.add_argument_group('Configuración de datos')
+    data_group.add_argument("--symbol", type=str, default="BTCUSDT", 
+                         help="Símbolo a procesar (default: BTCUSDT)")
+    data_group.add_argument("--timeframe", type=str, default="1h", 
+                         help="Timeframe a procesar (default: 1h)")
+    data_group.add_argument("--lookback-window", type=int, default=96, 
+                         help="Ventana de lookback (default: 96)")
     
     # Parámetros de entrenamiento
-    parser.add_argument("--total-timesteps", type=int, default=1000000, help="Pasos totales de entrenamiento")
-    parser.add_argument("--use-gpu", action="store_true", help="Utilizar GPU para el entrenamiento")
-    parser.add_argument("--gpu-type", type=str, default="NVIDIA_TESLA_T4", 
-                       choices=["NVIDIA_TESLA_T4", "NVIDIA_TESLA_V100", "NVIDIA_TESLA_P100", "NVIDIA_TESLA_P4", "NVIDIA_TESLA_K80"],
-                       help="Tipo de GPU a utilizar (si use-gpu está activado)")
-    parser.add_argument("--gpu-count", type=int, default=1, choices=range(1, 9),
-                       help="Número de GPUs a utilizar (1-8, si use-gpu está activado)")
+    training_group = parser.add_argument_group('Configuración de entrenamiento')
+    training_group.add_argument("--total-timesteps", type=int, default=1000000, 
+                             help="Pasos totales de entrenamiento (default: 1000000)")
+    training_group.add_argument("--use-gpu", action="store_true", 
+                             help="Utilizar GPU para el entrenamiento (IMPORTANTE: activar solo si se necesita)")
+    training_group.add_argument("--gpu-type", type=str, default="NVIDIA_TESLA_T4", 
+                             choices=["NVIDIA_TESLA_T4", "NVIDIA_TESLA_V100", "NVIDIA_TESLA_P100", "NVIDIA_TESLA_P4", "NVIDIA_TESLA_K80"],
+                             help="Tipo de GPU a utilizar (default: NVIDIA_TESLA_T4)")
+    training_group.add_argument("--gpu-count", type=int, default=1, choices=range(1, 9),
+                             help="Número de GPUs a utilizar, 1-8 (default: 1)")
     
     # Parámetros de evaluación
-    parser.add_argument("--num-eval-episodes", type=int, default=10, help="Número de episodios para evaluación")
+    eval_group = parser.add_argument_group('Configuración de evaluación')
+    eval_group.add_argument("--num-eval-episodes", type=int, default=10, 
+                         help="Número de episodios para evaluación (default: 10)")
     
     # Parámetros de despliegue
-    parser.add_argument("--deploy-model", action="store_true", help="Desplegar el modelo si la evaluación es satisfactoria")
-    parser.add_argument("--min-sharpe-ratio", type=float, default=0.5, help="Sharpe ratio mínimo para despliegue")
-    parser.add_argument("--min-sortino-ratio", type=float, default=0.75, help="Sortino ratio mínimo para despliegue")
-    parser.add_argument("--max-drawdown-threshold", type=float, default=-0.2, help="Drawdown máximo permitido para despliegue")
-    parser.add_argument("--min-win-rate", type=float, default=0.5, help="Win rate mínimo para despliegue")
-    parser.add_argument("--deployment-machine-type", type=str, default="n1-standard-2", help="Tipo de máquina para despliegue")
-    parser.add_argument("--deployment-use-gpu", action="store_true", help="Utilizar GPU para el despliegue")
-    parser.add_argument("--deployment-gpu-type", type=str, default="NVIDIA_TESLA_T4",
-                       choices=["NVIDIA_TESLA_T4", "NVIDIA_TESLA_V100", "NVIDIA_TESLA_P100", "NVIDIA_TESLA_P4", "NVIDIA_TESLA_K80"],
-                       help="Tipo de GPU a utilizar para despliegue")
-    parser.add_argument("--deployment-gpu-count", type=int, default=1, choices=range(1, 9),
-                       help="Número de GPUs a utilizar para despliegue")
-    parser.add_argument("--deployment-traffic", type=int, default=0, 
-                       help="Porcentaje de tráfico a dirigir al nuevo modelo desplegado (0-100)")
+    deploy_group = parser.add_argument_group('Configuración de despliegue (opcional)')
+    deploy_group.add_argument("--deploy-model", action="store_true", 
+                           help="Desplegar el modelo si la evaluación es satisfactoria (default: False)")
+    deploy_group.add_argument("--min-sharpe-ratio", type=float, default=0.5, 
+                           help="Sharpe ratio mínimo para despliegue (default: 0.5)")
+    deploy_group.add_argument("--min-sortino-ratio", type=float, default=0.75, 
+                           help="Sortino ratio mínimo para despliegue (default: 0.75)")
+    deploy_group.add_argument("--max-drawdown-threshold", type=float, default=-0.2, 
+                           help="Drawdown máximo permitido para despliegue (default: -0.2)")
+    deploy_group.add_argument("--min-win-rate", type=float, default=0.5, 
+                           help="Win rate mínimo para despliegue (default: 0.5)")
+    deploy_group.add_argument("--deployment-machine-type", type=str, default="n1-standard-2", 
+                           help="Tipo de máquina para despliegue (default: n1-standard-2)")
+    deploy_group.add_argument("--deployment-use-gpu", action="store_true", 
+                           help="Utilizar GPU para el despliegue (IMPORTANTE: activar solo si se necesita)")
+    deploy_group.add_argument("--deployment-gpu-type", type=str, default="NVIDIA_TESLA_T4",
+                           choices=["NVIDIA_TESLA_T4", "NVIDIA_TESLA_V100", "NVIDIA_TESLA_P100", "NVIDIA_TESLA_P4", "NVIDIA_TESLA_K80"],
+                           help="Tipo de GPU a utilizar para despliegue (default: NVIDIA_TESLA_T4)")
+    deploy_group.add_argument("--deployment-gpu-count", type=int, default=1, choices=range(1, 9),
+                           help="Número de GPUs a utilizar para despliegue, 1-8 (default: 1)")
+    deploy_group.add_argument("--deployment-traffic", type=int, default=0, 
+                           help="Porcentaje de tráfico a dirigir al nuevo modelo desplegado, 0-100 (default: 0)")
     
     # Parámetros avanzados
-    parser.add_argument("--serving-container", type=str, 
-                       default="us-docker.pkg.dev/vertex-ai/prediction/sklearn-cpu.1-0:latest",
-                       help="Imagen contenedora para servir el modelo")
+    advanced_group = parser.add_argument_group('Configuración avanzada')
+    advanced_group.add_argument("--serving-container", type=str, 
+                             default="us-docker.pkg.dev/vertex-ai/prediction/sklearn-cpu.1-0:latest",
+                             help="Imagen contenedora para servir el modelo (default: sklearn-cpu.1-0)")
     
     args = parser.parse_args()
+    
+    # Advertencia sobre GPU
+    if args.use_gpu:
+        print(f"\n⚠️  ATENCIÓN: Has activado el uso de GPU ({args.gpu_type} x{args.gpu_count}) para el entrenamiento.")
+        print("   Esto puede aumentar significativamente los costos. Asegúrate de que sea necesario.\n")
+    
+    if args.deploy_model and args.deployment_use_gpu:
+        print(f"\n⚠️  ATENCIÓN: Has activado el uso de GPU ({args.deployment_gpu_type} x{args.deployment_gpu_count}) para el despliegue.")
+        print("   Esto puede aumentar significativamente los costos mensuales. Asegúrate de que sea necesario.\n")
     
     # Ruta para el archivo del pipeline compilado
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -670,6 +701,9 @@ def main():
             "project_id": PROJECT_ID,
             "region": REGION,
             "raw_data_bucket": args.raw_data_bucket,
+            "processed_data_bucket": PROCESSED_DATA_BUCKET,  # Usar valor de config.py
+            "model_staging_bucket": MODELS_STAGING_BUCKET,   # Usar valor de config.py
+            "evaluation_bucket": EVALUATION_RESULTS_BUCKET,  # Usar valor de config.py
             "symbol": args.symbol,
             "timeframe": args.timeframe,
             "lookback_window": args.lookback_window,
@@ -691,7 +725,7 @@ def main():
         }
         
         # Ejecutar el pipeline
-        job_name = f"btcbot-training-{args.symbol}-{args.timeframe}-{timestamp}"
+        job_name = f"{TRAINING_JOB_NAME_PREFIX}-{args.symbol}-{args.timeframe}-{timestamp}"
         job = aiplatform.PipelineJob(
             display_name=job_name,
             template_path=pipeline_path,
@@ -704,16 +738,29 @@ def main():
         print(f"Ver en la consola: https://console.cloud.google.com/vertex-ai/pipelines/runs/{job.name}?project={PROJECT_ID}")
         
         # Mostrar resumen de configuración
-        print("\nResumen de configuración del pipeline:")
+        print("\n📊 Resumen de configuración del pipeline:")
         print(f"- Símbolo: {args.symbol}")
         print(f"- Timeframe: {args.timeframe}")
         print(f"- Lookback window: {args.lookback_window}")
-        print(f"- Pasos de entrenamiento: {args.total_timesteps}")
-        print(f"- GPU para entrenamiento: {'Sí - ' + args.gpu_type + ' x' + str(args.gpu_count) if args.use_gpu else 'No'}")
+        print(f"- Pasos de entrenamiento: {args.total_timesteps:,}")
+        print(f"- Hardware de entrenamiento: {'🖥️ GPU ' + args.gpu_type + ' x' + str(args.gpu_count) if args.use_gpu else '💻 CPU'}")
         print(f"- Episodios de evaluación: {args.num_eval_episodes}")
-        print(f"- Despliegue automático: {'Sí' if args.deploy_model else 'No'}")
+        print(f"- Despliegue automático: {'✅ Sí' if args.deploy_model else '❌ No'}")
         if args.deploy_model:
             print(f"  - Criterios mínimos: Sharpe>{args.min_sharpe_ratio}, Sortino>{args.min_sortino_ratio}, DrawDown>{args.max_drawdown_threshold}, WinRate>{args.min_win_rate}")
             print(f"  - Hardware para despliegue: {args.deployment_machine_type} " + 
-                 (f"con {args.deployment_gpu_type} x{args.deployment_gpu_count}" if args.deployment_use_gpu else "sin GPU"))
+                 (f"con GPU {args.deployment_gpu_type} x{args.deployment_gpu_count}" if args.deployment_use_gpu else "sin GPU"))
             print(f"  - Tráfico asignado: {args.deployment_traffic}%")
+if __name__ == "__main__":
+    print("""
+╔════════════════════════════════════════════════════════════════════════════╗
+║                 BTCBOT - PIPELINE DE ENTRENAMIENTO EN VERTEX AI            ║
+╠════════════════════════════════════════════════════════════════════════════╣
+║ NOTA IMPORTANTE:                                                           ║
+║ - Este script integra las funcionalidades de los scripts 06 y 08           ║
+║ - Utiliza valores predeterminados de common/config.py cuando es posible    ║
+║ - El uso de GPU es opcional pero requiere activación explícita             ║
+║ - Para ver todas las opciones disponibles, use --help                      ║
+╚════════════════════════════════════════════════════════════════════════════╝
+""")
+    main()
