@@ -57,11 +57,11 @@ RUN wget http://prdownloads.sourceforge.net/ta-lib/ta-lib-0.4.0-src.tar.gz && \
 # ---- FIN: Instalación de TA-Lib C library ----
 
 # (La instalación de requirements.txt la maneja tu script de gcp/04_build_docker_image.py)
-# El paso anterior de "RUN python3 -m pip install --no-cache-dir --upgrade setuptools wheel"
+RUN python3 -m pip install --no-cache-dir --upgrade setuptools wheel
 # ya ha preparado setuptools y wheel, que son importantes para construir paquetes.
 
 # Establece PYTHONPATH para que los módulos en src sean importables
 ENV PYTHONPATH="/app:${PYTHONPATH}"
 
 # Comando por defecto (ajusta según el punto de entrada de tu aplicación de entrenamiento)
-# CMD ["python3", "scripts/train_rl_agent.py"]
+CMD ["python3", "scripts/train_rl_agent.py"]
