@@ -17,6 +17,10 @@ def get_env_variable(var_name: str, default_value: str = None, required: bool = 
     value = os.getenv(var_name)
     if value is None:
         if required:
+            # Para desarrollo local, permitir usar el valor por defecto incluso para variables 'requeridas'
+            if default_value is not None:
+                logger.warning(f"La variable de entorno requerida '{var_name}' no está configurada. Usando valor por defecto para desarrollo local: {default_value}")
+                return default_value
             logger.error(f"La variable de entorno requerida '{var_name}' no está configurada.")
             raise ValueError(f"La variable de entorno requerida '{var_name}' no está configurada.")
         logger.warning(f"La variable de entorno '{var_name}' no está configurada. Usando valor por defecto: {default_value}")
@@ -43,18 +47,19 @@ SERVICE_ACCOUNT_EMAIL = f"{SERVICE_ACCOUNT_NAME}@{PROJECT_ID}.iam.gserviceaccoun
 ARTIFACT_REPO = get_env_variable("ARTIFACT_REPO", default_value="btcbot-docker-repo")
 
 # --- Nombres para Cloud Run/Functions ---
-DATA_ACQUISITION_SERVICE_NAME = get_env_variable("DATA_ACQUISITION_SERVICE_NAME", default_value="btcbot-data-acquisition")
+# DATA_ACQUISITION_SERVICE_NAME variable has been removed as it's now integrated into the Vertex AI Pipeline
 
 # --- Nombres para Secretos en Secret Manager ---
 BINANCE_API_KEY_SECRET_NAME = get_env_variable("BINANCE_API_KEY_SECRET_NAME", default_value="binance-api-key")
 BINANCE_API_SECRET_SECRET_NAME = get_env_variable("BINANCE_API_SECRET_SECRET_NAME", default_value="binance-api-secret")
 
 # --- Nombres para Imágenes Docker ---
-TRAINING_IMAGE_BASE_NAME = get_env_variable("TRAINING_IMAGE_BASE_NAME", default_value="btcbot-training")
-PREPROCESSING_IMAGE_BASE_NAME = get_env_variable("PREPROCESSING_IMAGE_BASE_NAME", default_value="btcbot-preprocessing")
+PIPELINE_IMAGE_BASE_NAME = get_env_variable("PIPELINE_IMAGE_BASE_NAME", default_value="btcbot-pipeline")
+PIPELINE_IMAGE_NAME = f"{REGION}-docker.pkg.dev/{PROJECT_ID}/{ARTIFACT_REPO}/{PIPELINE_IMAGE_BASE_NAME}"
 
-TRAINING_IMAGE_NAME = f"{REGION}-docker.pkg.dev/{PROJECT_ID}/{ARTIFACT_REPO}/{TRAINING_IMAGE_BASE_NAME}"
-PREPROCESSING_IMAGE_NAME = f"{REGION}-docker.pkg.dev/{PROJECT_ID}/{ARTIFACT_REPO}/{PREPROCESSING_IMAGE_BASE_NAME}"
+# Mantener compatibilidad con scripts existentes
+TRAINING_IMAGE_NAME = PIPELINE_IMAGE_NAME
+PREPROCESSING_IMAGE_NAME = PIPELINE_IMAGE_NAME
 
 # --- Nombres para Trabajos y Pipelines en Vertex AI ---
 TRAINING_JOB_NAME_PREFIX = get_env_variable("TRAINING_JOB_NAME_PREFIX", default_value="btcbot-training")

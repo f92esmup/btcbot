@@ -46,11 +46,15 @@ class ConfigManager:
             env_var: Nombre de la variable de entorno que debe prevalecer sobre el YAML
             required: Si es True y no se encuentra el valor, genera error
         """
-        # Si se proporciona una variable de entorno, intentar usarla primero
-        if env_var:
-            env_value = self.get_env_variable(env_var)
-            if env_value is not None:
-                return env_value
+        # Si no se proporcionó variable de entorno, generamos un nombre estándar basado en key_path
+        if env_var is None:
+            # Convertir 'data_paths.raw' a 'DATA_PATHS_RAW'
+            env_var = key_path.replace('.', '_').upper()
+            
+        # Intentar usar la variable de entorno primero
+        env_value = self.get_env_variable(env_var)
+        if env_value is not None:
+            return self._convert_value_type(env_value, default)
         
         # Si no hay variable de entorno o está vacía, intentar obtener del YAML
         try:
@@ -104,6 +108,39 @@ class ConfigManager:
         except (FileNotFoundError, yaml.YAMLError):
             logger.warning(f"No se pudo cargar agent_config.yaml. Usando default para {param_name}: {default}")
             return default
+
+    def _convert_value_type(self, value, default=None):
+        """
+        Convierte un valor (generalmente de variables de entorno) al tipo adecuado
+        basado en el tipo del valor por defecto o heurísticas comunes.
+        """
+        if default is not None:
+            # Intentar convertir al mismo tipo que default
+            if isinstance(default, bool):
+                return value.lower() in ['true', '1', 'yes', 'si', 'y', 's']
+            elif isinstance(default, int):
+                return int(value)
+            elif isinstance(default, float):
+                return float(value)
+            else:
+                return value
+        
+        # Si no hay default, usar heurísticas
+        if value.lower() in ['true', 'false', 'yes', 'no', 'si', 'no', 'y', 'n', 's', 'n', '1', '0']:
+            return value.lower() in ['true', '1', 'yes', 'si', 'y', 's']
+        
+        try:
+            # Ver si es un entero
+            int_val = int(value)
+            return int_val
+        except ValueError:
+            try:
+                # Ver si es un float
+                float_val = float(value)
+                return float_val
+            except ValueError:
+                # Si no es número, devolver como string
+                return value
 
 
 if __name__ == '__main__': # Para pruebas rápidas

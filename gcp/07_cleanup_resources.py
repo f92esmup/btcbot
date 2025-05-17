@@ -161,42 +161,14 @@ def delete_training_jobs(project_id: str, region: str, force: bool = False) -> N
 
 
 def delete_cloud_run_services(project_id: str, region: str, force: bool = False) -> None:
-    """Elimina los servicios de Cloud Run."""
-    if not force and not confirm_deletion("Servicios de Cloud Run"):
-        logger.info("Operación cancelada por el usuario.")
-        return
-
-    logger.info("Eliminando servicios de Cloud Run...")
+    """
+    Función para eliminar servicios Cloud Run.
     
-    # Crear cliente de Cloud Run
-    service = discovery.build('run', 'v1')
-    
-    # Nombre del servicio esperado según la configuración
-    service_name = config.DATA_ACQUISITION_SERVICE_NAME
-    
-    try:
-        # Obtener el nombre completo del recurso
-        name = f'projects/{project_id}/locations/{region}/services/{service_name}'
-        
-        # Intentar eliminar el servicio
-        logger.info(f"Eliminando servicio de Cloud Run: {service_name}")
-        response = service.projects().locations().services().delete(name=name).execute()
-        
-        # La operación es asíncrona, esperar a que termine
-        operation_name = response.get('name')
-        if operation_name:
-            while True:
-                operation = service.projects().locations().operations().get(
-                    name=operation_name).execute()
-                if operation.get('done'):
-                    break
-                time.sleep(1)
-            
-            logger.info(f"Servicio {service_name} eliminado correctamente.")
-        else:
-            logger.warning(f"No se pudo obtener el estado de la operación para {service_name}.")
-    except Exception as e:
-        logger.error(f"Error al eliminar el servicio {service_name}: {e}")
+    Nota: Esta función se mantiene como stub ya que el servicio de adquisición de datos
+    ha sido integrado en el pipeline de Vertex AI y ya no se despliega en Cloud Run.
+    """
+    logger.info("No hay servicios de Cloud Run que eliminar (el servicio de adquisición de datos ahora es parte del pipeline).")
+    return
 
 
 def delete_storage_buckets(project_id: str, force: bool = False) -> None:

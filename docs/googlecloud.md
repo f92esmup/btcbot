@@ -260,8 +260,9 @@ Se ha aplicado la siguiente renumeración para mantener coherencia:
   * `gcp/02_setup_storage.py` (sin cambios)
   * `gcp/03_setup_iam.py` (sin cambios)
   * `gcp/04_build_docker_image.py` (sin cambios)
-  * `gcp/05_deploy_data_acquisition.py` (sin cambios)
+  * **`gcp/05_deploy_data_acquisition.py` ha sido eliminado** - La adquisición de datos está ahora integrada en el pipeline.
   * **Anterior `gcp/07_create_training_pipeline.py` se convierte en `gcp/06_create_training_pipeline.py`**
+      * Este script ahora incluye la funcionalidad de adquisición de datos como un componente inicial del pipeline.
   * **Anterior `gcp/09_deploy_model.py` se convierte en `gcp/07_deploy_model.py`**
       * Este script sigue siendo útil si quieres desplegar un modelo específico manualmente, incluso si el pipeline tiene despliegue condicional.
   * **Anterior `gcp/10_cleanup_resources.py` se convierte en `gcp/08_cleanup_resources.py`**
@@ -287,7 +288,6 @@ La guía de ejecución en `docs/googlecloud.md` y `gcp/README.md` se modificarí
       * `PIPELINE_ROOT_BUCKET`
       * `ARTIFACT_REPO`
       * `SERVICE_ACCOUNT_NAME`
-      * `DATA_ACQUISITION_SERVICE_NAME`
       * `BINANCE_API_KEY_SECRET_NAME`
       * `BINANCE_API_SECRET_SECRET_NAME`
       * (Opcional) Otras variables para los nombres base de imágenes Docker, etc., si no quieres usar los defaults de `common/config.py`.
@@ -299,6 +299,7 @@ La guía de ejecución en `docs/googlecloud.md` y `gcp/README.md` se modificarí
 **Fase 2: Empaquetado y Despliegue de Servicios Base**
 
 1.  `python gcp/04_build_docker_image.py --tag latest` (Usa variables de entorno para nombres de imagen, repo, etc.).
+2.  **El paso `python gcp/05_deploy_data_acquisition.py` ha sido eliminado, ya que esta funcionalidad ahora está integrada en el pipeline de Vertex AI.**
       * Puedes añadir `--gpu` si es necesario para la imagen de entrenamiento.
 2.  `python gcp/05_deploy_data_acquisition.py` (Usa variables de entorno para el nombre del servicio, bucket, etc. y las pasa al entorno de Cloud Run).
 

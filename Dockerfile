@@ -48,7 +48,18 @@ RUN pip install --no-cache-dir --upgrade pip && \
      echo "INFO: Instalando TA-Lib (Python wrapper)..." && \
      pip install --no-cache-dir --no-binary :all: TA-Lib==0.6.3 && \
      echo "INFO: Reintentando instalar requirements.txt..." && \
-     pip install --no-cache-dir -r requirements.txt))
+     pip install --no-cache-dir -r requirements.txt)) && \
+    echo "INFO: Instalando dependencias adicionales para pipeline unificado..." && \
+    pip install --no-cache-dir \
+        python-binance==1.0.19 \
+        google-cloud-storage==2.14.0 \
+        google-cloud-secretmanager==2.19.0 \
+        pandas==2.0.3 \
+        pandas-ta==0.3.14b0 \
+        stable-baselines3==2.2.1 \
+        gymnasium==0.29.1 \
+        matplotlib==3.7.4 \
+        kfp==2.7.0
 
 # Variables de entorno predeterminadas
 ENV PYTHONPATH=/app

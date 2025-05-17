@@ -12,8 +12,7 @@ Este directorio contiene los scripts necesarios para implementar el proyecto BTC
 - `02_setup_storage.py` - Crea buckets en Cloud Storage con versionado
 - `03_setup_iam.py` - Configura IAM y cuentas de servicio
 - `04_build_docker_image.py` - Construye y sube imágenes Docker a Artifact Registry
-- `05_deploy_data_acquisition.py` - Despliega el servicio de adquisición de datos
-- `06_create_training_pipeline.py` - Crea un pipeline de entrenamiento en Vertex AI
+- `06_create_training_pipeline.py` - Crea un pipeline de entrenamiento en Vertex AI (incluye adquisición de datos)
 - `07_deploy_model.py` - Despliega un modelo a un endpoint de Vertex AI
 - `08_cleanup_resources.py` - Limpia recursos de GCP (cuando sea necesario)
 
@@ -61,17 +60,9 @@ Construye las imágenes Docker necesarias:
 python gcp/04_build_docker_image.py --tag latest --gpu
 ```
 
-### 3. Despliegue del Servicio de Adquisición de Datos
+### 3. Entrenamiento y Evaluación del Modelo con Pipeline Unificado
 
-Despliega el servicio que descargará datos automáticamente:
-
-```bash
-python gcp/05_deploy_data_acquisition.py
-```
-
-### 4. Entrenamiento y Evaluación del Modelo con Pipeline Unificado
-
-Utilizamos un pipeline de Vertex AI para orquestar todo el proceso:
+Utilizamos un pipeline de Vertex AI para orquestar todo el proceso (incluyendo la adquisición de datos):
 
 ```bash
 # Variables de entorno para configurar el entrenamiento (opcional)
@@ -161,17 +152,17 @@ También puedes eliminar recursos específicos según sea necesario:
 
 ```bash
 # Eliminar solo los endpoints de modelo
-python gcp/10_cleanup_resources.py --resources endpoints
+python gcp/08_cleanup_resources.py --resources endpoints
 
 # Eliminar solo los buckets de almacenamiento
-python gcp/10_cleanup_resources.py --resources storage
+python gcp/08_cleanup_resources.py --resources storage
 
 # Eliminar solo las imágenes de Docker
-python gcp/10_cleanup_resources.py --resources docker_images
+python gcp/08_cleanup_resources.py --resources docker_images
 ```
 
 Para más información sobre las opciones disponibles:
 
 ```bash
-python gcp/10_cleanup_resources.py --help
+python gcp/08_cleanup_resources.py --help
 ```
