@@ -4,6 +4,7 @@ Script para descargar datos históricos de Binance Futures directamente a GCS.
 Optimizado para ejecutarse como un servicio Cloud Run en GCP.
 """
 import argparse
+import json
 import logging
 import os
 from datetime import datetime, timedelta
@@ -28,6 +29,8 @@ def main():
                         help="Intervalo de velas (default: desde variable DEFAULT_INTERVAL o 1h)")
     parser.add_argument("--start-date", type=str, default=os.getenv("DEFAULT_HISTORICAL_START_DATE", "2020-01-01"),
                         help="Fecha de inicio (YYYY-MM-DD) (default: desde variable DEFAULT_HISTORICAL_START_DATE o 2020-01-01)")
+    parser.add_argument("--end-date", type=str, default=None,
+                        help="Fecha de fin opcional (YYYY-MM-DD) (default: fecha actual)")
     
     # Parámetros de GCP
     parser.add_argument("--project-id", type=str, required=False,
@@ -42,9 +45,9 @@ def main():
     parser.add_argument("--raw-data-bucket", type=str, required=False,
                         default=os.getenv("RAW_DATA_BUCKET"),
                         help="Nombre del bucket para datos crudos (default: desde variable RAW_DATA_BUCKET)")
-    parser.add_argument("--output-gcs-prefix", type=str, required=False,
+    parser.add_argument("--output-gcs-path", type=str, required=False,
                         default=None,
-                        help="Prefijo opcional para la ruta de salida en GCS (default: None)")
+                        help="Ruta GCS completa para el archivo de salida (default: se genera automáticamente)")
     
     args = parser.parse_args()
     
@@ -65,17 +68,32 @@ def main():
             raw_data_bucket=args.raw_data_bucket
         )
         
+        # Extraer el prefijo de la ruta de salida si se proporciona
+        output_gcs_prefix = None
+        if args.output_gcs_path:
+            if args.output_gcs_path.endswith('/'):
+                output_gcs_prefix = args.output_gcs_path[:-1]
+            else:
+                output_gcs_prefix = os.path.dirname(args.output_gcs_path)
+        
         # Descargar los datos
         output_gcs_uri = downloader.fetch_historical_data(
             symbol=args.symbol,
             interval=args.interval,
             start_date_str=args.start_date,
-            output_gcs_prefix=args.output_gcs_prefix
+            end_date_str=args.end_date,
+            output_gcs_prefix=output_gcs_prefix
         )
         
         if output_gcs_uri:
             logger.info(f"Descarga completada exitosamente. Datos guardados en: {output_gcs_uri}")
-            # En un entorno de Cloud Run, podríamos devolver esto como respuesta
+            
+            # Para KFP, escribir la salida a un archivo de metadata
+            if 'PIPELINE_OUTPUT_FILE' in os.environ:
+                with open(os.environ['PIPELINE_OUTPUT_FILE'], 'w') as f:
+                    json.dump({"output_gcs_uri": output_gcs_uri}, f)
+            
+            # En un entorno de Cloud Run o KFP, podríamos devolver esto como respuesta
             print(f"SUCCESS:{output_gcs_uri}")
             return 0
         else:

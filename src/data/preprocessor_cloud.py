@@ -254,13 +254,16 @@ class DataPreprocessorCloud:
         
         return X_sequences, ts_sequences
     
-    def process_data(self, raw_data_gcs_path: str, output_gcs_prefix: str = None) -> str:
+    def process_data(self, raw_data_gcs_path: str, output_gcs_prefix: str = None,
+                 output_filename_base: str = None, extra_metadata: dict = None) -> str:
         """
         Procesa datos crudos y genera secuencias para entrenamiento.
         
         Args:
             raw_data_gcs_path: Ruta completa al archivo de datos crudos en GCS
             output_gcs_prefix: Prefijo opcional para la ruta de salida en GCS
+            output_filename_base: Nombre base para el archivo de salida (si None, se infiere del nombre original)
+            extra_metadata: Diccionario con metadatos adicionales para incluir en el archivo NPZ
             
         Returns:
             URI de GCS donde se guardaron los datos procesados
@@ -272,7 +275,9 @@ class DataPreprocessorCloud:
         # Extraer información básica del nombre del archivo para la salida
         filename = os.path.basename(raw_data_gcs_path)
         symbol = filename.split('_')[0]  # Asumimos formato BTCUSDT_FUTURES_...
-        output_filename_base = f"{symbol}_processed"
+        
+        if output_filename_base is None:
+            output_filename_base = f"{symbol}_processed"
         
         try:
             # 1. Cargar y preparar los datos base
@@ -302,6 +307,17 @@ class DataPreprocessorCloud:
                 'feature_names': np.array(self.final_feature_columns)
             }
             
+            # Agregar metadatos adicionales si se proporcionan
+            if extra_metadata is not None:
+                for key, value in extra_metadata.items():
+                    # Convertir valores a arrays de NumPy si es necesario
+                    if isinstance(value, (list, tuple)):
+                        data_dict[key] = np.array(value)
+                    elif isinstance(value, (int, float, str, bool)):
+                        data_dict[key] = np.array([value])
+                    else:
+                        data_dict[key] = value
+                        
             # Guardar en GCS
             self._save_to_gcs(data_dict, output_npz_path, is_npz=True)
             logger.info(f"Secuencias guardadas en: {output_npz_path}")

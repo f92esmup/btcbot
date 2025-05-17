@@ -98,7 +98,7 @@ class BinanceFuturesDownloaderCloud:
         folder_path = f"data/{start_dt.strftime('%Y/%m')}"
         return f"{folder_path}/{file_name}"
 
-    def fetch_historical_data(self, symbol: str, interval: str, start_date_str: str, output_gcs_prefix: str = None):
+    def fetch_historical_data(self, symbol: str, interval: str, start_date_str: str, output_gcs_prefix: str = None, end_date_str: str = None):
         """
         Descarga datos históricos de futuros y los guarda en GCS.
         
@@ -107,6 +107,7 @@ class BinanceFuturesDownloaderCloud:
             interval: Intervalo de tiempo (ej. '1h')
             start_date_str: Fecha de inicio en formato 'YYYY-MM-DD'
             output_gcs_prefix: Prefijo opcional para la ruta en GCS
+            end_date_str: Fecha de fin en formato 'YYYY-MM-DD' (opcional, default: fecha actual)
         
         Returns:
             URI de GCS donde se guardaron los datos o None si hay error
@@ -119,7 +120,15 @@ class BinanceFuturesDownloaderCloud:
             logger.error(f"Formato de fecha de inicio incorrecto: {start_date_str}. Usar YYYY-MM-DD")
             return None
 
-        current_time_utc = datetime.now(timezone.utc)
+        if end_date_str:
+            try:
+                end_dt = datetime.strptime(end_date_str, '%Y-%m-%d').replace(tzinfo=timezone.utc)
+                current_time_utc = end_dt
+            except ValueError:
+                logger.error(f"Formato de fecha de fin incorrecto: {end_date_str}. Usar YYYY-MM-DD")
+                return None
+        else:
+            current_time_utc = datetime.now(timezone.utc)
         
         # Convertir a milisegundos para la API de Binance
         start_timestamp_ms = int(start_dt.timestamp() * 1000)

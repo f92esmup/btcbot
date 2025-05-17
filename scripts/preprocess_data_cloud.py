@@ -27,12 +27,18 @@ def main():
     parser.add_argument("--output-gcs-path", type=str, required=False,
                         default=None,
                         help="Ruta GCS completa para el archivo de salida (default: se genera automáticamente)")
+    parser.add_argument("--output-filename", type=str, required=False,
+                        default=None,
+                        help="Nombre base para el archivo de salida (default: se infiere del nombre original)")
     parser.add_argument("--sequence-length", type=int, required=False,
                         default=int(os.getenv("SEQUENCE_LENGTH_L", "96")),
                         help="Longitud de la secuencia para el Transformer (default: desde variable SEQUENCE_LENGTH_L o 96)")
     parser.add_argument("--norm-window-multiplier", type=int, required=False,
                         default=int(os.getenv("NORM_WINDOW_MULTIPLIER", "2")),
                         help="Multiplicador para la ventana de normalización (default: desde NORM_WINDOW_MULTIPLIER o 2)")
+    parser.add_argument("--use-float32", type=bool, required=False,
+                        default=True if os.getenv("USE_FLOAT32", "true").lower() in ['true', '1', 'yes'] else False,
+                        help="Usar float32 en lugar de float64 (default: true)")
     
     # Parámetros de GCP
     parser.add_argument("--project-id", type=str, required=False,
@@ -55,6 +61,11 @@ def main():
     parser.add_argument("--feature-columns", type=str, required=False,
                         default=os.getenv("FEATURE_COLUMNS", None),
                         help="Lista JSON de columnas de características finales (default: configuración interna)")
+    
+    # Metadatos del KFP
+    parser.add_argument("--extra-metadata", type=str, required=False,
+                        default=None,
+                        help="JSON string con metadatos adicionales para incluir en el archivo NPZ")
     
     args = parser.parse_args()
     
@@ -88,6 +99,14 @@ def main():
         except json.JSONDecodeError:
             logger.warning("Error decodificando feature-columns JSON. Usando configuración por defecto.")
     
+    # Metadatos adicionales
+    extra_metadata = None
+    if args.extra_metadata:
+        try:
+            extra_metadata = json.loads(args.extra_metadata)
+        except json.JSONDecodeError:
+            logger.warning("Error decodificando extra-metadata JSON. No se incluirán metadatos adicionales.")
+    
     try:
         logger.info(f"Iniciando preprocesamiento de datos desde {args.input_file_gcs}")
         logger.info(f"Configuración: L={args.sequence_length}, norm_mult={args.norm_window_multiplier}")
@@ -102,25 +121,24 @@ def main():
             indicators_config_dict=indicators_config_dict,
             ohlcv_config_dict=ohlcv_config_dict,
             final_market_feature_columns=final_feature_columns,
-            use_float32=True
+            use_float32=args.use_float32
         )
         
         # Procesar los datos
         output_npz_path = preprocessor.process_data(
             raw_data_gcs_path=args.input_file_gcs,
-            output_gcs_prefix=None if not args.output_gcs_path else os.path.dirname(args.output_gcs_path)
+            output_gcs_prefix=None if not args.output_gcs_path else os.path.dirname(args.output_gcs_path),
+            output_filename_base=args.output_filename,
+            extra_metadata=extra_metadata
         )
         
         if output_npz_path:
             logger.info(f"Preprocesamiento completado exitosamente. Secuencias guardadas en: {output_npz_path}")
             
             # Para integrarse con Vertex AI Pipelines
-            output_file = args.output_gcs_path if args.output_gcs_path else output_npz_path
-            # Si el output_file ya viene predefinido por el pipeline, guardar un archivo de output.txt
-            if args.output_gcs_path and args.output_gcs_path != output_npz_path:
-                logger.info(f"Actualizando ruta de salida del Pipeline: {output_file}")
-                with open('/tmp/output.txt', 'w') as f:
-                    f.write(output_npz_path)
+            if 'PIPELINE_OUTPUT_FILE' in os.environ:
+                with open(os.environ['PIPELINE_OUTPUT_FILE'], 'w') as f:
+                    json.dump({"output_npz_path": output_npz_path}, f)
             
             print(f"SUCCESS:{output_npz_path}")
             return 0

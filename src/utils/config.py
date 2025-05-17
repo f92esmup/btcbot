@@ -1,151 +1,144 @@
-import yaml
 import os
 import logging
-from dotenv import load_dotenv
+import yaml
+import json
 
 # Configurar logger
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-class ConfigManager:
-    _instance = None
-
-    def __new__(cls, config_path="src/config.yaml", env_path=".env"):
-        if cls._instance is None:
-            cls._instance = super(ConfigManager, cls).__new__(cls)
-            # Cargar variables de entorno desde .env si existe
-            load_dotenv(dotenv_path=env_path)
-            try:
-                with open(config_path, 'r') as f:
-                    cls._instance.config = yaml.safe_load(f)
-            except FileNotFoundError:
-                logger.error(f"Archivo de configuración {config_path} no encontrado.")
-                raise FileNotFoundError(f"Archivo de configuración {config_path} no encontrado.")
-            except yaml.YAMLError as e:
-                logger.error(f"Error al parsear el archivo YAML {config_path}: {e}")
-                raise yaml.YAMLError(f"Error al parsear el archivo YAML {config_path}: {e}")
-        return cls._instance
-
-    def get_env_variable(self, var_name: str, default=None):
+class ConfigManagerCloud:
+    """
+    Gestor de configuración optimizado para entornos de Google Cloud.
+    Prioriza variables de entorno sobre cualquier otra fuente de configuración.
+    """
+    
+    def __init__(self):
         """
-        Obtiene una variable de entorno.
-        Si no se encuentra, devuelve el valor por defecto.
+        Inicializa el gestor de configuración para Cloud.
+        No carga configuraciones de archivos locales por defecto.
         """
-        value = os.getenv(var_name)
-        if value is None and default is None:
-            logger.warning(f"Variable de entorno '{var_name}' no encontrada y no se proporcionó valor por defecto.")
-        return os.getenv(var_name, default)
-
-    def get_config_value(self, key_path: str, default=None, env_var=None, required=False):
+        # Opcionalmente, se podría cargar una estructura base de YAML para valores no críticos
+        self.config_yaml_base = {}
+        
+    def get_param(self, env_var_name: str, default=None, required: bool = True, var_type=str):
         """
-        Obtiene un valor de configuración, priorizando variables de entorno sobre el archivo YAML.
+        Obtiene un parámetro principalmente de una variable de entorno.
         
         Args:
-            key_path: Ruta de clave en el YAML (ej: 'data_paths.raw')
+            env_var_name: Nombre de la variable de entorno
             default: Valor por defecto si no se encuentra
-            env_var: Nombre de la variable de entorno que debe prevalecer sobre el YAML
-            required: Si es True y no se encuentra el valor, genera error
-        """
-        # Si no se proporcionó variable de entorno, generamos un nombre estándar basado en key_path
-        if env_var is None:
-            # Convertir 'data_paths.raw' a 'DATA_PATHS_RAW'
-            env_var = key_path.replace('.', '_').upper()
-            
-        # Intentar usar la variable de entorno primero
-        env_value = self.get_env_variable(env_var)
-        if env_value is not None:
-            return self._convert_value_type(env_value, default)
+            required: Si es True y no se encuentra, genera error
+            var_type: Tipo al que convertir el valor (str, int, float, bool, list, dict)
         
-        # Si no hay variable de entorno o está vacía, intentar obtener del YAML
-        try:
-            keys = key_path.split('.')
-            value = self.config
-            for key in keys:
-                value = value[key]
-            return value
-        except KeyError:
+        Returns:
+            El valor convertido al tipo especificado
+        """
+        value_str = os.getenv(env_var_name)
+        if value_str is None:
             if required:
-                logger.error(f"Clave de configuración requerida '{key_path}' no encontrada.")
-                raise KeyError(f"Clave de configuración requerida '{key_path}' no encontrada.")
-            logger.warning(f"Clave de configuración '{key_path}' no encontrada. Usando default: {default}")
-            return default
-        except TypeError: # En caso de que self.config no se haya cargado
-             logger.error(f"Configuración no cargada. Imposible obtener '{key_path}'.")
-             raise TypeError(f"Configuración no cargada. Imposible obtener '{key_path}'.")
-
-    def get_agent_config(self, param_name, env_var=None, default=None):
-        """
-        Método específico para obtener configuración del agente, priorizando variables de entorno.
-        Busca primero en variables de entorno, luego en agent_config.yaml.
-        
-        Args:
-            param_name: Nombre del parámetro en agent_config.yaml
-            env_var: Nombre de la variable de entorno a usar (si es diferente a AGENT_{param_name})
-            default: Valor por defecto si no se encuentra
-        """
-        # Si no se especificó variable de entorno, usar convención AGENT_{param_name}
-        if env_var is None:
-            env_var = f"AGENT_{param_name.upper()}"
-        
-        # Intentar obtener de variables de entorno
-        env_value = self.get_env_variable(env_var)
-        if env_value is not None:
-            # Convertir al tipo adecuado (simple)
-            if isinstance(default, int) or (default is None and param_name in ['buffer_size', 'batch_size', 'n_steps']):
-                return int(env_value)
-            elif isinstance(default, float) or (default is None and param_name in ['learning_rate', 'gamma']):
-                return float(env_value)
-            elif isinstance(default, bool) or (default is None and param_name in ['normalize_advantage']):
-                return env_value.lower() in ['true', '1', 'yes']
-            else:
-                return env_value
-        
-        # Si no hay en variables de entorno, intentar cargar de agent_config.yaml
-        try:
-            with open("src/agent/agent_config.yaml", 'r') as f:
-                agent_config = yaml.safe_load(f)
-            return agent_config.get(param_name, default)
-        except (FileNotFoundError, yaml.YAMLError):
-            logger.warning(f"No se pudo cargar agent_config.yaml. Usando default para {param_name}: {default}")
+                error_msg = f"Variable de entorno requerida '{env_var_name}' no configurada."
+                logger.error(error_msg)
+                raise ValueError(error_msg)
+            logger.info(f"Variable de entorno '{env_var_name}' no encontrada. Usando default: {default}")
             return default
 
-    def _convert_value_type(self, value, default=None):
-        """
-        Convierte un valor (generalmente de variables de entorno) al tipo adecuado
-        basado en el tipo del valor por defecto o heurísticas comunes.
-        """
-        if default is not None:
-            # Intentar convertir al mismo tipo que default
-            if isinstance(default, bool):
-                return value.lower() in ['true', '1', 'yes', 'si', 'y', 's']
-            elif isinstance(default, int):
-                return int(value)
-            elif isinstance(default, float):
-                return float(value)
-            else:
-                return value
-        
-        # Si no hay default, usar heurísticas
-        if value.lower() in ['true', 'false', 'yes', 'no', 'si', 'no', 'y', 'n', 's', 'n', '1', '0']:
-            return value.lower() in ['true', '1', 'yes', 'si', 'y', 's']
-        
         try:
-            # Ver si es un entero
-            int_val = int(value)
-            return int_val
-        except ValueError:
-            try:
-                # Ver si es un float
-                float_val = float(value)
-                return float_val
-            except ValueError:
-                # Si no es número, devolver como string
-                return value
+            if var_type == bool:
+                return value_str.lower() in ['true', '1', 'yes', 'y']
+            elif var_type == int:
+                return int(value_str)
+            elif var_type == float:
+                return float(value_str)
+            elif var_type == list or var_type == dict:
+                try:
+                    return json.loads(value_str)
+                except json.JSONDecodeError:
+                    logger.warning(f"Error decodificando JSON para '{env_var_name}'. Tratando como string.")
+                    return value_str
+            return value_str  # Devuelve como string por defecto
+        except ValueError as e:
+            error_msg = f"Error convirtiendo variable de entorno '{env_var_name}' (valor: '{value_str}') a tipo {var_type}: {e}"
+            logger.error(error_msg)
+            if required:
+                raise
+            return default
 
 
-if __name__ == '__main__': # Para pruebas rápidas
-    manager = ConfigManager(config_path='../../src/config.yaml', env_path='../../.env') # Ajusta paths si ejecutas directo
-    print(f"Raw Data Path: {manager.get_config_value('data_paths.raw', env_var='DATA_RAW_PATH')}")
-    print(f"API Key: {manager.get_env_variable('BINANCE_API_KEY_FUTURES')}")
-    print(f"Default Symbol: {manager.get_config_value('data_acquisition_defaults.symbol', env_var='DEFAULT_SYMBOL')}")
-    print(f"Agent Learning Rate: {manager.get_agent_config('learning_rate', default=0.0003)}")
+def get_secret_from_gcp(project_id: str, secret_name: str, version: str = "latest"):
+    """
+    Obtiene un secreto de Google Cloud Secret Manager.
+    
+    Args:
+        project_id: ID del proyecto GCP
+        secret_name: Nombre del secreto
+        version: Versión del secreto, por defecto "latest"
+    
+    Returns:
+        El valor del secreto como string
+    """
+    from google.cloud import secretmanager as sm
+    
+    client = sm.SecretManagerServiceClient()
+    name = f"projects/{project_id}/secrets/{secret_name}/versions/{version}"
+    
+    try:
+        response = client.access_secret_version(name=name)
+        return response.payload.data.decode("UTF-8")
+    except Exception as e:
+        logger.error(f"Error accediendo al secreto '{secret_name}' en GCP: {e}")
+        raise
+
+
+def get_gcs_path(bucket_name: str, path: str = "") -> str:
+    """
+    Construye una ruta completa para Google Cloud Storage.
+    
+    Args:
+        bucket_name: Nombre del bucket
+        path: Ruta relativa dentro del bucket
+        
+    Returns:
+        URI completa para GCS
+    """
+    # Asegurarse de que el bucket no incluya prefijo gs://
+    clean_bucket = bucket_name.replace("gs://", "")
+    
+    # Asegurarse de que el path no comience con / 
+    clean_path = path
+    if clean_path.startswith("/"):
+        clean_path = clean_path[1:]
+        
+    return f"gs://{clean_bucket}/{clean_path}"
+
+
+# Funciones de utilidad para convertir tipos de datos específicos
+def parse_int_list(env_var_name: str, default=None, required: bool = True, delimiter=","):
+    """
+    Convierte una variable de entorno en una lista de enteros.
+    
+    Args:
+        env_var_name: Nombre de la variable de entorno
+        default: Valor por defecto si no se encuentra
+        required: Si es True y no se encuentra, genera error
+        delimiter: Delimitador para separar los elementos de la lista
+        
+    Returns:
+        Lista de enteros
+    """
+    value_str = os.getenv(env_var_name)
+    if value_str is None:
+        if required:
+            error_msg = f"Variable de entorno requerida '{env_var_name}' no configurada."
+            logger.error(error_msg)
+            raise ValueError(error_msg)
+        return default
+    
+    try:
+        return [int(item.strip()) for item in value_str.split(delimiter)]
+    except ValueError as e:
+        error_msg = f"Error convirtiendo '{env_var_name}' a lista de enteros: {e}"
+        logger.error(error_msg)
+        if required:
+            raise
+        return default

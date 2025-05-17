@@ -27,6 +27,9 @@ def main():
                         help="Ruta completa al archivo de datos procesados en GCS")
     parser.add_argument("--output-model-gcs", type=str, required=True,
                         help="Ruta GCS completa donde guardar el modelo entrenado")
+    parser.add_argument("--export-model-gcs", type=str, required=False,
+                        default=None,
+                        help="Ruta GCS donde guardar el modelo exportado para servir (opcional)")
     
     # Parámetros de GCP
     parser.add_argument("--project-id", type=str, required=False,
@@ -49,11 +52,26 @@ def main():
     parser.add_argument("--position-size", type=float, required=False,
                         default=float(os.getenv("POSITION_SIZE_PERCENTAGE", "0.2")),
                         help="Tamaño de posición como % de equity (default: desde POSITION_SIZE_PERCENTAGE o 0.2)")
+    parser.add_argument("--stop-loss", type=float, required=False,
+                        default=None if os.getenv("STOP_LOSS_PERCENTAGE") is None else float(os.getenv("STOP_LOSS_PERCENTAGE")),
+                        help="Porcentaje de stop loss (default: None)")
+    parser.add_argument("--take-profit", type=float, required=False,
+                        default=None if os.getenv("TAKE_PROFIT_PERCENTAGE") is None else float(os.getenv("TAKE_PROFIT_PERCENTAGE")),
+                        help="Porcentaje de take profit (default: None)")
     parser.add_argument("--trading-fees", type=float, required=False,
                         default=float(os.getenv("TRADING_FEES", "0.0004")),
                         help="Comisiones de trading (default: desde TRADING_FEES o 0.0004)")
+    parser.add_argument("--slippage", type=float, required=False,
+                        default=float(os.getenv("SLIPPAGE", "0.0001")),
+                        help="Deslizamiento (default: desde SLIPPAGE o 0.0001)")
+    parser.add_argument("--random-start", type=bool, required=False,
+                        default=True if os.getenv("RANDOM_START", "true").lower() in ['true', '1', 'yes'] else False,
+                        help="Usar inicio aleatorio en entrenamiento (default: true)")
     
     # Parámetros del agente RL
+    parser.add_argument("--algorithm", type=str, required=False,
+                        default=os.getenv("AGENT_ALGORITHM", "SAC"),
+                        help="Algoritmo RL (default: desde AGENT_ALGORITHM o 'SAC')")
     parser.add_argument("--learning-rate", type=float, required=False,
                         default=float(os.getenv("AGENT_LEARNING_RATE", "0.0003")),
                         help="Tasa de aprendizaje (default: desde AGENT_LEARNING_RATE o 0.0003)")
@@ -78,12 +96,18 @@ def main():
     parser.add_argument("--save-freq", type=int, required=False,
                         default=int(os.getenv("AGENT_SAVE_FREQ", "50000")),
                         help="Frecuencia de guardado (default: desde AGENT_SAVE_FREQ o 50000)")
+    parser.add_argument("--n-eval-episodes", type=int, required=False,
+                        default=int(os.getenv("AGENT_N_EVAL_EPISODES", "5")),
+                        help="Número de episodios para evaluación (default: desde AGENT_N_EVAL_EPISODES o 5)")
     parser.add_argument("--device", type=str, required=False,
                         default=os.getenv("AGENT_DEVICE", "auto"),
                         help="Dispositivo para entrenamiento (default: desde AGENT_DEVICE o 'auto')")
     parser.add_argument("--transformer-config", type=str, required=False,
                         default=os.getenv("AGENT_TRANSFORMER_CONFIG", None),
                         help="Configuración JSON del Transformer (default: config interna)")
+    parser.add_argument("--save-replay-buffer", type=bool, required=False,
+                        default=True if os.getenv("SAVE_REPLAY_BUFFER", "false").lower() in ['true', '1', 'yes'] else False,
+                        help="Guardar también el buffer de experiencia (default: false)")
     
     args = parser.parse_args()
     
@@ -106,6 +130,7 @@ def main():
         # Inicializar el administrador del agente
         agent_manager = RLAgentManagerCloud(
             project_id=args.project_id,
+            algorithm=args.algorithm,
             learning_rate=args.learning_rate,
             buffer_size=args.buffer_size,
             learning_starts=args.learning_starts,
@@ -122,9 +147,12 @@ def main():
             initial_equity=args.initial_equity,
             leverage=args.leverage,
             position_size_percentage=args.position_size,
+            stop_loss_percentage=args.stop_loss,
+            take_profit_percentage=args.take_profit,
             trading_fees=args.trading_fees,
+            slippage=args.slippage,
             data_gcs_path=args.input_data_gcs,
-            random_start=True
+            random_start=args.random_start
         )
         
         # Entrenar el agente
@@ -132,26 +160,51 @@ def main():
             total_timesteps=args.total_timesteps,
             eval_freq=args.eval_freq,
             save_freq=args.save_freq,
+            n_eval_episodes=args.n_eval_episodes,
             save_path_gcs=args.output_model_gcs
+        )
+        
+        # Guardar el modelo final
+        model_gcs_path = agent_manager.save_model(
+            args.output_model_gcs,
+            save_replay_buffer=args.save_replay_buffer
         )
         
         # Evaluación final
         eval_metrics = agent_manager.evaluate_agent(n_eval_episodes=10)
+        
+        # Exportar modelo para servir si se solicita
+        serving_model_path = None
+        if args.export_model_gcs:
+            serving_model_path = agent_manager.export_model_for_serving(
+                args.export_model_gcs
+            )
         
         # Combinar estadísticas
         result = {
             "training_duration_seconds": int(time.time() - start_time),
             "training_stats": training_stats,
             "eval_metrics": eval_metrics,
-            "model_gcs_path": args.output_model_gcs
+            "model_gcs_path": model_gcs_path,
+            "serving_model_path": serving_model_path
         }
         
         # Guardar métricas como JSON para el Pipeline
+        metrics_json = json.dumps(eval_metrics)
         with open('/tmp/metrics.json', 'w') as f:
-            json.dump(eval_metrics, f)
+            f.write(metrics_json)
+            
+        # Para integrarse con Vertex AI Pipelines
+        if 'PIPELINE_OUTPUT_FILE' in os.environ:
+            with open(os.environ['PIPELINE_OUTPUT_FILE'], 'w') as f:
+                json.dump({
+                    "model_path": model_gcs_path,
+                    "metrics": eval_metrics,
+                    "serving_model_path": serving_model_path
+                }, f)
         
         logger.info(f"Entrenamiento completado en {result['training_duration_seconds']} segundos")
-        logger.info(f"Modelo guardado en: {args.output_model_gcs}")
+        logger.info(f"Modelo guardado en: {model_gcs_path}")
         logger.info(f"Métricas de evaluación: {json.dumps(eval_metrics, indent=2)}")
         
         return 0

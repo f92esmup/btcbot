@@ -139,52 +139,56 @@ class TradingEnvironmentCloud(gym.Env):
         logger.info(f"Entorno de trading inicializado: {self.total_steps} pasos disponibles, "
                    f"secuencia L={self.L}, mercado {market_feature_dim}D, cartera {portfolio_feature_dim}D")
     
-    def _load_market_data(self, data_path: str):
+    def _load_market_data(self, data_gcs_path: str) -> None:
         """
         Carga los datos de mercado desde un archivo NPZ en GCS.
         
         Args:
-            data_path: Ruta completa al archivo NPZ en GCS
+            data_gcs_path: Ruta completa al archivo NPZ en GCS
         """
-        if data_path is None:
-            raise ValueError("No se proporcionó ruta a los datos de mercado (data_gcs_path)")
+        if not data_gcs_path:
+            raise ValueError("Se requiere la ruta a los datos (data_gcs_path)")
         
-        logger.info(f"Cargando datos de mercado desde: {data_path}")
+        logger.info(f"Cargando datos de mercado desde: {data_gcs_path}")
         
         try:
-            # Usar fsspec para cargar el archivo NPZ desde GCS
-            with fsspec.open(data_path, 'rb') as f:
+            # Abrir el archivo NPZ desde GCS
+            with fsspec.open(data_gcs_path, "rb") as f:
+                # Usar un archivo temporal para cargar el NPZ
                 with tempfile.NamedTemporaryFile() as temp:
-                    # Copiar el contenido a un archivo temporal
+                    # Copiar datos de GCS al archivo temporal
                     temp.write(f.read())
                     temp.flush()
                     
-                    # Cargar desde el archivo temporal
-                    data = np.load(temp.name)
+                    # Cargar el NPZ desde el archivo temporal
+                    data = np.load(temp.name, allow_pickle=True)
                     
-                    # Cargar arrays del NPZ
+                    # Extraer arrays necesarios
                     self.X_market = data['X_market']
                     self.timestamps = data['timestamps']
-                    try:
-                        self.feature_names = data['feature_names']
-                    except KeyError:
-                        logger.warning("No se encontraron nombres de características en el archivo NPZ")
-                        self.feature_names = [f"feature_{i}" for i in range(self.X_market.shape[2])]
+                    
+                    # Extraer metadatos adicionales si están disponibles
+                    self.feature_names = data['feature_names'] if 'feature_names' in data else None
+                    
+                    # Verificar consistencia de dimensiones
+                    if len(self.X_market.shape) != 3:
+                        raise ValueError(f"Formato de datos incorrecto. Se esperaba 3D, pero se obtuvo {len(self.X_market.shape)}D")
+                    
+                    # Verificar que L coincide
+                    if self.X_market.shape[1] != self.L:
+                        logger.warning(f"La longitud de secuencia en los datos ({self.X_market.shape[1]}) no coincide con L={self.L}")
+                        logger.warning(f"Ajustando L para coincidir con los datos: {self.X_market.shape[1]}")
+                        self.L = self.X_market.shape[1]
             
-            # Validar las dimensiones
-            if len(self.X_market.shape) != 3:
-                raise ValueError(f"Formato de datos incorrecto. Se esperan 3 dimensiones (num_samples, L, features), "
-                                f"pero se obtuvo {self.X_market.shape}")
+            # Configurar índices y dimensiones
+            self.total_samples = len(self.X_market)
+            self.current_step = 0
+            self.feature_dim = self.X_market.shape[2]
             
-            # Asegurar que los datos estén en float32
-            if self.X_market.dtype != np.float32:
-                self.X_market = self.X_market.astype(np.float32)
-            
-            logger.info(f"Datos cargados: {self.X_market.shape[0]} secuencias de longitud {self.X_market.shape[1]} "
-                       f"con {self.X_market.shape[2]} características")
+            logger.info(f"Datos cargados: {self.total_samples} secuencias, cada una con {self.L} timesteps y {self.feature_dim} características")
             
         except Exception as e:
-            logger.error(f"Error cargando datos desde GCS: {e}")
+            logger.error(f"Error cargando datos desde {data_gcs_path}: {e}")
             raise
     
     def reset(self, seed: Optional[int] = None, options: Optional[Dict[str, Any]] = None) -> Tuple[Dict[str, np.ndarray], Dict[str, Any]]:
@@ -568,7 +572,7 @@ class TradingEnvironmentCloud(gym.Env):
                        f"Max DD={self.episode_stats['max_drawdown']*100:.2f}%")
     
     def render(self):
-        """Renderiza el estado actual del entorno."""
+        """Renderiza el estado currente del entorno."""
         if self.render_mode == "human":
             # Implementación básica: imprime información básica
             print(f"Step: {self.episode_step}, Equity: ${self.broker.equity:.2f}, "

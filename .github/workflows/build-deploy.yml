@@ -1,0 +1,116 @@
+name: Build and Deploy Trading Bot
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'src/**'
+      - 'scripts/**'
+      - 'requirements.txt'
+      - 'Dockerfile.cloud'
+      - '.github/workflows/build-deploy.yml'
+  workflow_dispatch:
+    inputs:
+      deploy_after_build:
+        description: 'Deploy after build'
+        required: true
+        default: 'false'
+      environment:
+        description: 'Environment to deploy to'
+        required: true
+        default: 'development'
+        type: choice
+        options:
+          - development
+          - staging
+          - production
+
+env:
+  PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+  GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
+  ARTIFACT_REGISTRY: ${{ secrets.ARTIFACT_REGISTRY }}
+  REGION: ${{ secrets.GCP_REGION }}
+  SERVICE_NAME: trading-bot
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+    
+    - name: Set up Cloud SDK
+      uses: google-github-actions/setup-gcloud@v1
+      with:
+        project_id: ${{ env.PROJECT_ID }}
+        service_account_key: ${{ env.GCP_SA_KEY }}
+        export_default_credentials: true
+    
+    - name: Configure Docker for Artifact Registry
+      run: |
+        gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev
+    
+    - name: Build and push container
+      run: |
+        TIMESTAMP=$(date +%Y%m%d%H%M%S)
+        IMAGE_NAME="${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.ARTIFACT_REGISTRY }}/${{ env.SERVICE_NAME }}:$TIMESTAMP"
+        echo "Building $IMAGE_NAME"
+        
+        docker build -f Dockerfile.cloud -t $IMAGE_NAME .
+        docker push $IMAGE_NAME
+        
+        # Save the image name for deployment job
+        echo "IMAGE_NAME=$IMAGE_NAME" >> $GITHUB_ENV
+    
+    - name: Run security scan
+      run: |
+        gcloud artifacts docker images scan ${{ env.IMAGE_NAME }} \
+          --format='value(response.scan)' > scan_results.json
+        
+        # Simple check for critical vulnerabilities
+        CRITICAL_COUNT=$(jq '.vulnerabilities | map(select(.severity == "CRITICAL")) | length' scan_results.json)
+        if [ "$CRITICAL_COUNT" -gt 0 ]; then
+          echo "Warning: $CRITICAL_COUNT critical vulnerabilities found!"
+          jq '.vulnerabilities | map(select(.severity == "CRITICAL"))' scan_results.json
+        fi
+
+  deploy:
+    needs: build
+    if: |
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.deploy_after_build == 'true') ||
+      (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.environment || 'development' }}
+    
+    steps:
+    - name: Set up Cloud SDK
+      uses: google-github-actions/setup-gcloud@v1
+      with:
+        project_id: ${{ env.PROJECT_ID }}
+        service_account_key: ${{ env.GCP_SA_KEY }}
+        export_default_credentials: true
+    
+    - name: Deploy to Cloud Run
+      id: deploy
+      uses: google-github-actions/deploy-cloudrun@v1
+      with:
+        service: ${{ env.SERVICE_NAME }}
+        image: ${{ env.IMAGE_NAME }}
+        region: ${{ env.REGION }}
+        env_vars: |
+          MODE=serve
+          GCP_PROJECT_ID=${{ env.PROJECT_ID }}
+    
+    - name: Show Output
+      run: echo ${{ steps.deploy.outputs.url }}
+    
+    - name: Configure Traffic Split
+      if: ${{ github.event.inputs.environment == 'production' }}
+      run: |
+        # For production, do gradual rollout (20% to new version first)
+        gcloud run services update-traffic ${{ env.SERVICE_NAME }} \
+          --region=${{ env.REGION }} \
+          --to-revisions=${{ steps.deploy.outputs.revision }}=20
+        
+        echo "New version receiving 20% of traffic. Monitor and adjust as needed."

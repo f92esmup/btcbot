@@ -1,105 +1,154 @@
-import logging
-import sys
-import os
-import yaml
+#!/usr/bin/env python
+"""
+Script para preprocesar datos históricos y generar secuencias para el entrenamiento.
+Optimizado para ejecutarse como un componente de Vertex AI Pipelines.
+"""
 import argparse
+import logging
+import os
+import json
 
-# Añadir src al PYTHONPATH si es necesario
-project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '../'))
-if project_root not in sys.path:
-   sys.path.insert(0, project_root)
+from src.data.preprocessor_cloud import DataPreprocessorCloud
 
-from src.utils.config import ConfigManager
-from src.data.preprocessor import DataPreprocessor
-
-def setup_logging():
-    """Configura el sistema de logging."""
-    logging.basicConfig(
-        level=logging.INFO,  # Cambiar a logging.DEBUG para más detalle
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-        handlers=[logging.StreamHandler(sys.stdout)]
-    )
-    return logging.getLogger(__name__)
-
-def parse_arguments():
-    """Parsea los argumentos de línea de comandos."""
-    parser = argparse.ArgumentParser(description='Preprocesa datos de OHLCV y crea secuencias para training.')
-    
-    parser.add_argument(
-        '--file', '-f',
-        type=str,
-        help='Nombre del archivo específico de datos crudos a procesar (ej. BTCUSDT_FUTURES_1h_20200101_20250516.csv).'
-    )
-    
-    parser.add_argument(
-        '--config', '-c',
-        type=str,
-        default='src/data/preprocessing_config.yaml',
-        help='Ruta al archivo de configuración de preprocesamiento. Por defecto: src/data/preprocessing_config.yaml'
-    )
-    
-    return parser.parse_args()
+# Configurar logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 def main():
-    """Función principal."""
-    # Configurar logging
-    logger = setup_logging()
-    logger.info("Iniciando script de preprocesamiento de datos.")
+    """Función principal para preprocesar datos."""
+    parser = argparse.ArgumentParser(description="Preprocesa datos históricos para entrenamiento")
     
-    # Parsear argumentos
-    args = parse_arguments()
+    # Parámetros básicos
+    parser.add_argument("--input-file-gcs", type=str, required=True,
+                        help="Ruta completa al archivo CSV en GCS")
+    parser.add_argument("--output-gcs-path", type=str, required=False,
+                        default=None,
+                        help="Ruta GCS completa para el archivo de salida (default: se genera automáticamente)")
+    parser.add_argument("--output-filename", type=str, required=False,
+                        default=None,
+                        help="Nombre base para el archivo de salida (default: se infiere del nombre original)")
+    parser.add_argument("--sequence-length", type=int, required=False,
+                        default=int(os.getenv("SEQUENCE_LENGTH_L", "96")),
+                        help="Longitud de la secuencia para el Transformer (default: desde variable SEQUENCE_LENGTH_L o 96)")
+    parser.add_argument("--norm-window-multiplier", type=int, required=False,
+                        default=int(os.getenv("NORM_WINDOW_MULTIPLIER", "2")),
+                        help="Multiplicador para la ventana de normalización (default: desde NORM_WINDOW_MULTIPLIER o 2)")
+    parser.add_argument("--use-float32", type=bool, required=False,
+                        default=True if os.getenv("USE_FLOAT32", "true").lower() in ['true', '1', 'yes'] else False,
+                        help="Usar float32 en lugar de float64 (default: true)")
+    
+    # Parámetros de GCP
+    parser.add_argument("--project-id", type=str, required=False,
+                        default=os.getenv("GCP_PROJECT_ID"),
+                        help="ID del proyecto GCP (default: desde variable GCP_PROJECT_ID)")
+    parser.add_argument("--raw-data-bucket", type=str, required=False,
+                        default=os.getenv("RAW_DATA_BUCKET"),
+                        help="Nombre del bucket para datos crudos (default: desde variable RAW_DATA_BUCKET)")
+    parser.add_argument("--processed-data-bucket", type=str, required=False,
+                        default=os.getenv("PROCESSED_DATA_BUCKET"),
+                        help="Nombre del bucket para datos procesados (default: desde variable PROCESSED_DATA_BUCKET)")
+    
+    # Parámetros para indicadores técnicos (opcional, como JSON)
+    parser.add_argument("--indicators-config", type=str, required=False,
+                        default=os.getenv("INDICATORS_CONFIG", None),
+                        help="Configuración JSON para indicadores técnicos (default: configuración interna)")
+    parser.add_argument("--ohlcv-config", type=str, required=False,
+                        default=os.getenv("OHLCV_CONFIG", None),
+                        help="Configuración JSON para procesamiento OHLCV (default: configuración interna)")
+    parser.add_argument("--feature-columns", type=str, required=False,
+                        default=os.getenv("FEATURE_COLUMNS", None),
+                        help="Lista JSON de columnas de características finales (default: configuración interna)")
+    
+    # Metadatos del KFP
+    parser.add_argument("--extra-metadata", type=str, required=False,
+                        default=None,
+                        help="JSON string con metadatos adicionales para incluir en el archivo NPZ")
+    
+    args = parser.parse_args()
+    
+    # Verificar parámetros obligatorios
+    if not args.project_id:
+        raise ValueError("Se requiere --project-id o la variable de entorno GCP_PROJECT_ID")
+    if not args.raw_data_bucket:
+        raise ValueError("Se requiere --raw-data-bucket o la variable de entorno RAW_DATA_BUCKET")
+    if not args.processed_data_bucket:
+        raise ValueError("Se requiere --processed-data-bucket o la variable de entorno PROCESSED_DATA_BUCKET")
+    
+    # Parsear configuraciones JSON opcionales
+    indicators_config_dict = None
+    if args.indicators_config:
+        try:
+            indicators_config_dict = json.loads(args.indicators_config)
+        except json.JSONDecodeError:
+            logger.warning("Error decodificando indicators-config JSON. Usando configuración por defecto.")
+    
+    ohlcv_config_dict = None
+    if args.ohlcv_config:
+        try:
+            ohlcv_config_dict = json.loads(args.ohlcv_config)
+        except json.JSONDecodeError:
+            logger.warning("Error decodificando ohlcv-config JSON. Usando configuración por defecto.")
+    
+    final_feature_columns = None
+    if args.feature_columns:
+        try:
+            final_feature_columns = json.loads(args.feature_columns)
+        except json.JSONDecodeError:
+            logger.warning("Error decodificando feature-columns JSON. Usando configuración por defecto.")
+    
+    # Metadatos adicionales
+    extra_metadata = None
+    if args.extra_metadata:
+        try:
+            extra_metadata = json.loads(args.extra_metadata)
+        except json.JSONDecodeError:
+            logger.warning("Error decodificando extra-metadata JSON. No se incluirán metadatos adicionales.")
     
     try:
-        # Cargar configuración general y del módulo
-        general_config_manager = ConfigManager(config_path="src/config.yaml", env_path=".env")
+        logger.info(f"Iniciando preprocesamiento de datos desde {args.input_file_gcs}")
+        logger.info(f"Configuración: L={args.sequence_length}, norm_mult={args.norm_window_multiplier}")
         
-        preprocessing_config_path = args.config
-        with open(preprocessing_config_path, 'r') as f:
-            module_specific_config = yaml.safe_load(f)
-        logger.info(f"Configuración de preprocesamiento cargada desde {preprocessing_config_path}")
-
-    except FileNotFoundError as e:
-        logger.error(f"Error: Archivo de configuración no encontrado. {e}")
-        return
-    except Exception as e:
-        logger.error(f"Error al cargar la configuración: {e}")
-        return
-
-    try:
-        preprocessor = DataPreprocessor(general_config_manager, module_specific_config)
-    except Exception as e:
-        logger.error(f"Error al inicializar DataPreprocessor: {e}", exc_info=True)
-        return
-
-    # Determinar el archivo de datos crudos a procesar
-    raw_data_dir = general_config_manager.get_config_value('data_paths.raw')
-    
-    if args.file:
-        # Usar el archivo específico proporcionado por el usuario
-        raw_data_filename = args.file
-        if not os.path.exists(os.path.join(raw_data_dir, raw_data_filename)):
-            logger.error(f"El archivo especificado {raw_data_filename} no existe en {raw_data_dir}")
-            return
-    else:
-        # Lógica para seleccionar el archivo más reciente
-        default_symbol = general_config_manager.get_config_value('data_acquisition_defaults.symbol', 'BTCUSDT')
-        raw_files = [f for f in os.listdir(raw_data_dir) if f.startswith(default_symbol) and f.endswith('.csv')]
-
-        if not raw_files:
-            logger.error(f"No se encontraron archivos de datos crudos para {default_symbol} en {raw_data_dir}. Ejecuta primero el script de adquisición.")
-            return
+        # Inicializar el preprocesador
+        preprocessor = DataPreprocessorCloud(
+            project_id=args.project_id,
+            raw_data_bucket=args.raw_data_bucket,
+            processed_data_bucket=args.processed_data_bucket,
+            sequence_length_L=args.sequence_length,
+            norm_window_multiplier=args.norm_window_multiplier,
+            indicators_config_dict=indicators_config_dict,
+            ohlcv_config_dict=ohlcv_config_dict,
+            final_market_feature_columns=final_feature_columns,
+            use_float32=args.use_float32
+        )
         
-        # Procesar el archivo más reciente (asumiendo que el nombre contiene fecha/hora o se ordena alfabéticamente)
-        raw_data_filename = sorted(raw_files, reverse=True)[0] 
-    
-    output_filename_base = os.path.splitext(raw_data_filename)[0] # ej. BTCUSDT_FUTURES_1h_20200101_20250516
-
-    try:
-        logger.info(f"Procesando archivo de datos crudos: {raw_data_filename}")
-        preprocessor.process_data(raw_data_filename, output_filename_base)
-        logger.info("Proceso de preprocesamiento de datos finalizado exitosamente.")
+        # Procesar los datos
+        output_npz_path = preprocessor.process_data(
+            raw_data_gcs_path=args.input_file_gcs,
+            output_gcs_prefix=None if not args.output_gcs_path else os.path.dirname(args.output_gcs_path),
+            output_filename_base=args.output_filename,
+            extra_metadata=extra_metadata
+        )
+        
+        if output_npz_path:
+            logger.info(f"Preprocesamiento completado exitosamente. Secuencias guardadas en: {output_npz_path}")
+            
+            # Para integrarse con Vertex AI Pipelines
+            if 'PIPELINE_OUTPUT_FILE' in os.environ:
+                with open(os.environ['PIPELINE_OUTPUT_FILE'], 'w') as f:
+                    json.dump({"output_npz_path": output_npz_path}, f)
+            
+            print(f"SUCCESS:{output_npz_path}")
+            return 0
+        else:
+            logger.error("Error en el preprocesamiento de datos")
+            return 1
+            
     except Exception as e:
-        logger.error(f"Ocurrió un error crítico durante el proceso de preprocesamiento: {e}", exc_info=True)
+        logger.exception(f"Error no controlado: {e}")
+        return 1
 
 if __name__ == "__main__":
-    main()
+    exit(main())

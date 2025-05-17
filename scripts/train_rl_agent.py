@@ -1,222 +1,217 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python
 """
-Script para entrenar un agente de RL utilizando el algoritmo SAC
-con la arquitectura personalizada basada en Transformer.
-Compatibilidad con entrenamiento en Vertex AI.
+Script para entrenar un agente de RL para trading de criptomonedas.
+Optimizado para ejecutarse como un componente de Vertex AI Pipelines.
 """
-
-import os
 import argparse
 import logging
-import uuid
-from pathlib import Path
-from datetime import datetime
+import os
+import json
+import time
 
-# Importaciones locales
-from src.agent.rl_agent_manager import RLAgentManager
-from src.utils.config import ConfigManager
-
-# Intentar importar las bibliotecas de GCP
-try:
-    from google.cloud import storage
-    GCP_AVAILABLE = True
-except ImportError:
-    GCP_AVAILABLE = False
+from src.agent.rl_agent_manager import RLAgentManagerCloud
 
 # Configurar logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
-logger = logging.getLogger("TrainRLAgent")
-
-
-def parse_arguments():
-    """
-    Parsea los argumentos de la línea de comandos.
-    
-    Returns:
-        Argumentos parseados
-    """
-    parser = argparse.ArgumentParser(description="Entrena un agente de RL para trading")
-    
-    parser.add_argument(
-        "--agent-config",
-        type=str,
-        default="src/agent/agent_config.yaml",
-        help="Ruta al archivo de configuración del agente"
-    )
-    
-    parser.add_argument(
-        "--env-config",
-        type=str,
-        default="src/environments/environment_config.yaml",
-        help="Ruta al archivo de configuración del entorno"
-    )
-    
-    parser.add_argument(
-        "--timesteps",
-        type=int,
-        default=None,
-        help="Número total de pasos de entrenamiento (si se omite, se usa el valor del config)"
-    )
-    
-    parser.add_argument(
-        "--load-model",
-        type=str,
-        default=None,
-        help="Ruta a un modelo guardado para continuar el entrenamiento"
-    )
-    
-    parser.add_argument(
-        "--no-gpu",
-        action="store_true",
-        help="Desactivar el uso de GPU incluso si está disponible"
-    )
-    
-    parser.add_argument(
-        "--output-dir",
-        type=str,
-        default=None,
-        help="Directorio para guardar el modelo entrenado (usa AIP_MODEL_DIR si está disponible en Vertex AI)"
-    )
-    
-    parser.add_argument(
-        "--data-path",
-        type=str,
-        default=None,
-        help="Ruta al archivo de datos preprocesados"
-    )
-    
-    return parser.parse_args()
-
-
-def save_model_to_gcs(model, model_local_path, gcs_uri=None):
-    """
-    Guarda el modelo en GCS si se está ejecutando en Vertex AI.
-    
-    Args:
-        model: Modelo entrenado para guardar.
-        model_local_path: Ruta local donde se guarda el modelo.
-        gcs_uri: URI de GCS donde guardar el modelo.
-    
-    Returns:
-        str: URI completo donde se guardó el modelo.
-    """
-    if not GCP_AVAILABLE or not gcs_uri:
-        # Guardar localmente si no podemos guardar en GCS
-        model.save(model_local_path)
-        logger.info(f"Modelo guardado localmente en: {model_local_path}")
-        return model_local_path
-    
-    try:
-        # Primero guardar localmente
-        model.save(model_local_path)
-        logger.info(f"Modelo guardado localmente en: {model_local_path}")
-        
-        # Luego subir a GCS
-        if gcs_uri.startswith("gs://"):
-            bucket_name = gcs_uri.replace("gs://", "").split("/")[0]
-            blob_prefix = "/".join(gcs_uri.replace(f"gs://{bucket_name}/", "").split("/"))
-            
-            # Asegurarse de que el prefijo termine con /
-            if blob_prefix and not blob_prefix.endswith("/"):
-                blob_prefix += "/"
-            
-            filename = os.path.basename(model_local_path)
-            blob_name = f"{blob_prefix}{filename}"
-            
-            # Subir a GCS
-            storage_client = storage.Client()
-            bucket = storage_client.bucket(bucket_name)
-            blob = bucket.blob(blob_name)
-            
-            blob.upload_from_filename(model_local_path)
-            full_gcs_uri = f"gs://{bucket_name}/{blob_name}"
-            logger.info(f"Modelo subido a GCS: {full_gcs_uri}")
-            
-            return full_gcs_uri
-        else:
-            logger.warning(f"URI GCS no válido: {gcs_uri}. El modelo solo se guardó localmente.")
-            return model_local_path
-    except Exception as e:
-        logger.error(f"Error al guardar el modelo en GCS: {e}")
-        return model_local_path
-
+logger = logging.getLogger(__name__)
 
 def main():
-    """
-    Función principal para entrenar un agente de RL.
-    """
-    # Parsear argumentos
-    args = parse_arguments()
+    """Función principal para entrenar un agente RL."""
+    parser = argparse.ArgumentParser(description="Entrena un agente RL para trading")
     
-    # Cargar la configuración del agente
-    config_manager = ConfigManager(config_path=args.agent_config)
-    agent_config = config_manager.config
+    # Parámetros para datos de entrenamiento
+    parser.add_argument("--input-data-gcs", type=str, required=True,
+                        help="Ruta completa al archivo de datos procesados en GCS")
+    parser.add_argument("--output-model-gcs", type=str, required=True,
+                        help="Ruta GCS completa donde guardar el modelo entrenado")
+    parser.add_argument("--export-model-gcs", type=str, required=False,
+                        default=None,
+                        help="Ruta GCS donde guardar el modelo exportado para servir (opcional)")
     
-    # Actualizar la configuración si se solicita no usar GPU
-    if args.no_gpu:
-        agent_config["use_gpu"] = False
-        logger.info("Uso de GPU desactivado por argumento de línea de comandos")
+    # Parámetros de GCP
+    parser.add_argument("--project-id", type=str, required=False,
+                        default=os.getenv("GCP_PROJECT_ID"),
+                        help="ID del proyecto GCP (default: desde variable GCP_PROJECT_ID)")
+    parser.add_argument("--models-bucket", type=str, required=False,
+                        default=os.getenv("MODELS_STAGING_BUCKET"),
+                        help="Bucket para modelos (default: desde variable MODELS_STAGING_BUCKET)")
     
-    # Crear el administrador del agente con la configuración actualizada
-    agent_manager = RLAgentManager(config_path=args.agent_config)
+    # Parámetros del entorno
+    parser.add_argument("--sequence-length", type=int, required=False,
+                        default=int(os.getenv("SEQUENCE_LENGTH_L", "96")),
+                        help="Longitud de la secuencia (default: desde SEQUENCE_LENGTH_L o 96)")
+    parser.add_argument("--initial-equity", type=float, required=False,
+                        default=float(os.getenv("INITIAL_EQUITY", "10000.0")),
+                        help="Equity inicial (default: desde INITIAL_EQUITY o 10000.0)")
+    parser.add_argument("--leverage", type=int, required=False,
+                        default=int(os.getenv("LEVERAGE", "1")),
+                        help="Apalancamiento (default: desde LEVERAGE o 1)")
+    parser.add_argument("--position-size", type=float, required=False,
+                        default=float(os.getenv("POSITION_SIZE_PERCENTAGE", "0.2")),
+                        help="Tamaño de posición como % de equity (default: desde POSITION_SIZE_PERCENTAGE o 0.2)")
+    parser.add_argument("--stop-loss", type=float, required=False,
+                        default=None if os.getenv("STOP_LOSS_PERCENTAGE") is None else float(os.getenv("STOP_LOSS_PERCENTAGE")),
+                        help="Porcentaje de stop loss (default: None)")
+    parser.add_argument("--take-profit", type=float, required=False,
+                        default=None if os.getenv("TAKE_PROFIT_PERCENTAGE") is None else float(os.getenv("TAKE_PROFIT_PERCENTAGE")),
+                        help="Porcentaje de take profit (default: None)")
+    parser.add_argument("--trading-fees", type=float, required=False,
+                        default=float(os.getenv("TRADING_FEES", "0.0004")),
+                        help="Comisiones de trading (default: desde TRADING_FEES o 0.0004)")
+    parser.add_argument("--slippage", type=float, required=False,
+                        default=float(os.getenv("SLIPPAGE", "0.0001")),
+                        help="Deslizamiento (default: desde SLIPPAGE o 0.0001)")
+    parser.add_argument("--random-start", type=bool, required=False,
+                        default=True if os.getenv("RANDOM_START", "true").lower() in ['true', '1', 'yes'] else False,
+                        help="Usar inicio aleatorio en entrenamiento (default: true)")
     
-    # Si se desactivó la GPU por argumento, aplicar la configuración al administrador
-    if args.no_gpu:
-        agent_manager.config["use_gpu"] = False
-        agent_manager.device = "cpu"
+    # Parámetros del agente RL
+    parser.add_argument("--algorithm", type=str, required=False,
+                        default=os.getenv("AGENT_ALGORITHM", "SAC"),
+                        help="Algoritmo RL (default: desde AGENT_ALGORITHM o 'SAC')")
+    parser.add_argument("--learning-rate", type=float, required=False,
+                        default=float(os.getenv("AGENT_LEARNING_RATE", "0.0003")),
+                        help="Tasa de aprendizaje (default: desde AGENT_LEARNING_RATE o 0.0003)")
+    parser.add_argument("--buffer-size", type=int, required=False,
+                        default=int(os.getenv("AGENT_BUFFER_SIZE", "100000")),
+                        help="Tamaño del buffer (default: desde AGENT_BUFFER_SIZE o 100000)")
+    parser.add_argument("--batch-size", type=int, required=False,
+                        default=int(os.getenv("AGENT_BATCH_SIZE", "256")),
+                        help="Tamaño del batch (default: desde AGENT_BATCH_SIZE o 256)")
+    parser.add_argument("--gamma", type=float, required=False,
+                        default=float(os.getenv("AGENT_GAMMA", "0.99")),
+                        help="Factor de descuento (default: desde AGENT_GAMMA o 0.99)")
+    parser.add_argument("--learning-starts", type=int, required=False,
+                        default=int(os.getenv("AGENT_LEARNING_STARTS", "10000")),
+                        help="Pasos antes de empezar a entrenar (default: desde AGENT_LEARNING_STARTS o 10000)")
+    parser.add_argument("--total-timesteps", type=int, required=False,
+                        default=int(os.getenv("PIPELINE_TOTAL_TIMESTEPS", "500000")),
+                        help="Pasos totales de entrenamiento (default: desde PIPELINE_TOTAL_TIMESTEPS o 500000)")
+    parser.add_argument("--eval-freq", type=int, required=False,
+                        default=int(os.getenv("AGENT_EVAL_FREQ", "10000")),
+                        help="Frecuencia de evaluación (default: desde AGENT_EVAL_FREQ o 10000)")
+    parser.add_argument("--save-freq", type=int, required=False,
+                        default=int(os.getenv("AGENT_SAVE_FREQ", "50000")),
+                        help="Frecuencia de guardado (default: desde AGENT_SAVE_FREQ o 50000)")
+    parser.add_argument("--n-eval-episodes", type=int, required=False,
+                        default=int(os.getenv("AGENT_N_EVAL_EPISODES", "5")),
+                        help="Número de episodios para evaluación (default: desde AGENT_N_EVAL_EPISODES o 5)")
+    parser.add_argument("--device", type=str, required=False,
+                        default=os.getenv("AGENT_DEVICE", "auto"),
+                        help="Dispositivo para entrenamiento (default: desde AGENT_DEVICE o 'auto')")
+    parser.add_argument("--transformer-config", type=str, required=False,
+                        default=os.getenv("AGENT_TRANSFORMER_CONFIG", None),
+                        help="Configuración JSON del Transformer (default: config interna)")
+    parser.add_argument("--save-replay-buffer", type=bool, required=False,
+                        default=True if os.getenv("SAVE_REPLAY_BUFFER", "false").lower() in ['true', '1', 'yes'] else False,
+                        help="Guardar también el buffer de experiencia (default: false)")
     
-    # Configurar el agente
-    should_load_model = args.load_model is not None
-    agent_manager.setup_agent(
-        env_config_path=args.env_config,
-        load_model=should_load_model,
-        model_path=args.load_model,
-        data_path=args.data_path
-    )
+    args = parser.parse_args()
     
-    # Entrenar el agente
-    trained_model = agent_manager.train_agent(total_timesteps=args.timesteps)
+    # Verificar parámetros obligatorios
+    if not args.project_id:
+        raise ValueError("Se requiere --project-id o la variable de entorno GCP_PROJECT_ID")
     
-    # Determinar el directorio de salida
-    output_dir = args.output_dir
+    # Parsear configuración del Transformer si se proporciona
+    policy_kwargs_dict = None
+    if args.transformer_config:
+        try:
+            policy_kwargs_dict = json.loads(args.transformer_config)
+        except json.JSONDecodeError:
+            logger.warning("Error decodificando transformer-config JSON. Usando configuración por defecto.")
     
-    # Verificar si estamos en Vertex AI
-    if os.environ.get("AIP_MODEL_DIR") and not output_dir:
-        output_dir = os.environ.get("AIP_MODEL_DIR")
-        logger.info(f"Detectado entorno de Vertex AI. Usando directorio de salida: {output_dir}")
-    
-    # Guardar el modelo
-    if output_dir:
-        # Generar nombre de archivo para el modelo
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        unique_id = str(uuid.uuid4())[:8]
-        filename = f"sac_transformer_trading_agent_{timestamp}_{unique_id}.zip"
+    try:
+        start_time = time.time()
+        logger.info(f"Iniciando entrenamiento del agente RL con datos de: {args.input_data_gcs}")
         
-        if output_dir.startswith("gs://"):
-            # Para GCS, guardamos en un directorio temporal primero
-            local_temp_path = os.path.join("/tmp", filename)
-            gcs_uri = save_model_to_gcs(trained_model, local_temp_path, output_dir)
-            logger.info(f"Modelo guardado en GCS: {gcs_uri}")
-        else:
-            # Para guardado local
-            os.makedirs(output_dir, exist_ok=True)
-            model_path = os.path.join(output_dir, filename)
-            trained_model.save(model_path)
-            logger.info(f"Modelo guardado en: {model_path}")
-    else:
-        # Si no se especificó un directorio, guardar en la carpeta models por defecto
-        models_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "models")
-        os.makedirs(models_dir, exist_ok=True)
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        model_path = os.path.join(models_dir, f"sac_transformer_trading_agent_{timestamp}.zip")
-        trained_model.save(model_path)
-        logger.info(f"Modelo guardado en: {model_path}")
-    
-    logger.info("Entrenamiento completado.")
-
+        # Inicializar el administrador del agente
+        agent_manager = RLAgentManagerCloud(
+            project_id=args.project_id,
+            algorithm=args.algorithm,
+            learning_rate=args.learning_rate,
+            buffer_size=args.buffer_size,
+            learning_starts=args.learning_starts,
+            batch_size=args.batch_size,
+            gamma=args.gamma,
+            policy_kwargs_dict=policy_kwargs_dict,
+            device=args.device,
+            models_bucket=args.models_bucket
+        )
+        
+        # Configurar el entorno y el agente
+        agent_manager.setup_agent(
+            sequence_length_L=args.sequence_length,
+            initial_equity=args.initial_equity,
+            leverage=args.leverage,
+            position_size_percentage=args.position_size,
+            stop_loss_percentage=args.stop_loss,
+            take_profit_percentage=args.take_profit,
+            trading_fees=args.trading_fees,
+            slippage=args.slippage,
+            data_gcs_path=args.input_data_gcs,
+            random_start=args.random_start
+        )
+        
+        # Entrenar el agente
+        training_stats = agent_manager.train_agent(
+            total_timesteps=args.total_timesteps,
+            eval_freq=args.eval_freq,
+            save_freq=args.save_freq,
+            n_eval_episodes=args.n_eval_episodes,
+            save_path_gcs=args.output_model_gcs
+        )
+        
+        # Guardar el modelo final
+        model_gcs_path = agent_manager.save_model(
+            args.output_model_gcs,
+            save_replay_buffer=args.save_replay_buffer
+        )
+        
+        # Evaluación final
+        eval_metrics = agent_manager.evaluate_agent(n_eval_episodes=10)
+        
+        # Exportar modelo para servir si se solicita
+        serving_model_path = None
+        if args.export_model_gcs:
+            serving_model_path = agent_manager.export_model_for_serving(
+                args.export_model_gcs
+            )
+        
+        # Combinar estadísticas
+        result = {
+            "training_duration_seconds": int(time.time() - start_time),
+            "training_stats": training_stats,
+            "eval_metrics": eval_metrics,
+            "model_gcs_path": model_gcs_path,
+            "serving_model_path": serving_model_path
+        }
+        
+        # Guardar métricas como JSON para el Pipeline
+        metrics_json = json.dumps(eval_metrics)
+        with open('/tmp/metrics.json', 'w') as f:
+            f.write(metrics_json)
+            
+        # Para integrarse con Vertex AI Pipelines
+        if 'PIPELINE_OUTPUT_FILE' in os.environ:
+            with open(os.environ['PIPELINE_OUTPUT_FILE'], 'w') as f:
+                json.dump({
+                    "model_path": model_gcs_path,
+                    "metrics": eval_metrics,
+                    "serving_model_path": serving_model_path
+                }, f)
+        
+        logger.info(f"Entrenamiento completado en {result['training_duration_seconds']} segundos")
+        logger.info(f"Modelo guardado en: {model_gcs_path}")
+        logger.info(f"Métricas de evaluación: {json.dumps(eval_metrics, indent=2)}")
+        
+        return 0
+            
+    except Exception as e:
+        logger.exception(f"Error no controlado: {e}")
+        return 1
 
 if __name__ == "__main__":
-    main()
+    exit(main())

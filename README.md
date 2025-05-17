@@ -4,7 +4,7 @@
 
 Este proyecto implementa un agente de trading basado en Reinforcement Learning para operar en el mercado de futuros de criptomonedas. Utiliza el algoritmo SAC (Soft Actor-Critic) con una arquitectura de red neuronal basada en Transformers para procesar datos históricos del mercado y tomar decisiones de trading.
 
-**Estado Actual del Proyecto**: Esta es una versión de desarrollo para entrenamiento local funcional. **No está lista para trading en vivo**.
+**Estado Actual del Proyecto**: Esta es una versión completa con integración en Google Cloud Platform. **No está lista para trading en vivo**.
 
 ## Características Principales
 
@@ -13,9 +13,9 @@ Este proyecto implementa un agente de trading basado en Reinforcement Learning p
 - Simulación de un entorno de trading de futuros BTCUSDT con Gymnasium
 - Agente de RL (Soft Actor-Critic) con extractor de características basado en Transformers
 - Visualización de resultados y métricas de rendimiento
-- Infraestructura en Google Cloud Platform para entrenamiento y despliegue a escala
+- **Infraestructura en Google Cloud Platform**: Totalmente integrado con GCP para entrenamiento y despliegue a escala
 - **Configuración Flexible**: Sistema centralizado basado en variables de entorno para fácil adaptación a diferentes contextos
-- **Pipeline de MLOps Completo**: Automatización de entrenamiento, evaluación y despliegue en GCP
+- **Pipeline de MLOps Completo**: Automatización de entrenamiento, evaluación y despliegue usando Kubeflow Pipelines
 
 ## Estructura del Proyecto
 
@@ -26,6 +26,8 @@ btcbot/
 │   └── processed/             # Datos preprocesados con features
 ├── docs/                      # Documentación detallada
 ├── gcp/                       # Scripts para Google Cloud Platform
+│   ├── common/                # Configuraciones y clientes compartidos
+│   └── serving/               # Archivos para despliegue en Cloud Run
 ├── logs/                      # Logs de entrenamiento y evaluación
 ├── models/                    # Modelos guardados
 ├── results/                   # Resultados de evaluación
@@ -41,6 +43,16 @@ btcbot/
 
 - Python 3.9+
 - Git
+- Docker (para contenedores)
+- Cuenta de Google Cloud Platform (para despliegue en la nube)
+
+## Instalación
+
+1. **Clonar el repositorio**:
+   ```
+   git clone https://github.com/yourusername/btcbot.git
+   cd btcbot
+   ```
 
 ## Instalación
 
@@ -117,22 +129,53 @@ Este proyecto incluye implementación completa en Google Cloud Platform (GCP) pa
 ### Características de la Implementación en GCP
 
 - **Configuración centralizada** mediante variables de entorno
-- **Automatización completa** con pipelines en Vertex AI
+- **Automatización completa** con Kubeflow Pipelines en Vertex AI
 - **Entrenamiento distribuido** con soporte para GPUs
 - **Registro y versionado de modelos** en Vertex AI Model Registry
 - **Despliegue condicional** basado en métricas de rendimiento
 - **Monitorización** y logging integrados
+- **Componentes parametrizados** para máxima flexibilidad
 
-Consulta el directorio `gcp/` y su [README](gcp/README.md) para obtener instrucciones detalladas sobre la implementación paso a paso.
+### Despliegue en Google Cloud Platform
 
-Para más información sobre la migración a GCP y la configuración centralizada, consulta [Google Cloud Integration](docs/googlecloud.md).
+Este proyecto utiliza Kubeflow Pipelines (KFP) en Vertex AI para automatizar el flujo de trabajo completo de entrenamiento y despliegue. El pipeline incluye los siguientes pasos:
+
+1. **Descarga de datos históricos** desde Binance (parametrizable por símbolo, intervalo y fechas)
+2. **Preprocesamiento de datos** con normalización y features avanzadas
+3. **Entrenamiento del modelo RL** con parámetros optimizables
+4. **Evaluación completa** con métricas de trading (Sharpe, Sortino, drawdown, win rate)
+5. **Despliegue condicional** basado en umbrales de calidad configurables
+
+#### Ejecutar el Pipeline Completo
+
+```bash
+# Navegar al directorio gcp
+cd gcp
+
+# Ejecutar el pipeline con configuración personalizada
+./run_pipeline.sh --symbol BTCUSDT --timeframe 1h --lookback-window 96 \
+  --total-timesteps 500000 --algorithm SAC --deploy --wait
+```
+
+Para una prueba rápida de toda la infraestructura, puedes usar el script de prueba end-to-end:
+
+```bash
+cd gcp
+./test_e2e_pipeline.sh
+```
 
 ### Requisitos para GCP
 
 - Cuenta de Google Cloud Platform
 - Google Cloud SDK instalado y configurado
 - Proyecto GCP con facturación habilitada
-- Variables de entorno configuradas (ver `.env.example`)
+- APIs necesarias habilitadas (el script `enable_apis.sh` lo hace automáticamente)
+- Variables de entorno configuradas (ver `.env.example` o usar `gcp/common/config.py`)
+
+Para más información sobre la implementación en GCP, consulta:
+- [Guía de GCP](gcp/README.md): Instrucciones detalladas de configuración y uso
+- [Pipeline de Kubeflow](docs/kubeflow_pipeline.md): Detalles técnicos del pipeline
+- [Prueba End-to-End](docs/e2e_testing.md): Cómo verificar la integración completa
 
 3. **Instalar dependencias**:
    ```

@@ -3,343 +3,327 @@ import numpy as np
 import os
 import logging
 import yaml
-from src.utils.config import ConfigManager
+import json
+import tempfile
+import fsspec
+from google.cloud import storage
+from src.utils.config_gcp import ConfigManagerCloud, get_gcs_path
 from src.data.feature_engineering import FeatureEngineer
 
 logger = logging.getLogger(__name__)
 
-class DataPreprocessor:
-    def __init__(self, general_config_manager: ConfigManager, module_specific_config: dict):
-        self.gcfg = general_config_manager
-        self.mcfg = module_specific_config  # Config específica del módulo de preprocesamiento
-
-        self.raw_data_path = self.gcfg.get_config_value('data_paths.raw')
-        self.processed_data_path = self.gcfg.get_config_value('data_paths.processed')
-        os.makedirs(self.processed_data_path, exist_ok=True)
-
-        self.L = self.mcfg['sequence_length_L']
-        self.norm_window = self.L * self.mcfg['normalization_window_multiplier_for_L']
+class DataPreprocessorCloud:
+    """
+    Preprocesador de datos optimizado para ejecutarse en entornos GCP.
+    Lee datos desde GCS, los procesa y guarda las secuencias resultantes en GCS.
+    """
+    
+    def __init__(self, 
+                 project_id: str,
+                 raw_data_bucket: str, 
+                 processed_data_bucket: str,
+                 sequence_length_L: int, 
+                 norm_window_multiplier: int,
+                 indicators_config_dict: dict = None,
+                 ohlcv_config_dict: dict = None,
+                 final_market_feature_columns: list = None,
+                 use_float32: bool = True):
+        """
+        Inicializa el preprocesador con los parámetros necesarios.
         
+        Args:
+            project_id: ID del proyecto GCP 
+            raw_data_bucket: Nombre del bucket para datos crudos
+            processed_data_bucket: Nombre del bucket para datos procesados
+            sequence_length_L: Longitud de la secuencia para el Transformer
+            norm_window_multiplier: Multiplicador para la ventana de normalización
+            indicators_config_dict: Configuración para los indicadores técnicos
+            ohlcv_config_dict: Configuración para el procesamiento OHLCV
+            final_market_feature_columns: Lista de columnas de características finales
+            use_float32: Si es True, usa float32 en lugar de float64
+        """
+        self.project_id = project_id
+        self.raw_data_bucket = raw_data_bucket
+        self.processed_data_bucket = processed_data_bucket
+        
+        # Configuración para el preprocesamiento
+        self.L = sequence_length_L
+        self.norm_window = self.L * norm_window_multiplier
+        self.use_float32 = use_float32
+        
+        # Inicializar el cliente de Storage
+        self.storage_client = storage.Client(project=project_id)
+        
+        # Configuración para indicadores técnicos
+        if indicators_config_dict is None:
+            # Valores por defecto para indicadores
+            indicators_config_dict = {
+                'sma_short_period': 20,
+                'sma_long_period': 50,
+                'ema_short_period': 12,
+                'ema_long_period': 26,
+                'rsi_period': 14,
+                'rsi_scaling_mode': "0_1",
+                'atr_period': 14,
+                'macd_fast_period': 12,
+                'macd_slow_period': 26,
+                'macd_signal_period': 9,
+                'bollinger_period': 20,
+                'bollinger_std_dev': 2,
+                'cci_period': 20,
+                'stochastic_k_period': 14,
+                'stochastic_d_period': 3,
+                'stochastic_slowing_period': 3
+            }
+        
+        # Configuración para procesamiento OHLCV
+        if ohlcv_config_dict is None:
+            ohlcv_config_dict = {'volume_sma_period': 20}
+        
+        # Inicializar FeatureEngineer con la configuración
         self.feature_engineer = FeatureEngineer(
-            indicators_config=self.mcfg['indicators'],
-            ohlcv_config=self.mcfg['ohlcv_processing']
+            indicators_config=indicators_config_dict,
+            ohlcv_config=ohlcv_config_dict
         )
-        self.final_feature_columns = self.mcfg['final_market_feature_columns']
-        if len(self.final_feature_columns) != 20:  # 5 OHLCV + 15 Indicadores
-            logger.warning(f"El número de columnas finales ({len(self.final_feature_columns)}) no coincide con el esperado (20). Verifica 'final_market_feature_columns' en la config.")
+        
+        # Columnas de características finales
+        if final_market_feature_columns is None:
+            # Usar columnas por defecto que coinciden con la configuración predeterminada
+            self.final_feature_columns = [
+                'log_ret_C_O_norm', 'log_ret_H_O_norm', 'log_ret_L_O_norm',
+                'log_ret_C_C_prev_norm', 'log_ret_Vol_SMAVol_norm',
+                'sma_short_norm', 'sma_long_norm', 'ema_short_norm', 'ema_long_norm',
+                'rsi_norm', 'atr_norm', 'macd_line_norm', 'macd_signal_norm', 'macd_hist_norm',
+                'bb_upper_norm', 'bb_lower_norm', 'bb_width_norm', 'cci_norm',
+                'stoch_k_norm', 'stoch_d_norm'
+            ]
+        else:
+            self.final_feature_columns = final_market_feature_columns
+        
+        if len(self.final_feature_columns) != 20:
+            logger.warning(f"El número de columnas finales ({len(self.final_feature_columns)}) no coincide con el esperado (20). Verifica la configuración de características.")
 
-    def _load_and_prepare_base_df(self, raw_data_filename: str) -> pd.DataFrame:
+    def _load_from_gcs(self, gcs_path: str) -> pd.DataFrame:
         """
-        Carga y prepara el DataFrame base desde un archivo CSV de forma eficiente.
+        Carga datos desde Google Cloud Storage.
         
         Args:
-            raw_data_filename: Nombre del archivo CSV con datos crudos
+            gcs_path: Ruta completa al archivo en GCS
             
         Returns:
-            DataFrame preparado y limpio
+            DataFrame con los datos cargados
         """
-        filepath = os.path.join(self.raw_data_path, raw_data_filename)
-        logger.info(f"Cargando datos crudos desde: {filepath}")
+        logger.info(f"Cargando datos desde GCS: {gcs_path}")
         
-        # Comprobar si debemos usar formato Parquet si el archivo existe
-        parquet_path = f"{os.path.splitext(filepath)[0]}.parquet"
-        use_float32 = self.mcfg.get('use_float32', False)
-        dtype_config = {col: 'float32' for col in ['Open', 'High', 'Low', 'Close', 'Volume']} if use_float32 else None
+        # Determinar extensión para elegir el método de carga
+        file_ext = os.path.splitext(gcs_path)[1].lower()
+        
+        # Configurar tipos de datos para mejorar rendimiento si es necesario
+        dtype_config = {col: 'float32' for col in ['Open', 'High', 'Low', 'Close', 'Volume']} if self.use_float32 else None
         
         try:
-            # Intentar cargar desde Parquet si existe (más eficiente)
-            if os.path.exists(parquet_path) and self.mcfg.get('use_parquet_storage', False):
-                logger.info(f"Cargando datos desde Parquet: {parquet_path}")
-                df = pd.read_parquet(parquet_path)
-                logger.info(f"Datos cargados desde Parquet con éxito: {df.shape}")
-                return df
-                
-            # Si no hay Parquet, cargar desde CSV de forma optimizada
-            logger.info(f"Cargando datos desde CSV: {filepath}")
-            # Usar dtypes específicos y especificar parse_dates para eficiencia
-            df = pd.read_csv(
-                filepath,
-                parse_dates=['Open_Time'],
-                dtype=dtype_config
-            )
+            # Cargar según el tipo de archivo
+            if file_ext == '.parquet':
+                with fsspec.open(gcs_path, 'rb') as f:
+                    df = pd.read_parquet(f)
+            else:  # Por defecto, asumimos CSV
+                with fsspec.open(gcs_path, 'rb') as f:
+                    df = pd.read_csv(f, dtype=dtype_config, parse_dates=['Open_Time'])
             
-            # Asegurar que Open_Time es datetime y UTC - optimizado
-            df['Open_Time'] = pd.to_datetime(df['Open_Time'], utc=True)
-            df.set_index('Open_Time', inplace=True)
-
-            # 1. Optimizar para conjuntos de datos grandes
-            # Primero verificar si el ordenamiento/deduplicación son realmente necesarios
-            is_monotonic = df.index.is_monotonic_increasing
-            has_duplicates = df.index.duplicated().any()
-            
-            if not is_monotonic:
-                logger.warning(f"El índice de tiempo en {raw_data_filename} no está ordenado. Ordenando...")
-                df.sort_index(inplace=True)
-            
-            if has_duplicates:
-                logger.warning(f"Timestamps duplicados encontrados en {raw_data_filename}. Se eliminarán duplicados manteniendo la primera ocurrencia.")
-                df = df[~df.index.duplicated(keep='first')]
-
-            # 2. Convertir columnas OHLCV a numérico en una sola operación
-            cols_to_numeric = ['Open', 'High', 'Low', 'Close', 'Volume']
-            df[cols_to_numeric] = df[cols_to_numeric].apply(pd.to_numeric, errors='coerce')
-
-            # --- 3. Detección y Reporte de NaNs Iniciales ---
-            nan_counts_initial = df[cols_to_numeric].isnull().sum()
-            total_nans_initial = nan_counts_initial.sum()
-
-            if total_nans_initial > 0:
-                logger.warning(f"NaNs encontrados en columnas OHLCV de datos crudos ({raw_data_filename}) ANTES de la imputación:\n{nan_counts_initial[nan_counts_initial > 0]}")
-
-                # --- 4. Imputación Limitada con Forward Fill (ffill) ---
-                # Obtener el límite de ffill desde la configuración del módulo
-                ffill_limit = self.mcfg.get('raw_data_settings', {}).get('ffill_limit_for_nans', 0)  # Por defecto 0 (sin ffill)
-
-                if ffill_limit > 0:
-                    for col in cols_to_numeric:
-                        df[col].ffill(limit=ffill_limit, inplace=True)
-                    
-                    nan_counts_after_ffill = df[cols_to_numeric].isnull().sum()
-                    nans_filled_count = nan_counts_initial - nan_counts_after_ffill
-                    logger.info(f"NaNs rellenados con ffill (limit={ffill_limit}):\n{nans_filled_count[nans_filled_count > 0]}")
-                else:
-                    logger.info("ffill para NaNs en datos crudos está desactivado (ffill_limit=0).")
-
-            # --- 5. Eliminación de NaNs Restantes ---
-            # Esto se aplica si ffill está desactivado, o para NaNs que ffill no pudo rellenar (al inicio o huecos > ffill_limit)
-            nan_counts_before_dropna = df[cols_to_numeric].isnull().sum()
-            total_nans_before_dropna = nan_counts_before_dropna.sum()
-
-            if total_nans_before_dropna > 0:
-                logger.warning(f"Eliminando {total_nans_before_dropna} NaNs restantes en OHLCV (o todos los NaNs si ffill está desactivado/no los cubrió).")
-                df.dropna(subset=cols_to_numeric, inplace=True)
-            
-            # --- 6. Verificación de DataFrame Vacío ---
-            if df.empty:
-                logger.error(f"El DataFrame para {raw_data_filename} está vacío después del manejo de NaNs. No se puede continuar con este archivo.")
-                # Devolver un DataFrame vacío para que el proceso principal lo maneje (ej. saltando el archivo)
-                return pd.DataFrame() 
-
-            # --- 7. Correcciones Finales (ej. Open = 0) ---
-            # Es mejor hacerlo después de que los NaNs han sido manejados para asegurar que 'Open' existe y es numérico.
-            df['Open'] = df['Open'].replace(0, 1e-9)  # Evitar log(0) o división por cero
-            
-            logger.info(f"Datos crudos cargados y preparados inicialmente para {raw_data_filename}. Forma final del DataFrame base: {df.shape}")
+            logger.info(f"Datos cargados exitosamente: {len(df)} filas, {df.columns.tolist()}")
             return df
-
-        except FileNotFoundError:
-            logger.error(f"Archivo de datos crudos no encontrado: {filepath}")
-            raise
+            
         except Exception as e:
-            logger.error(f"Error crítico durante la carga y preparación básica de datos desde {filepath}: {e}", exc_info=True)
+            logger.error(f"Error cargando datos desde {gcs_path}: {e}")
             raise
-
-    def _apply_feature_normalization(self, df_with_features: pd.DataFrame) -> pd.DataFrame:
+    
+    def _save_to_gcs(self, data, output_gcs_path: str, is_npz: bool = True):
         """
-        Aplica normalización a las características usando operaciones vectoriales de Pandas y NumPy.
+        Guarda datos en Google Cloud Storage.
         
         Args:
-            df_with_features: DataFrame con características calculadas
-            
-        Returns:
-            DataFrame con características normalizadas
+            data: Datos a guardar (ya sea un DataFrame o un dict de arrays para NPZ)
+            output_gcs_path: Ruta completa en GCS donde guardar
+            is_npz: Si es True, guarda como archivo NPZ; si es False, guarda como CSV/Parquet
         """
-        logger.debug("Aplicando normalización/escalado final a las características usando operaciones vectorizadas.")
+        logger.info(f"Guardando datos en GCS: {output_gcs_path}")
         
-        # Crear una vista del dataframe sin copiar datos
-        df_norm = df_with_features.copy(deep=False)
-
-        # Convertir tipos a float32 para reducir uso de memoria
-        use_float32 = self.mcfg.get('use_float32', False)
-        if use_float32:
-            for col in df_norm.select_dtypes(include=['float64']).columns:
-                df_norm[col] = df_norm[col].astype(np.float32)
-
-        # Ventana para Z-score, asegurando min_periods para tener valores al inicio
-        min_p = self.norm_window // 2
-
-        # --- Normalización de características OHLCV (Z-score móvil) ---
-        # Vectorización: Procesamos todos los retornos en un solo paso
-        ohlcv_raw_cols = ['log_ret_C_O', 'log_ret_H_O', 'log_ret_L_O', 'log_ret_C_C_prev', 'log_ret_Vol_SMAVol']
-        
-        # Calculamos medias y desviaciones estándar para todos los retornos juntos
-        # Esto reduce el número de llamadas a rolling(), que son costosas
-        returns_df = df_norm[ohlcv_raw_cols]
-        mean_returns = returns_df.rolling(window=self.norm_window, min_periods=min_p).mean()
-        std_returns = returns_df.rolling(window=self.norm_window, min_periods=min_p).std()
-        
-        # Reemplazar ceros con epsilon para evitar divisiones por cero
-        std_returns = std_returns.replace(0, 1e-9)
-        
-        # Calcular z-scores en una sola operación vectorizada
-        zscore_returns = (returns_df - mean_returns) / std_returns
-        
-        # Renombrar columnas con sufijo _norm
-        zscore_returns.columns = [f'{col}_norm' for col in ohlcv_raw_cols]
-        
-        # Añadir al DataFrame principal de manera eficiente
-        for col in zscore_returns.columns:
-            df_norm[col] = zscore_returns[col]
-
-        # --- Normalización de Indicadores ---
-        # Vectorizamos operaciones comunes
-        atr = df_norm['ATR'].replace(0, 1e-9)  # Para evitar división por cero
-        close = df_norm['Close'].replace(0, 1e-9)
-
-        # Normalización de SMAs y EMAs (operaciones vectorizadas)
-        sma_ema_cols = ['SMA_short', 'SMA_long', 'EMA_short', 'EMA_long']
-        for col in sma_ema_cols:
-            df_norm[f'{col}_norm'] = (df_norm[col] - close) / atr
-
-        # RSI - Escalado con verificación de opciones
-        if self.mcfg['indicators']['rsi_scaling_mode'] == "0_1":
-            df_norm['RSI_scaled'] = df_norm['RSI'] / 100.0
-        else:  # "-1_1"
-            df_norm['RSI_scaled'] = (df_norm['RSI'] - 50.0) / 50.0
-        
-        # ATR normalizado
-        df_norm['ATR_norm'] = atr / close
-
-        # MACD - normalización vectorizada
-        macd_cols = ['MACD_line', 'MACD_signal', 'MACD_hist']
-        for col in macd_cols:
-            df_norm[f'{col}_norm'] = df_norm[col] / atr
-
-        # Bandas de Bollinger - vectorización por grupos
-        df_norm['BB_dist_upper_norm'] = (df_norm['BB_upper'] - close) / atr
-        df_norm['BB_dist_lower_norm'] = (close - df_norm['BB_lower']) / atr
-        df_norm['BB_width_norm'] = df_norm['BB_width'] / atr
-
-        # CCI - Z-score vectorizado
-        mean_cci = df_norm['CCI'].rolling(window=self.norm_window, min_periods=min_p).mean()
-        std_cci = df_norm['CCI'].rolling(window=self.norm_window, min_periods=min_p).std().replace(0, 1e-9)
-        df_norm['CCI_norm'] = (df_norm['CCI'] - mean_cci) / std_cci
-
-        # Estocástico - escalado simple
-        stoch_cols = ['STOCH_slowk', 'STOCH_slowd']
-        for col in stoch_cols:
-            df_norm[f'{col}_scaled'] = df_norm[col] / 100.0
-        
-        # Seleccionar solo las columnas finales especificadas en la configuración
         try:
-            df_final_selection = df_norm[self.final_feature_columns]
-        except KeyError as e:
-            missing = list(set(self.final_feature_columns) - set(df_norm.columns))
-            logger.error(f"Una o más columnas finales no se encontraron después de la normalización: {missing}. Error: {e}")
+            # Extraer bucket y blob de la URI de GCS
+            bucket_name = output_gcs_path.replace("gs://", "").split("/")[0]
+            blob_name = output_gcs_path.replace(f"gs://{bucket_name}/", "")
+            
+            bucket = self.storage_client.bucket(bucket_name)
+            blob = bucket.blob(blob_name)
+            
+            # Guardar los datos según el tipo
+            if is_npz:
+                # Para NPZ, primero guardar en un archivo temporal
+                with tempfile.NamedTemporaryFile() as temp:
+                    np.savez_compressed(temp.name, **data)
+                    # Asegurarse de que se escriba todo
+                    temp.flush()
+                    # Reposicionar al inicio del archivo
+                    temp.seek(0)
+                    # Subir a GCS
+                    blob.upload_from_file(temp)
+            else:
+                # Para DataFrame, guardar según la extensión
+                if output_gcs_path.endswith('.parquet'):
+                    with tempfile.NamedTemporaryFile() as temp:
+                        data.to_parquet(temp.name)
+                        temp.flush()
+                        temp.seek(0)
+                        blob.upload_from_file(temp)
+                else:  # Por defecto, CSV
+                    blob.upload_from_string(data.to_csv(index=False), 'text/csv')
+            
+            logger.info(f"Datos guardados exitosamente en: {output_gcs_path}")
+            return output_gcs_path
+            
+        except Exception as e:
+            logger.error(f"Error guardando datos en {output_gcs_path}: {e}")
             raise
-        return df_final_selection
-
-    def _create_sequences(self, df_final_features: pd.DataFrame) -> tuple:
+    
+    def create_z_normalized_sequences(self, df: pd.DataFrame, feature_columns: list) -> tuple:
         """
-        Crea secuencias de datos a partir del DataFrame procesado utilizando operaciones vectorizadas.
+        Crea secuencias normalizadas con Z-score para el entrenamiento.
         
         Args:
-            df_final_features: DataFrame con características finales
+            df: DataFrame con datos de características
+            feature_columns: Lista de columnas a incluir en las secuencias
             
         Returns:
-            Tupla con arrays de secuencias y timestamps
+            Tupla de (secuencias_X, timestamps) para entrenamiento
         """
-        logger.info(f"Creando secuencias de longitud L={self.L} con operaciones vectorizadas.")
+        logger.info(f"Creando secuencias normalizadas (L={self.L}, ventana_norm={self.norm_window})")
         
-        # Convertir a NumPy array para eficiencia
-        data_values = df_final_features.values
-        timestamps_values = df_final_features.index.to_numpy()
-
-        num_samples = len(data_values) - self.L + 1
+        # Asegurar que solo usamos las columnas de características solicitadas
+        if not all(col in df.columns for col in feature_columns):
+            missing = [col for col in feature_columns if col not in df.columns]
+            logger.error(f"Columnas faltantes en el DataFrame: {missing}")
+            raise ValueError(f"Columnas faltantes en el DataFrame: {missing}")
         
-        if num_samples <= 0:
-            logger.warning("No hay suficientes datos para crear ni una sola secuencia después del preprocesamiento y recorte de NaNs.")
-            return np.array([]), np.array([])
-
-        # Método vectorizado para crear secuencias
-        # Crear un array 3D directamente con la forma correcta (muestras, longitud de secuencia, features)
-        n_features = data_values.shape[1]
+        # Seleccionar solo las características necesarias y timestamps
+        data = df[feature_columns].values
+        timestamps = df['Open_Time'].values
         
-        # Preasignar array para mejor rendimiento, usando float32 si está configurado
-        dtype = np.float32 if self.mcfg.get('use_float32', False) else np.float64
-        X_sequences = np.zeros((num_samples, self.L, n_features), dtype=dtype)
+        # Si se especifica usar float32, convertir los datos
+        if self.use_float32:
+            data = data.astype(np.float32)
         
-        # Para cada posición en la secuencia, copiar los datos de manera eficiente
-        for i in range(self.L):
-            X_sequences[:, i, :] = data_values[i:i+num_samples]
+        total_samples = len(data)
+        valid_indices = []
+        X_sequences = []
+        ts_sequences = []
+        
+        logger.info(f"Datos originales: {data.shape}")
+        
+        # Crear secuencias normalizadas con Z-score
+        for i in range(self.norm_window, total_samples - self.L + 1):
+            # Ventana de normalización (mira hacia atrás desde la posición actual)
+            norm_window_data = data[max(0, i - self.norm_window):i]
             
-        # Extraer timestamps de las últimas posiciones de cada secuencia
-        ts_sequences = timestamps_values[self.L-1:self.L-1+num_samples]
+            # Calcular media y desviación estándar para cada característica
+            # usando solo la ventana de normalización
+            means = np.mean(norm_window_data, axis=0)
+            stds = np.std(norm_window_data, axis=0)
+            
+            # Reemplazar ceros en stds para evitar divisiones por cero
+            stds = np.where(stds == 0, 1e-8, stds)
+            
+            # Secuencia actual a normalizar (L timesteps)
+            current_sequence = data[i:i+self.L]
+            
+            # Normalizar la secuencia usando la media y std de la ventana
+            normalized_sequence = (current_sequence - means) / stds
+            
+            X_sequences.append(normalized_sequence)
+            ts_sequences.append(timestamps[i:i+self.L])
+            valid_indices.append(i)
+        
+        if not X_sequences:
+            logger.error(f"No se pudieron crear secuencias. Verifica que el dataset tenga suficientes datos (>= {self.norm_window + self.L})")
+            raise ValueError(f"No se pudieron crear secuencias. Dataset insuficiente.")
+        
+        # Convertir a arrays de numpy
+        X_sequences = np.array(X_sequences)
+        ts_sequences = np.array(ts_sequences)
+        
+        logger.info(f"Secuencias creadas: {X_sequences.shape}")
         
         return X_sequences, ts_sequences
-
-    def process_data(self, raw_data_filename: str, output_filename_base: str = None):
-        logger.info(f"Iniciando preprocesamiento para el archivo: {raw_data_filename}")
+    
+    def process_data(self, raw_data_gcs_path: str, output_gcs_prefix: str = None,
+                 output_filename_base: str = None, extra_metadata: dict = None) -> str:
+        """
+        Procesa datos crudos y genera secuencias para entrenamiento.
+        
+        Args:
+            raw_data_gcs_path: Ruta completa al archivo de datos crudos en GCS
+            output_gcs_prefix: Prefijo opcional para la ruta de salida en GCS
+            output_filename_base: Nombre base para el archivo de salida (si None, se infiere del nombre original)
+            extra_metadata: Diccionario con metadatos adicionales para incluir en el archivo NPZ
+            
+        Returns:
+            URI de GCS donde se guardaron los datos procesados
+        """
+        # Preparar la ruta de salida
+        if output_gcs_prefix is None:
+            output_gcs_prefix = f"gs://{self.processed_data_bucket}/data"
+        
+        # Extraer información básica del nombre del archivo para la salida
+        filename = os.path.basename(raw_data_gcs_path)
+        symbol = filename.split('_')[0]  # Asumimos formato BTCUSDT_FUTURES_...
         
         if output_filename_base is None:
-            output_filename_base = os.path.splitext(raw_data_filename)[0]
-            
-        # 1. Cargar y preparación básica
-        df_base = self._load_and_prepare_base_df(raw_data_filename)
-        if df_base.empty:
-            return
-
-        # 2. Ingeniería de Características (cálculo de indicadores y features OHLCV)
-        df_with_features = self.feature_engineer.add_ohlcv_features(df_base)
-        df_with_features = self.feature_engineer.add_technical_indicators(df_with_features)
+            output_filename_base = f"{symbol}_processed"
         
-        # 3. Aplicar Normalización/Escalado Final
-        df_normalized_features = self._apply_feature_normalization(df_with_features)
-
-        # 4. Eliminar NaNs inducidos por lookback de indicadores y ventanas de normalización
-        # El primer índice válido será aquel donde todas las features tengan un valor no-NaN.
-        # Esto ocurre después del mayor periodo de lookback.
-        df_cleaned = df_normalized_features.dropna()
-        if df_cleaned.empty:
-            logger.warning("El DataFrame está vacío después de eliminar NaNs (pos-normalización). No se pueden crear secuencias.")
-            return
-        
-        logger.info(f"Forma del DataFrame después de la limpieza de NaNs y selección de features finales: {df_cleaned.shape}")
-
-        # 5. Creación de Secuencias
-        X_sequences, ts_sequences = self._create_sequences(df_cleaned)
-        
-        if X_sequences.shape[0] == 0:
-             logger.warning("No se generaron secuencias válidas.")
-             return
-
-        # 6. Guardado de Datos Procesados
-        output_filename = f"{output_filename_base}_L{self.L}_market_features.npz"
-        output_path = os.path.join(self.processed_data_path, output_filename)
         try:
-            # Guardamos también las series originales de 'Close' y 'ATR' sin normalizar para cálculos más precisos
-            close_series = df_with_features['Close'].values
-            atr_series = df_with_features['ATR'].values
+            # 1. Cargar y preparar los datos base
+            df = self._load_from_gcs(raw_data_gcs_path)
             
-            # Aseguramos que tengamos los mismos puntos de tiempo que en las secuencias
-            # Tomamos los últimos valores de cada secuencia (el punto actual para cada secuencia)
-            seq_count = X_sequences.shape[0]
-            close_for_sequences = np.array([close_series[i + self.L - 1] for i in range(seq_count)], dtype=np.float32)
-            atr_for_sequences = np.array([atr_series[i + self.L - 1] for i in range(seq_count)], dtype=np.float32)
+            # 2. Aplicar ingeniería de características
+            logger.info("Aplicando ingeniería de características")
+            df_features = self.feature_engineer.create_all_features(df)
             
-            # Guardamos en formato comprimido
-            np.savez_compressed(
-                output_path, 
-                X_market=X_sequences, 
-                timestamps=ts_sequences,
-                close_prices=close_for_sequences,
-                atr_values=atr_for_sequences,
-                feature_names=np.array(self.final_feature_columns)
+            # 3. Limpiar y preparar para secuencias
+            # Eliminar filas con NaN después de la ingeniería de características
+            df_features.dropna(inplace=True)
+            logger.info(f"Datos después de eliminar NaN: {len(df_features)} filas")
+            
+            # 4. Crear secuencias normalizadas
+            X_sequences, ts_sequences = self.create_z_normalized_sequences(
+                df_features, self.final_feature_columns
             )
-            logger.info(f"Secuencias procesadas ({X_sequences.shape[0]} muestras de forma {X_sequences.shape}) guardadas en: {output_path}")
-            logger.info(f"También se guardaron series de Close y ATR sin normalizar para cálculos precisos de slippage y liquidación")
             
-            # Guardar también en formato Parquet para datasets muy grandes
-            if self.mcfg.get('use_parquet_storage', False) and len(df_cleaned) > 100000:
-                import pyarrow as pa
-                import pyarrow.parquet as pq
-                
-                parquet_filename = f"{output_filename_base}_processed.parquet"
-                parquet_path = os.path.join(self.processed_data_path, parquet_filename)
-                
-                # Guardamos el DataFrame completo en formato Parquet
-                df_cleaned.to_parquet(parquet_path, compression='snappy')
-                logger.info(f"Datos también guardados en formato Parquet para mejor eficiencia: {parquet_path}")
+            # 5. Guardar secuencias procesadas en GCS como NPZ
+            output_npz_path = f"{output_gcs_prefix}/{output_filename_base}_L{self.L}_market_features.npz"
+            
+            # Estructura de datos a guardar
+            data_dict = {
+                'X_market': X_sequences,
+                'timestamps': ts_sequences,
+                'feature_names': np.array(self.final_feature_columns)
+            }
+            
+            # Agregar metadatos adicionales si se proporcionan
+            if extra_metadata is not None:
+                for key, value in extra_metadata.items():
+                    # Convertir valores a arrays de NumPy si es necesario
+                    if isinstance(value, (list, tuple)):
+                        data_dict[key] = np.array(value)
+                    elif isinstance(value, (int, float, str, bool)):
+                        data_dict[key] = np.array([value])
+                    else:
+                        data_dict[key] = value
+                        
+            # Guardar en GCS
+            self._save_to_gcs(data_dict, output_npz_path, is_npz=True)
+            logger.info(f"Secuencias guardadas en: {output_npz_path}")
+            
+            return output_npz_path
+            
         except Exception as e:
-            logger.error(f"Error guardando las secuencias procesadas: {e}")
+            logger.error(f"Error procesando datos: {e}")
             raise

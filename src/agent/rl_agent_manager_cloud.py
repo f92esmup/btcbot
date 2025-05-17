@@ -503,60 +503,174 @@ class RLAgentManagerCloud:
         
         return eval_metrics
     
-    def save_model(self, gcs_path: str):
+    def save_model(self, gcs_path: str, save_replay_buffer: bool = False) -> str:
         """
-        Guarda el modelo en GCS.
+        Guarda el modelo entrenado directamente en Google Cloud Storage.
         
         Args:
             gcs_path: Ruta completa en GCS donde guardar el modelo
+            save_replay_buffer: Si es True, también guarda el buffer de replay
+            
+        Returns:
+            URI completa de GCS donde se guardó el modelo
         """
         if self.model is None:
-            raise ValueError("No hay modelo para guardar")
+            raise ValueError("No hay modelo para guardar. Entrena primero.")
         
-        # Guardar primero en una ubicación local temporal
-        temp_file = "/tmp/model_tmp.zip"
-        self.model.save(temp_file)
+        if self.storage_client is None:
+            raise ValueError("No se configuró un cliente de GCS. Proporciona models_bucket al inicializar.")
         
-        # Subir a GCS
-        self._upload_to_gcs(temp_file, gcs_path)
+        logger.info(f"Guardando modelo en GCS: {gcs_path}")
         
-        return gcs_path
-    
-    def load_model(self, model_path: str):
+        # Extraer bucket y ruta del blob de la URI de GCS
+        gcs_path = gcs_path.replace("gs://", "")
+        bucket_name = gcs_path.split("/")[0]
+        blob_path = "/".join(gcs_path.split("/")[1:])
+        
+        # Si la ruta termina con /, agregar un nombre de archivo por defecto
+        if blob_path.endswith("/") or not blob_path:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            blob_path = f"{blob_path.rstrip('/')}/sac_trading_model_{timestamp}.zip"
+        
+        # Guardar primero en un archivo temporal
+        with tempfile.TemporaryDirectory() as temp_dir:
+            local_path = f"{temp_dir}/model.zip"
+            
+            # Guardar el modelo
+            self.model.save(local_path)
+            
+            # Subir a GCS
+            bucket = self.storage_client.bucket(bucket_name)
+            blob = bucket.blob(blob_path)
+            blob.upload_from_filename(local_path)
+            
+            # Si se solicita, guardar también el buffer de replay
+            if save_replay_buffer and hasattr(self.model, 'replay_buffer'):
+                buffer_blob_path = f"{os.path.splitext(blob_path)[0]}_buffer.pkl"
+                buffer_local_path = f"{temp_dir}/replay_buffer.pkl"
+                self.model.save_replay_buffer(buffer_local_path)
+                
+                buffer_blob = bucket.blob(buffer_blob_path)
+                buffer_blob.upload_from_filename(buffer_local_path)
+                logger.info(f"Buffer de replay guardado en: gs://{bucket_name}/{buffer_blob_path}")
+        
+        uri = f"gs://{bucket_name}/{blob_path}"
+        logger.info(f"Modelo guardado exitosamente en: {uri}")
+        return uri
+
+    def load_model(self, gcs_path: str, load_replay_buffer: bool = False) -> None:
         """
-        Carga un modelo desde una ubicación local o GCS.
+        Carga un modelo previamente entrenado desde Google Cloud Storage.
         
         Args:
-            model_path: Ruta al modelo (local o GCS)
+            gcs_path: Ruta completa en GCS al modelo guardado (.zip)
+            load_replay_buffer: Si es True, intenta cargar el buffer de replay
         """
-        if self.env is None:
-            raise ValueError("Entorno no inicializado. Llama a setup_agent() primero.")
+        if self.storage_client is None:
+            raise ValueError("No se configuró un cliente de GCS. Proporciona models_bucket al inicializar.")
         
-        try:
-            if model_path.startswith("gs://"):
-                # Descargar de GCS a ubicación temporal
-                temp_file = "/tmp/model_from_gcs.zip"
+        logger.info(f"Cargando modelo desde GCS: {gcs_path}")
+        
+        # Extraer bucket y ruta del blob de la URI de GCS
+        gcs_path = gcs_path.replace("gs://", "")
+        bucket_name = gcs_path.split("/")[0]
+        blob_path = "/".join(gcs_path.split("/")[1:])
+        
+        # Descargar a un archivo temporal
+        with tempfile.TemporaryDirectory() as temp_dir:
+            local_path = f"{temp_dir}/model.zip"
+            
+            # Descargar desde GCS
+            bucket = self.storage_client.bucket(bucket_name)
+            blob = bucket.blob(blob_path)
+            blob.download_to_filename(local_path)
+            
+            # Cargar el modelo (se necesita un entorno configurado)
+            if self.env is None:
+                raise ValueError("Entorno no configurado. Llama a setup_agent() primero.")
+            
+            self.model = SAC.load(local_path, env=self.env)
+            logger.info(f"Modelo cargado exitosamente desde: {gcs_path}")
+            
+            # Intentar cargar el buffer de replay si se solicita
+            if load_replay_buffer and hasattr(self.model, 'replay_buffer'):
+                buffer_blob_path = f"{os.path.splitext(blob_path)[0]}_buffer.pkl"
+                buffer_local_path = f"{temp_dir}/replay_buffer.pkl"
                 
-                # Extraer bucket y blob de la URI de GCS
-                gcs_path = model_path.replace("gs://", "")
-                bucket_name = gcs_path.split("/")[0]
-                blob_name = "/".join(gcs_path.split("/")[1:])
+                try:
+                    buffer_blob = bucket.blob(buffer_blob_path)
+                    buffer_blob.download_to_filename(buffer_local_path)
+                    self.model.load_replay_buffer(buffer_local_path)
+                    logger.info(f"Buffer de replay cargado desde: gs://{bucket_name}/{buffer_blob_path}")
+                except Exception as e:
+                    logger.warning(f"No se pudo cargar el buffer de replay: {e}")
+                    
+    def export_model_for_serving(self, gcs_path: str, version: str = None) -> str:
+        """
+        Exporta el modelo para servir con TorchServe o ONNX Runtime.
+        
+        Args:
+            gcs_path: Ruta GCS donde guardar el modelo exportado
+            version: Versión del modelo (opcional)
+            
+        Returns:
+            URI de GCS donde se guardaron los archivos del modelo
+        """
+        if self.model is None:
+            raise ValueError("No hay modelo para exportar. Entrena primero.")
+        
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        version_str = version if version else timestamp
+        
+        # Asegurarse de que GCS path no tenga el prefijo gs://
+        if gcs_path.startswith("gs://"):
+            gcs_path = gcs_path[5:]
+        
+        # Construir la ruta final
+        if gcs_path.endswith("/"):
+            export_path = f"{gcs_path}model_v{version_str}"
+        else:
+            export_path = f"{gcs_path}/model_v{version_str}"
+            
+        logger.info(f"Exportando modelo para servir en: {export_path}")
+        
+        with tempfile.TemporaryDirectory() as temp_dir:
+            # Extraer y guardar la política de actor
+            policy = self.model.policy
+            actor_path = f"{temp_dir}/actor.pt"
+            
+            # Extraer y guardar el actor (equivalente a la política en SAC)
+            if hasattr(policy, "actor") and TORCH_AVAILABLE:
+                torch.save(policy.actor.state_dict(), actor_path)
                 
-                bucket = self.storage_client.bucket(bucket_name)
-                blob = bucket.blob(blob_name)
+                # Subir a GCS
+                if self.storage_client is not None:
+                    bucket_name = export_path.split("/")[0]
+                    blob_path = "/".join(export_path.split("/")[1:]) + "/actor.pt"
+                    
+                    bucket = self.storage_client.bucket(bucket_name)
+                    blob = bucket.blob(blob_path)
+                    blob.upload_from_filename(actor_path)
+                    
+                    # Guardar también metadatos: estructura del modelo, dimensiones, etc.
+                    metadata = {
+                        "model_type": "SAC",
+                        "version": version_str,
+                        "timestamp": timestamp,
+                        "input_dim": {
+                            "market_features": self.env.observation_space["market_features"].shape,
+                            "portfolio_features": self.env.observation_space["portfolio_features"].shape
+                        },
+                        "action_dim": self.env.action_space.shape[0],
+                        "action_range": [float(self.env.action_space.low[0]), float(self.env.action_space.high[0])],
+                        "transformer_config": self.policy_kwargs.get("features_extractor_kwargs", {})
+                    }
+                    
+                    metadata_blob = bucket.blob(blob_path.replace("actor.pt", "metadata.json"))
+                    metadata_blob.upload_from_string(json.dumps(metadata, indent=2))
+                    
+                    logger.info(f"Modelo exportado exitosamente a: gs://{bucket_name}/{blob_path}")
+                    return f"gs://{bucket_name}/{blob_path.rsplit('/', 1)[0]}"
                 
-                blob.download_to_filename(temp_file)
-                logger.info(f"Modelo descargado desde GCS: {model_path} → {temp_file}")
-                
-                # Cargar desde la ubicación temporal
-                self.model = SAC.load(temp_file, env=self.env, device=self.device)
             else:
-                # Cargar directamente desde archivo local
-                self.model = SAC.load(model_path, env=self.env, device=self.device)
-            
-            logger.info(f"Modelo cargado desde: {model_path}")
-            return True
-            
-        except Exception as e:
-            logger.error(f"Error cargando modelo desde {model_path}: {e}")
-            return False
+                raise ValueError("No se puede exportar: el modelo no tiene un actor compatible o PyTorch no está disponible.")
