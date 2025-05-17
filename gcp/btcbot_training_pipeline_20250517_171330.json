@@ -1,0 +1,938 @@
+{
+  "components": {
+    "comp-acquire-data-component": {
+      "executorLabel": "exec-acquire-data-component",
+      "inputDefinitions": {
+        "parameters": {
+          "api_key_secret_name": {
+            "parameterType": "STRING"
+          },
+          "api_secret_secret_name": {
+            "parameterType": "STRING"
+          },
+          "interval": {
+            "defaultValue": "1h",
+            "isOptional": true,
+            "parameterType": "STRING"
+          },
+          "output_gcs_prefix": {
+            "isOptional": true,
+            "parameterType": "STRING"
+          },
+          "project_id": {
+            "parameterType": "STRING"
+          },
+          "raw_data_bucket": {
+            "parameterType": "STRING"
+          },
+          "start_date": {
+            "defaultValue": "2020-01-01",
+            "isOptional": true,
+            "parameterType": "STRING"
+          },
+          "symbol": {
+            "defaultValue": "BTCUSDT",
+            "isOptional": true,
+            "parameterType": "STRING"
+          }
+        }
+      },
+      "outputDefinitions": {
+        "artifacts": {
+          "output_dataset": {
+            "artifactType": {
+              "schemaTitle": "system.Dataset",
+              "schemaVersion": "0.0.1"
+            }
+          }
+        }
+      }
+    },
+    "comp-conditional-deployment": {
+      "executorLabel": "exec-conditional-deployment",
+      "inputDefinitions": {
+        "artifacts": {
+          "evaluation_metrics": {
+            "artifactType": {
+              "schemaTitle": "system.Artifact",
+              "schemaVersion": "0.0.1"
+            }
+          },
+          "model_id": {
+            "artifactType": {
+              "schemaTitle": "system.Model",
+              "schemaVersion": "0.0.1"
+            }
+          }
+        },
+        "parameters": {
+          "accelerator_count": {
+            "defaultValue": 0.0,
+            "isOptional": true,
+            "parameterType": "NUMBER_INTEGER"
+          },
+          "accelerator_type": {
+            "isOptional": true,
+            "parameterType": "STRING"
+          },
+          "deploy_all": {
+            "defaultValue": false,
+            "isOptional": true,
+            "parameterType": "BOOLEAN"
+          },
+          "machine_type": {
+            "defaultValue": "n1-standard-2",
+            "isOptional": true,
+            "parameterType": "STRING"
+          },
+          "max_drawdown_threshold": {
+            "defaultValue": -0.2,
+            "isOptional": true,
+            "parameterType": "NUMBER_DOUBLE"
+          },
+          "min_sharpe_ratio": {
+            "defaultValue": 0.5,
+            "isOptional": true,
+            "parameterType": "NUMBER_DOUBLE"
+          },
+          "min_sortino_ratio": {
+            "defaultValue": 0.75,
+            "isOptional": true,
+            "parameterType": "NUMBER_DOUBLE"
+          },
+          "min_win_rate": {
+            "defaultValue": 0.5,
+            "isOptional": true,
+            "parameterType": "NUMBER_DOUBLE"
+          },
+          "project_id": {
+            "parameterType": "STRING"
+          },
+          "region": {
+            "parameterType": "STRING"
+          },
+          "traffic_percentage": {
+            "defaultValue": 0.0,
+            "isOptional": true,
+            "parameterType": "NUMBER_INTEGER"
+          }
+        }
+      },
+      "outputDefinitions": {
+        "artifacts": {
+          "deployed_model": {
+            "artifactType": {
+              "schemaTitle": "system.Model",
+              "schemaVersion": "0.0.1"
+            }
+          }
+        }
+      }
+    },
+    "comp-evaluate-model": {
+      "executorLabel": "exec-evaluate-model",
+      "inputDefinitions": {
+        "artifacts": {
+          "input_model": {
+            "artifactType": {
+              "schemaTitle": "system.Model",
+              "schemaVersion": "0.0.1"
+            }
+          },
+          "model_uri": {
+            "artifactType": {
+              "schemaTitle": "system.Model",
+              "schemaVersion": "0.0.1"
+            }
+          },
+          "processed_data_uri": {
+            "artifactType": {
+              "schemaTitle": "system.Dataset",
+              "schemaVersion": "0.0.1"
+            }
+          }
+        },
+        "parameters": {
+          "evaluation_bucket": {
+            "parameterType": "STRING"
+          },
+          "num_episodes": {
+            "defaultValue": 10.0,
+            "isOptional": true,
+            "parameterType": "NUMBER_INTEGER"
+          },
+          "project_id": {
+            "parameterType": "STRING"
+          }
+        }
+      },
+      "outputDefinitions": {
+        "artifacts": {
+          "evaluation_metrics": {
+            "artifactType": {
+              "schemaTitle": "system.Artifact",
+              "schemaVersion": "0.0.1"
+            }
+          }
+        }
+      }
+    },
+    "comp-preprocess-data": {
+      "executorLabel": "exec-preprocess-data",
+      "inputDefinitions": {
+        "artifacts": {
+          "input_dataset": {
+            "artifactType": {
+              "schemaTitle": "system.Dataset",
+              "schemaVersion": "0.0.1"
+            },
+            "isOptional": true
+          }
+        },
+        "parameters": {
+          "lookback_window": {
+            "defaultValue": 96.0,
+            "isOptional": true,
+            "parameterType": "NUMBER_INTEGER"
+          },
+          "processed_data_bucket": {
+            "parameterType": "STRING"
+          },
+          "project_id": {
+            "parameterType": "STRING"
+          },
+          "raw_data_bucket": {
+            "parameterType": "STRING"
+          },
+          "symbol": {
+            "defaultValue": "BTCUSDT",
+            "isOptional": true,
+            "parameterType": "STRING"
+          },
+          "timeframe": {
+            "defaultValue": "1h",
+            "isOptional": true,
+            "parameterType": "STRING"
+          }
+        }
+      },
+      "outputDefinitions": {
+        "artifacts": {
+          "output_dataset": {
+            "artifactType": {
+              "schemaTitle": "system.Dataset",
+              "schemaVersion": "0.0.1"
+            }
+          }
+        }
+      }
+    },
+    "comp-register-model": {
+      "executorLabel": "exec-register-model",
+      "inputDefinitions": {
+        "artifacts": {
+          "input_model": {
+            "artifactType": {
+              "schemaTitle": "system.Model",
+              "schemaVersion": "0.0.1"
+            }
+          },
+          "model_artifact_uri": {
+            "artifactType": {
+              "schemaTitle": "system.Model",
+              "schemaVersion": "0.0.1"
+            }
+          }
+        },
+        "parameters": {
+          "labels": {
+            "isOptional": true,
+            "parameterType": "STRUCT"
+          },
+          "model_description": {
+            "parameterType": "STRING"
+          },
+          "model_display_name": {
+            "parameterType": "STRING"
+          },
+          "project_id": {
+            "parameterType": "STRING"
+          },
+          "region": {
+            "parameterType": "STRING"
+          },
+          "serving_container_image_uri": {
+            "defaultValue": "us-docker.pkg.dev/vertex-ai/prediction/sklearn-cpu.1-0:latest",
+            "isOptional": true,
+            "parameterType": "STRING"
+          }
+        }
+      },
+      "outputDefinitions": {
+        "artifacts": {
+          "registered_model": {
+            "artifactType": {
+              "schemaTitle": "system.Model",
+              "schemaVersion": "0.0.1"
+            }
+          }
+        }
+      }
+    },
+    "comp-train-model": {
+      "executorLabel": "exec-train-model",
+      "inputDefinitions": {
+        "artifacts": {
+          "input_dataset": {
+            "artifactType": {
+              "schemaTitle": "system.Dataset",
+              "schemaVersion": "0.0.1"
+            }
+          },
+          "processed_data_uri": {
+            "artifactType": {
+              "schemaTitle": "system.Dataset",
+              "schemaVersion": "0.0.1"
+            }
+          }
+        },
+        "parameters": {
+          "gpu_count": {
+            "defaultValue": 1.0,
+            "isOptional": true,
+            "parameterType": "NUMBER_INTEGER"
+          },
+          "gpu_type": {
+            "defaultValue": "NVIDIA_TESLA_T4",
+            "isOptional": true,
+            "parameterType": "STRING"
+          },
+          "model_staging_bucket": {
+            "parameterType": "STRING"
+          },
+          "project_id": {
+            "parameterType": "STRING"
+          },
+          "total_timesteps": {
+            "defaultValue": 1000000.0,
+            "isOptional": true,
+            "parameterType": "NUMBER_INTEGER"
+          },
+          "use_gpu": {
+            "defaultValue": false,
+            "isOptional": true,
+            "parameterType": "BOOLEAN"
+          }
+        }
+      },
+      "outputDefinitions": {
+        "artifacts": {
+          "output_model": {
+            "artifactType": {
+              "schemaTitle": "system.Model",
+              "schemaVersion": "0.0.1"
+            }
+          }
+        }
+      }
+    }
+  },
+  "deploymentSpec": {
+    "executors": {
+      "exec-acquire-data-component": {
+        "container": {
+          "args": [
+            "--executor_input",
+            "{{$}}",
+            "--function_to_execute",
+            "acquire_data_component"
+          ],
+          "command": [
+            "sh",
+            "-c",
+            "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip || python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet --no-warn-script-location 'kfp==2.13.0' '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"'  &&  python3 -m pip install --quiet --no-warn-script-location 'google-cloud-storage' 'google-cloud-secretmanager' 'python-binance' && \"$0\" \"$@\"\n",
+            "sh",
+            "-ec",
+            "program_path=$(mktemp -d)\n\nprintf \"%s\" \"$0\" > \"$program_path/ephemeral_component.py\"\n_KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         \"$program_path/ephemeral_component.py\"                         \"$@\"\n",
+            "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import *\n\ndef acquire_data_component(\n    project_id: str,\n    raw_data_bucket: str,\n    api_key_secret_name: str,\n    api_secret_secret_name: str,\n    output_dataset: Output[Dataset],\n    symbol: str = \"BTCUSDT\",\n    interval: str = \"1h\",\n    start_date: str = \"2020-01-01\",\n    output_gcs_prefix: str = None\n):\n    \"\"\"\n    Componente para descargar datos hist\u00f3ricos de Binance y guardarlos en GCS.\n    Este componente sustituye al servicio de adquisici\u00f3n de datos que antes\n    se ejecutaba en Cloud Run.\n    \"\"\"\n    import os\n    import logging\n    import sys\n    from datetime import datetime\n\n    # Configurar logging\n    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')\n    logger = logging.getLogger(\"acquire-data-component\")\n\n    # A\u00f1adir la ruta de la aplicaci\u00f3n al PYTHONPATH\n    sys.path.append(\"/app\")\n\n    # Importar el descargador de datos\n    from src.data.binance_futures_downloader_cloud import BinanceFuturesDownloaderCloud\n\n    logger.info(f\"Iniciando descarga de datos para {symbol}, intervalo {interval}, desde {start_date}\")\n\n    # Crear el cliente de descarga\n    downloader = BinanceFuturesDownloaderCloud(\n        project_id=project_id,\n        api_key_secret_name=api_key_secret_name,\n        api_secret_secret_name=api_secret_secret_name,\n        bucket_name=raw_data_bucket\n    )\n\n    # Descargar datos\n    logger.info(\"Iniciando descarga de datos hist\u00f3ricos...\")\n    output_uri = downloader.download_historical_data(\n        symbol=symbol,\n        interval=interval,\n        start_date=start_date,\n        gcs_prefix=output_gcs_prefix\n    )\n\n    logger.info(f\"Datos descargados exitosamente en: {output_uri}\")\n\n    # Guardar la referencia del dataset para los siguientes componentes\n    output_dataset.uri = output_uri\n    output_dataset.metadata = {\n        \"symbol\": symbol,\n        \"interval\": interval,\n        \"start_date\": start_date,\n        \"downloaded_at\": datetime.now().isoformat()\n    }\n\n    return output_uri\n\n"
+          ],
+          "image": "europe-southwest1-docker.pkg.dev/btcbot276299/btcbot-docker-repo/btcbot-pipeline"
+        }
+      },
+      "exec-conditional-deployment": {
+        "container": {
+          "args": [
+            "--executor_input",
+            "{{$}}",
+            "--function_to_execute",
+            "conditional_deployment"
+          ],
+          "command": [
+            "sh",
+            "-c",
+            "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip || python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet --no-warn-script-location 'kfp==2.13.0' '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"'  &&  python3 -m pip install --quiet --no-warn-script-location 'google-cloud-aiplatform' && \"$0\" \"$@\"\n",
+            "sh",
+            "-ec",
+            "program_path=$(mktemp -d)\n\nprintf \"%s\" \"$0\" > \"$program_path/ephemeral_component.py\"\n_KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         \"$program_path/ephemeral_component.py\"                         \"$@\"\n",
+            "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import *\n\ndef conditional_deployment(\n    project_id: str,\n    region: str,\n    model_id: Input[Model],\n    evaluation_metrics: Input[Artifact],\n    deployed_model: Output[Model],\n    min_sharpe_ratio: float = 0.5,\n    min_sortino_ratio: float = 0.75,\n    max_drawdown_threshold: float = -0.2,\n    min_win_rate: float = 0.5,\n    machine_type: str = \"n1-standard-2\",\n    accelerator_type: str = None,\n    accelerator_count: int = 0,\n    traffic_percentage: int = 0,\n    deploy_all: bool = False\n):\n    \"\"\"\n    Componente para desplegar condicionalmente el modelo si cumple con los criterios.\n    \"\"\"\n    from google.cloud import aiplatform\n    import json\n\n    # Inicializar el cliente de Vertex AI\n    aiplatform.init(project=project_id, location=region)\n\n    # Obtener m\u00e9tricas de evaluaci\u00f3n\n    sharpe_ratio = evaluation_metrics.metadata.get(\"sharpe_ratio\", 0)\n    sortino_ratio = evaluation_metrics.metadata.get(\"sortino_ratio\", 0)\n    max_drawdown = evaluation_metrics.metadata.get(\"max_drawdown\", -1)\n    win_rate = evaluation_metrics.metadata.get(\"win_rate\", 0)\n\n    # Verificar si el modelo cumple con los criterios\n    meets_sharpe = sharpe_ratio >= min_sharpe_ratio\n    meets_sortino = sortino_ratio >= min_sortino_ratio\n    meets_drawdown = max_drawdown >= max_drawdown_threshold\n    meets_win_rate = win_rate >= min_win_rate\n\n    # Preparar registro de criterios\n    deployment_criteria = {\n        \"sharpe_ratio\": {\"value\": sharpe_ratio, \"threshold\": min_sharpe_ratio, \"passed\": meets_sharpe},\n        \"sortino_ratio\": {\"value\": sortino_ratio, \"threshold\": min_sortino_ratio, \"passed\": meets_sortino},\n        \"max_drawdown\": {\"value\": max_drawdown, \"threshold\": max_drawdown_threshold, \"passed\": meets_drawdown},\n        \"win_rate\": {\"value\": win_rate, \"threshold\": min_win_rate, \"passed\": meets_win_rate}\n    }\n\n    # Determinar si se debe desplegar\n    should_deploy = deploy_all or (meets_sharpe and meets_sortino and meets_drawdown and meets_win_rate)\n\n    # Preparar configuraci\u00f3n de acelerador (GPU) si se proporciona\n    machine_spec = {\"machine_type\": machine_type}\n    if accelerator_type and accelerator_count > 0:\n        machine_spec[\"accelerator_type\"] = accelerator_type\n        machine_spec[\"accelerator_count\"] = accelerator_count\n\n    if should_deploy:\n        # Obtener el ID del modelo desde la entrada\n        model_id_str = model_id.metadata.get(\"model_id\", \"\")\n\n        # Obtener el modelo\n        model = aiplatform.Model(model_id_str)\n\n        # Crear un endpoint o usar uno existente\n        endpoint_name = f\"btcbot-agent-endpoint-{model.display_name.lower().replace('_', '-')}\"\n\n        try:\n            # Intentar obtener un endpoint existente\n            endpoints = aiplatform.Endpoint.list(\n                filter=f'display_name=\"{endpoint_name}\"',\n                order_by=\"create_time desc\"\n            )\n\n            if endpoints:\n                endpoint = endpoints[0]\n                print(f\"Usando endpoint existente: {endpoint.resource_name}\")\n            else:\n                # Crear nuevo endpoint\n                endpoint = aiplatform.Endpoint.create(display_name=endpoint_name)\n                print(f\"Creado nuevo endpoint: {endpoint.resource_name}\")\n\n            # Desplegar el modelo al endpoint\n            deployment = model.deploy(\n                endpoint=endpoint,\n                deployed_model_display_name=model.display_name,\n                machine_type=machine_type,\n                accelerator_type=accelerator_type,\n                accelerator_count=accelerator_count,\n                traffic_percentage=traffic_percentage,\n                deploy_request_timeout=1800,\n                sync=True\n            )\n\n            # Guardar informaci\u00f3n del despliegue\n            deployed_model.uri = model.uri\n            deployed_model.metadata = {\n                \"model_id\": model_id,\n                \"endpoint_id\": endpoint.resource_name,\n                \"endpoint_name\": endpoint_name,\n                \"deployment_criteria\": deployment_criteria,\n                \"evaluation_metrics\": dict(evaluation_metrics.metadata),\n                \"deployed\": True,\n                \"machine_type\": machine_type,\n                \"accelerator_type\": accelerator_type or \"none\",\n                \"accelerator_count\": accelerator_count,\n                \"traffic_percentage\": traffic_percentage\n            }\n\n        except Exception as e:\n            # Registrar error pero no fallar el pipeline\n            print(f\"Error al desplegar modelo: {e}\")\n            deployed_model.uri = model.uri\n            deployed_model.metadata = {\n                \"model_id\": model_id,\n                \"deployment_criteria\": deployment_criteria,\n                \"evaluation_metrics\": dict(evaluation_metrics.metadata),\n                \"deployed\": False,\n                \"error\": str(e)\n            }\n    else:\n        # No desplegar el modelo\n        deployed_model.uri = \"\"\n        deployed_model.metadata = {\n            \"model_id\": model_id,\n            \"deployment_criteria\": deployment_criteria,\n            \"evaluation_metrics\": dict(evaluation_metrics.metadata),\n            \"deployed\": False,\n            \"reason\": \"No cumple con los criterios de despliegue\"\n        }\n\n"
+          ],
+          "image": "python:3.9"
+        }
+      },
+      "exec-evaluate-model": {
+        "container": {
+          "args": [
+            "--executor_input",
+            "{{$}}",
+            "--function_to_execute",
+            "evaluate_model"
+          ],
+          "command": [
+            "sh",
+            "-c",
+            "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip || python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet --no-warn-script-location 'kfp==2.13.0' '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"'  &&  python3 -m pip install --quiet --no-warn-script-location 'google-cloud-storage' 'stable-baselines3' 'gymnasium' 'tensorflow' && \"$0\" \"$@\"\n",
+            "sh",
+            "-ec",
+            "program_path=$(mktemp -d)\n\nprintf \"%s\" \"$0\" > \"$program_path/ephemeral_component.py\"\n_KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         \"$program_path/ephemeral_component.py\"                         \"$@\"\n",
+            "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import *\n\ndef evaluate_model(\n    project_id: str,\n    processed_data_uri: Input[Dataset],\n    model_uri: Input[Model],\n    evaluation_bucket: str,\n    input_model: Input[Model],\n    evaluation_metrics: Output[Artifact],\n    num_episodes: int = 10\n):\n    \"\"\"\n    Componente para evaluar el modelo entrenado.\n    \"\"\"\n    import os\n    import json\n    import tempfile\n    from google.cloud import storage\n    import uuid\n    from datetime import datetime\n\n    # Crear un ID \u00fanico para esta evaluaci\u00f3n\n    eval_id = uuid.uuid4().hex[:8]\n    timestamp = datetime.now().strftime(\"%Y%m%d_%H%M%S\")\n\n    # Crear cliente de Storage\n    storage_client = storage.Client(project=project_id)\n\n    # Extraer URIs de los artefactos de entrada\n    data_uri = processed_data_uri.uri if hasattr(processed_data_uri, 'uri') else str(processed_data_uri)\n    model_uri_to_use = model_uri.uri if hasattr(model_uri, 'uri') else str(model_uri)\n\n    # Descargar el dataset procesado\n    data_filename = os.path.basename(data_uri)\n    data_local_path = os.path.join(tempfile.mkdtemp(), data_filename)\n\n    data_bucket_name = data_uri.replace(\"gs://\", \"\").split(\"/\")[0]\n    data_blob_name = data_uri.replace(f\"gs://{data_bucket_name}/\", \"\")\n\n    data_bucket = storage_client.bucket(data_bucket_name)\n    data_blob = data_bucket.blob(data_blob_name)\n    data_blob.download_to_filename(data_local_path)\n\n    # Descargar el modelo\n    model_filename = os.path.basename(model_uri_to_use)\n    model_local_path = os.path.join(tempfile.mkdtemp(), model_filename)\n\n    model_bucket_name = model_uri_to_use.replace(\"gs://\", \"\").split(\"/\")[0]\n    model_blob_name = model_uri_to_use.replace(f\"gs://{model_bucket_name}/\", \"\")\n\n    model_bucket = storage_client.bucket(model_bucket_name)\n    model_blob = model_bucket.blob(model_blob_name)\n    model_blob.download_to_filename(model_local_path)\n\n    # Evaluar el modelo\n    import sys\n    sys.path.append(\"/app\")\n    from src.agent.rl_agent_manager import RLAgentManager\n    from src.environments.trading_env import TradingEnv\n\n    # Crear el entorno de evaluaci\u00f3n con modo expl\u00edcito de evaluaci\u00f3n\n    eval_env = TradingEnv(data_path=data_local_path, config_path=\"/app/src/environments/environment_config.yaml\", mode=\"eval\")\n\n    # Cargar el modelo entrenado\n    agent_manager = RLAgentManager(config_path=\"/app/src/agent/agent_config.yaml\")\n    model = agent_manager.load(model_local_path)\n\n    # Evaluar el modelo con el n\u00famero de episodios especificado\n    evaluation_results = agent_manager.evaluate(model, eval_env, num_episodes=num_episodes)\n\n    # A\u00f1adir informaci\u00f3n adicional a los resultados\n    evaluation_results[\"evaluation_timestamp\"] = timestamp\n    evaluation_results[\"model_id\"] = input_model.metadata.get(\"model_id\", \"\")\n    evaluation_results[\"training_id\"] = input_model.metadata.get(\"training_id\", \"\")\n\n    # Guardar los resultados completos de evaluaci\u00f3n\n    eval_results_path = os.path.join(tempfile.mkdtemp(), f\"evaluation_results_{eval_id}_{timestamp}.json\")\n    with open(eval_results_path, \"w\") as f:\n        json.dump(evaluation_results, f, indent=2)\n\n    # Subir los resultados al bucket de evaluaci\u00f3n\n    eval_bucket = storage_client.bucket(evaluation_bucket)\n    eval_blob_name = f\"evaluation_results_{eval_id}_{timestamp}.json\"\n    eval_blob = eval_bucket.blob(eval_blob_name)\n    eval_blob.upload_from_filename(eval_results_path)\n\n    # Metadata para el componente de salida\n    evaluation_uri = f\"gs://{evaluation_bucket}/{eval_blob_name}\"\n    evaluation_metrics.uri = evaluation_uri\n    evaluation_metrics.metadata = {\n        \"mean_reward\": evaluation_results.get(\"mean_reward\", 0),\n        \"std_reward\": evaluation_results.get(\"std_reward\", 0),\n        \"max_drawdown\": evaluation_results.get(\"max_drawdown\", 0),\n        \"sharpe_ratio\": evaluation_results.get(\"sharpe_ratio\", 0),\n        \"sortino_ratio\": evaluation_results.get(\"sortino_ratio\", 0),\n        \"win_rate\": evaluation_results.get(\"win_rate\", 0),\n        \"model_id\": input_model.metadata.get(\"model_id\", \"\"),\n        \"training_id\": input_model.metadata.get(\"training_id\", \"\"),\n        \"evaluation_id\": eval_id,\n        \"evaluation_timestamp\": timestamp,\n        \"num_episodes\": num_episodes,\n        \"results_file\": eval_blob_name\n    }\n\n"
+          ],
+          "image": "europe-southwest1-docker.pkg.dev/btcbot276299/btcbot-docker-repo/btcbot-pipeline"
+        }
+      },
+      "exec-preprocess-data": {
+        "container": {
+          "args": [
+            "--executor_input",
+            "{{$}}",
+            "--function_to_execute",
+            "preprocess_data"
+          ],
+          "command": [
+            "sh",
+            "-c",
+            "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip || python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet --no-warn-script-location 'kfp==2.13.0' '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"'  &&  python3 -m pip install --quiet --no-warn-script-location 'google-cloud-storage' && \"$0\" \"$@\"\n",
+            "sh",
+            "-ec",
+            "program_path=$(mktemp -d)\n\nprintf \"%s\" \"$0\" > \"$program_path/ephemeral_component.py\"\n_KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         \"$program_path/ephemeral_component.py\"                         \"$@\"\n",
+            "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import *\n\ndef preprocess_data(\n    project_id: str,\n    raw_data_bucket: str,\n    processed_data_bucket: str,\n    output_dataset: Output[Dataset],\n    input_dataset: Input[Dataset] = None,\n    symbol: str = \"BTCUSDT\",\n    timeframe: str = \"1h\",\n    lookback_window: int = 96\n):\n    \"\"\"\n    Componente para preprocesar datos descargados de Binance.\n    \"\"\"\n    import os\n    import tempfile\n    from google.cloud import storage\n\n    # Crear cliente de Storage\n    storage_client = storage.Client(project=project_id)\n\n    # Si se proporciona un dataset de entrada, obtener su URI\n    input_uri = None\n    if input_dataset and hasattr(input_dataset, 'uri') and input_dataset.uri:\n        input_uri = input_dataset.uri\n\n    # Descargar los archivos CSV m\u00e1s recientes del bucket de datos raw\n    raw_bucket = storage_client.bucket(raw_data_bucket)\n\n    # Buscar el archivo m\u00e1s reciente que coincida con el patr\u00f3n o usar el proporcionado\n    if input_uri:\n        # Extraer el nombre del blob del URI de GCS\n        bucket_name = input_uri.replace(\"gs://\", \"\").split(\"/\")[0]\n        blob_name = input_uri.replace(f\"gs://{bucket_name}/\", \"\")\n        if bucket_name == raw_data_bucket:\n            latest_blob = raw_bucket.blob(blob_name)\n        else:\n            # Si est\u00e1 en un bucket diferente, listar por patr\u00f3n\n            blobs = list(raw_bucket.list_blobs(prefix=f\"{symbol}_{timeframe}\"))\n            if not blobs:\n                raise ValueError(f\"No se encontraron archivos para {symbol}_{timeframe}\")\n            latest_blob = max(blobs, key=lambda x: x.name)\n    else:\n        # Buscar el archivo m\u00e1s reciente que coincida con el patr\u00f3n\n        blobs = list(raw_bucket.list_blobs(prefix=f\"{symbol}_{timeframe}\"))\n        if not blobs:\n            raise ValueError(f\"No se encontraron archivos para {symbol}_{timeframe}\")\n        latest_blob = max(blobs, key=lambda x: x.name)\n\n    # Crear directorio temporal\n    temp_dir = tempfile.mkdtemp()\n    local_file_path = os.path.join(temp_dir, latest_blob.name)\n\n    # Descargar archivo\n    latest_blob.download_to_filename(local_file_path)\n\n    # Preprocesar datos (aqu\u00ed utilizar\u00edamos tu l\u00f3gica de preprocessor.py)\n    # Por simplicidad, asumimos que el script de preprocesamiento est\u00e1 en el contenedor\n    import sys\n    sys.path.append(\"/app\")\n    from src.data.preprocessor import DataPreprocessor\n\n    preprocessor = DataPreprocessor(config_path=\"/app/src/data/preprocessing_config.yaml\")\n    output_file = preprocessor.process_file(local_file_path, lookback_window=lookback_window)\n\n    # Subir el resultado al bucket de datos procesados\n    processed_bucket = storage_client.bucket(processed_data_bucket)\n    output_blob_name = os.path.basename(output_file)\n    blob = processed_bucket.blob(output_blob_name)\n    blob.upload_from_filename(output_file)\n\n    # Guardar la ubicaci\u00f3n del dataset para el siguiente componente\n    output_uri = f\"gs://{processed_data_bucket}/{output_blob_name}\"\n\n    # Metadata para el componente de salida\n    output_dataset.uri = output_uri\n    output_dataset.metadata = {\n        \"symbol\": symbol,\n        \"timeframe\": timeframe,\n        \"lookback_window\": lookback_window\n    }\n\n"
+          ],
+          "image": "europe-southwest1-docker.pkg.dev/btcbot276299/btcbot-docker-repo/btcbot-pipeline"
+        }
+      },
+      "exec-register-model": {
+        "container": {
+          "args": [
+            "--executor_input",
+            "{{$}}",
+            "--function_to_execute",
+            "register_model"
+          ],
+          "command": [
+            "sh",
+            "-c",
+            "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip || python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet --no-warn-script-location 'kfp==2.13.0' '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"'  &&  python3 -m pip install --quiet --no-warn-script-location 'google-cloud-aiplatform' && \"$0\" \"$@\"\n",
+            "sh",
+            "-ec",
+            "program_path=$(mktemp -d)\n\nprintf \"%s\" \"$0\" > \"$program_path/ephemeral_component.py\"\n_KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         \"$program_path/ephemeral_component.py\"                         \"$@\"\n",
+            "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import *\n\ndef register_model(\n    project_id: str,\n    region: str,\n    model_artifact_uri: Input[Model],\n    model_display_name: str,\n    model_description: str,\n    input_model: Input[Model],\n    registered_model: Output[Model],\n    serving_container_image_uri: str = \"us-docker.pkg.dev/vertex-ai/prediction/sklearn-cpu.1-0:latest\",\n    labels: dict = None\n):\n    \"\"\"\n    Componente para registrar el modelo en Vertex AI Model Registry.\n    \"\"\"\n    from google.cloud import aiplatform\n    import json\n\n    # Inicializar el cliente de Vertex AI\n    aiplatform.init(project=project_id, location=region)\n\n    # Obtener el URI del modelo desde el artefacto de entrada\n    uri = model_artifact_uri.uri if hasattr(model_artifact_uri, 'uri') else str(model_artifact_uri)\n\n    # Obtener metadatos del modelo de entrada\n    metadata = input_model.metadata.copy() if hasattr(input_model, \"metadata\") else {}\n\n    # Crear etiquetas predeterminadas si no se proporcionan\n    if labels is None:\n        labels = {}\n\n    # A\u00f1adir informaci\u00f3n b\u00e1sica a las etiquetas\n    labels.update({\n        \"framework\": metadata.get(\"framework\", \"stable-baselines3\"),\n        \"algorithm\": metadata.get(\"algorithm\", \"SAC\"),\n        \"created_by\": \"vertex_pipeline\"\n    })\n\n    # Registrar el modelo\n    registered_model_obj = aiplatform.Model.upload(\n        display_name=model_display_name,\n        artifact_uri=uri,\n        serving_container_image_uri=serving_container_image_uri,\n        description=model_description,\n        labels=labels,\n        metadata=metadata,\n        sync=True\n    )\n\n    # Guardar el ID del modelo registrado\n    registered_model.uri = uri\n    registered_model.metadata = {\n        \"model_id\": registered_model_obj.resource_name,\n        \"model_display_name\": model_display_name,\n        \"framework\": metadata.get(\"framework\", \"stable-baselines3\"),\n        \"algorithm\": metadata.get(\"algorithm\", \"SAC\"),\n        \"training_steps\": metadata.get(\"training_steps\", 0),\n        \"training_id\": metadata.get(\"training_id\", \"\"),\n        \"use_gpu\": metadata.get(\"use_gpu\", False),\n        \"gpu_type\": metadata.get(\"gpu_type\", \"none\"),\n        \"gpu_count\": metadata.get(\"gpu_count\", 0),\n        \"registry_uri\": f\"https://console.cloud.google.com/vertex-ai/models/{registered_model_obj.name}?project={project_id}\"\n    }\n\n"
+          ],
+          "image": "python:3.9"
+        }
+      },
+      "exec-train-model": {
+        "container": {
+          "args": [
+            "--executor_input",
+            "{{$}}",
+            "--function_to_execute",
+            "train_model"
+          ],
+          "command": [
+            "sh",
+            "-c",
+            "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip || python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet --no-warn-script-location 'kfp==2.13.0' '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"'  &&  python3 -m pip install --quiet --no-warn-script-location 'google-cloud-storage' 'stable-baselines3' 'gymnasium' 'tensorflow' && \"$0\" \"$@\"\n",
+            "sh",
+            "-ec",
+            "program_path=$(mktemp -d)\n\nprintf \"%s\" \"$0\" > \"$program_path/ephemeral_component.py\"\n_KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         \"$program_path/ephemeral_component.py\"                         \"$@\"\n",
+            "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import *\n\ndef train_model(\n    project_id: str,\n    processed_data_uri: Input[Dataset],\n    model_staging_bucket: str,\n    input_dataset: Input[Dataset],\n    output_model: Output[Model],\n    total_timesteps: int = 1000000,\n    use_gpu: bool = False,\n    gpu_type: str = \"NVIDIA_TESLA_T4\",\n    gpu_count: int = 1\n):\n    \"\"\"\n    Componente para entrenar el modelo de RL.\n    \"\"\"\n    import os\n    import tempfile\n    from google.cloud import storage\n    import uuid\n\n    # Crear un ID \u00fanico para este entrenamiento\n    training_id = uuid.uuid4().hex[:8]\n\n    # Crear cliente de Storage\n    storage_client = storage.Client(project=project_id)\n\n    # Descargar el dataset procesado - obtenemos la URI del input_dataset si es posible\n    if hasattr(input_dataset, 'uri') and input_dataset.uri:\n        uri_to_use = input_dataset.uri\n    else:\n        uri_to_use = processed_data_uri\n\n    filename = os.path.basename(uri_to_use)\n    local_file_path = os.path.join(tempfile.mkdtemp(), filename)\n\n    bucket_name = uri_to_use.replace(\"gs://\", \"\").split(\"/\")[0]\n    blob_name = uri_to_use.replace(f\"gs://{bucket_name}/\", \"\")\n\n    bucket = storage_client.bucket(bucket_name)\n    blob = bucket.blob(blob_name)\n    blob.download_to_filename(local_file_path)\n\n    # Entrenar el modelo utilizando el script train_rl_agent.py\n    import sys\n    sys.path.append(\"/app\")\n    from src.agent.rl_agent_manager import RLAgentManager\n    from src.environments.trading_env import TradingEnv\n\n    # Crear el entorno y el agente\n    env = TradingEnv(data_path=local_file_path, config_path=\"/app/src/environments/environment_config.yaml\")\n\n    # Configuraci\u00f3n del agente con informaci\u00f3n de hardware\n    agent_config = {\n        \"use_gpu\": use_gpu,\n        \"gpu_type\": gpu_type if use_gpu else None,\n        \"gpu_count\": gpu_count if use_gpu else 0\n    }\n\n    agent_manager = RLAgentManager(config_path=\"/app/src/agent/agent_config.yaml\", **agent_config)\n\n    # Entrenar el modelo\n    trained_model = agent_manager.train(env, total_timesteps=total_timesteps)\n\n    # Guardar el modelo localmente\n    model_filename = f\"sac_transformer_trading_agent_{training_id}.zip\"\n    model_path = os.path.join(tempfile.mkdtemp(), model_filename)\n    trained_model.save(model_path)\n\n    # Subir el modelo al bucket de staging\n    model_gcs_path = f\"gs://{model_staging_bucket}/{model_filename}\"\n    staging_bucket = storage_client.bucket(model_staging_bucket)\n    blob = staging_bucket.blob(model_filename)\n    blob.upload_from_filename(model_path)\n\n    # Metadata para el componente de salida\n    output_model.uri = model_gcs_path\n    output_model.metadata = {\n        \"framework\": \"stable-baselines3\",\n        \"algorithm\": \"SAC\",\n        \"training_steps\": total_timesteps,\n        \"training_id\": training_id,\n        \"use_gpu\": use_gpu,\n        \"gpu_type\": gpu_type if use_gpu else \"none\",\n        \"gpu_count\": gpu_count if use_gpu else 0\n    }\n\n"
+          ],
+          "image": "europe-southwest1-docker.pkg.dev/btcbot276299/btcbot-docker-repo/btcbot-pipeline"
+        }
+      }
+    }
+  },
+  "pipelineInfo": {
+    "description": "Pipeline completo para entrenar y registrar un modelo de RL para trading de BTC",
+    "name": "btcbot-training-pipeline"
+  },
+  "root": {
+    "dag": {
+      "tasks": {
+        "acquire-data-component": {
+          "cachingOptions": {
+            "enableCache": true
+          },
+          "componentRef": {
+            "name": "comp-acquire-data-component"
+          },
+          "inputs": {
+            "parameters": {
+              "api_key_secret_name": {
+                "componentInputParameter": "api_key_secret_name"
+              },
+              "api_secret_secret_name": {
+                "componentInputParameter": "api_secret_secret_name"
+              },
+              "interval": {
+                "componentInputParameter": "timeframe"
+              },
+              "project_id": {
+                "componentInputParameter": "project_id"
+              },
+              "raw_data_bucket": {
+                "componentInputParameter": "raw_data_bucket"
+              },
+              "start_date": {
+                "componentInputParameter": "start_date"
+              },
+              "symbol": {
+                "componentInputParameter": "symbol"
+              }
+            }
+          },
+          "taskInfo": {
+            "name": "acquire-data-component"
+          }
+        },
+        "conditional-deployment": {
+          "cachingOptions": {
+            "enableCache": true
+          },
+          "componentRef": {
+            "name": "comp-conditional-deployment"
+          },
+          "dependentTasks": [
+            "evaluate-model",
+            "register-model"
+          ],
+          "inputs": {
+            "artifacts": {
+              "evaluation_metrics": {
+                "taskOutputArtifact": {
+                  "outputArtifactKey": "evaluation_metrics",
+                  "producerTask": "evaluate-model"
+                }
+              },
+              "model_id": {
+                "taskOutputArtifact": {
+                  "outputArtifactKey": "registered_model",
+                  "producerTask": "register-model"
+                }
+              }
+            },
+            "parameters": {
+              "accelerator_count": {
+                "componentInputParameter": "deployment_accelerator_count"
+              },
+              "accelerator_type": {
+                "componentInputParameter": "deployment_accelerator_type"
+              },
+              "deploy_all": {
+                "runtimeValue": {
+                  "constant": true
+                }
+              },
+              "machine_type": {
+                "componentInputParameter": "deployment_machine_type"
+              },
+              "max_drawdown_threshold": {
+                "componentInputParameter": "max_drawdown_threshold"
+              },
+              "min_sharpe_ratio": {
+                "componentInputParameter": "min_sharpe_ratio"
+              },
+              "min_sortino_ratio": {
+                "componentInputParameter": "min_sortino_ratio"
+              },
+              "min_win_rate": {
+                "componentInputParameter": "min_win_rate"
+              },
+              "project_id": {
+                "componentInputParameter": "project_id"
+              },
+              "region": {
+                "componentInputParameter": "region"
+              },
+              "traffic_percentage": {
+                "componentInputParameter": "deployment_traffic_percentage"
+              }
+            }
+          },
+          "taskInfo": {
+            "name": "conditional-deployment"
+          }
+        },
+        "evaluate-model": {
+          "cachingOptions": {
+            "enableCache": true
+          },
+          "componentRef": {
+            "name": "comp-evaluate-model"
+          },
+          "dependentTasks": [
+            "preprocess-data",
+            "register-model",
+            "train-model"
+          ],
+          "inputs": {
+            "artifacts": {
+              "input_model": {
+                "taskOutputArtifact": {
+                  "outputArtifactKey": "registered_model",
+                  "producerTask": "register-model"
+                }
+              },
+              "model_uri": {
+                "taskOutputArtifact": {
+                  "outputArtifactKey": "output_model",
+                  "producerTask": "train-model"
+                }
+              },
+              "processed_data_uri": {
+                "taskOutputArtifact": {
+                  "outputArtifactKey": "output_dataset",
+                  "producerTask": "preprocess-data"
+                }
+              }
+            },
+            "parameters": {
+              "evaluation_bucket": {
+                "componentInputParameter": "evaluation_bucket"
+              },
+              "num_episodes": {
+                "componentInputParameter": "num_eval_episodes"
+              },
+              "project_id": {
+                "componentInputParameter": "project_id"
+              }
+            }
+          },
+          "taskInfo": {
+            "name": "evaluate-model"
+          }
+        },
+        "preprocess-data": {
+          "cachingOptions": {
+            "enableCache": true
+          },
+          "componentRef": {
+            "name": "comp-preprocess-data"
+          },
+          "dependentTasks": [
+            "acquire-data-component"
+          ],
+          "inputs": {
+            "artifacts": {
+              "input_dataset": {
+                "taskOutputArtifact": {
+                  "outputArtifactKey": "output_dataset",
+                  "producerTask": "acquire-data-component"
+                }
+              }
+            },
+            "parameters": {
+              "lookback_window": {
+                "componentInputParameter": "lookback_window"
+              },
+              "processed_data_bucket": {
+                "componentInputParameter": "processed_data_bucket"
+              },
+              "project_id": {
+                "componentInputParameter": "project_id"
+              },
+              "raw_data_bucket": {
+                "componentInputParameter": "raw_data_bucket"
+              },
+              "symbol": {
+                "componentInputParameter": "symbol"
+              },
+              "timeframe": {
+                "componentInputParameter": "timeframe"
+              }
+            }
+          },
+          "taskInfo": {
+            "name": "preprocess-data"
+          }
+        },
+        "register-model": {
+          "cachingOptions": {
+            "enableCache": true
+          },
+          "componentRef": {
+            "name": "comp-register-model"
+          },
+          "dependentTasks": [
+            "train-model"
+          ],
+          "inputs": {
+            "artifacts": {
+              "input_model": {
+                "taskOutputArtifact": {
+                  "outputArtifactKey": "output_model",
+                  "producerTask": "train-model"
+                }
+              },
+              "model_artifact_uri": {
+                "taskOutputArtifact": {
+                  "outputArtifactKey": "output_model",
+                  "producerTask": "train-model"
+                }
+              }
+            },
+            "parameters": {
+              "labels": {
+                "runtimeValue": {
+                  "constant": {
+                    "lookback_window": "{{$.inputs.parameters['pipelinechannel--lookback_window']}}",
+                    "symbol": "{{$.inputs.parameters['pipelinechannel--symbol']}}",
+                    "timeframe": "{{$.inputs.parameters['pipelinechannel--timeframe']}}",
+                    "total_timesteps": "{{$.inputs.parameters['pipelinechannel--total_timesteps']}}",
+                    "use_gpu": "{{$.inputs.parameters['pipelinechannel--use_gpu']}}"
+                  }
+                }
+              },
+              "model_description": {
+                "runtimeValue": {
+                  "constant": "Modelo de RL para trading de {{$.inputs.parameters['pipelinechannel--symbol']}} con timeframe {{$.inputs.parameters['pipelinechannel--timeframe']}}, {{$.inputs.parameters['pipelinechannel--lookback_window']}} periodos de lookback y {{$.inputs.parameters['pipelinechannel--total_timesteps']}} pasos de entrenamiento"
+                }
+              },
+              "model_display_name": {
+                "runtimeValue": {
+                  "constant": "btcbot_trading_agent_{{$.inputs.parameters['pipelinechannel--symbol']}}_{{$.inputs.parameters['pipelinechannel--timeframe']}}_20250517_171330"
+                }
+              },
+              "pipelinechannel--lookback_window": {
+                "componentInputParameter": "lookback_window"
+              },
+              "pipelinechannel--symbol": {
+                "componentInputParameter": "symbol"
+              },
+              "pipelinechannel--timeframe": {
+                "componentInputParameter": "timeframe"
+              },
+              "pipelinechannel--total_timesteps": {
+                "componentInputParameter": "total_timesteps"
+              },
+              "pipelinechannel--use_gpu": {
+                "componentInputParameter": "use_gpu"
+              },
+              "project_id": {
+                "componentInputParameter": "project_id"
+              },
+              "region": {
+                "componentInputParameter": "region"
+              },
+              "serving_container_image_uri": {
+                "componentInputParameter": "serving_container_image_uri"
+              }
+            }
+          },
+          "taskInfo": {
+            "name": "register-model"
+          }
+        },
+        "train-model": {
+          "cachingOptions": {
+            "enableCache": true
+          },
+          "componentRef": {
+            "name": "comp-train-model"
+          },
+          "dependentTasks": [
+            "preprocess-data"
+          ],
+          "inputs": {
+            "artifacts": {
+              "input_dataset": {
+                "taskOutputArtifact": {
+                  "outputArtifactKey": "output_dataset",
+                  "producerTask": "preprocess-data"
+                }
+              },
+              "processed_data_uri": {
+                "taskOutputArtifact": {
+                  "outputArtifactKey": "output_dataset",
+                  "producerTask": "preprocess-data"
+                }
+              }
+            },
+            "parameters": {
+              "gpu_count": {
+                "componentInputParameter": "gpu_count"
+              },
+              "gpu_type": {
+                "componentInputParameter": "gpu_type"
+              },
+              "model_staging_bucket": {
+                "componentInputParameter": "model_staging_bucket"
+              },
+              "project_id": {
+                "componentInputParameter": "project_id"
+              },
+              "total_timesteps": {
+                "componentInputParameter": "total_timesteps"
+              },
+              "use_gpu": {
+                "componentInputParameter": "use_gpu"
+              }
+            }
+          },
+          "taskInfo": {
+            "name": "train-model"
+          }
+        }
+      }
+    },
+    "inputDefinitions": {
+      "parameters": {
+        "api_key_secret_name": {
+          "defaultValue": "binance-api-key",
+          "isOptional": true,
+          "parameterType": "STRING"
+        },
+        "api_secret_secret_name": {
+          "defaultValue": "binance-api-secret",
+          "isOptional": true,
+          "parameterType": "STRING"
+        },
+        "deploy_model": {
+          "defaultValue": false,
+          "isOptional": true,
+          "parameterType": "BOOLEAN"
+        },
+        "deployment_accelerator_count": {
+          "defaultValue": 0.0,
+          "isOptional": true,
+          "parameterType": "NUMBER_INTEGER"
+        },
+        "deployment_accelerator_type": {
+          "isOptional": true,
+          "parameterType": "STRING"
+        },
+        "deployment_machine_type": {
+          "defaultValue": "n1-standard-2",
+          "isOptional": true,
+          "parameterType": "STRING"
+        },
+        "deployment_traffic_percentage": {
+          "defaultValue": 0.0,
+          "isOptional": true,
+          "parameterType": "NUMBER_INTEGER"
+        },
+        "evaluation_bucket": {
+          "defaultValue": "btcbot-evaluation-results-btcbot276299",
+          "isOptional": true,
+          "parameterType": "STRING"
+        },
+        "gpu_count": {
+          "defaultValue": 1.0,
+          "isOptional": true,
+          "parameterType": "NUMBER_INTEGER"
+        },
+        "gpu_type": {
+          "defaultValue": "NVIDIA_TESLA_T4",
+          "isOptional": true,
+          "parameterType": "STRING"
+        },
+        "lookback_window": {
+          "defaultValue": 96.0,
+          "isOptional": true,
+          "parameterType": "NUMBER_INTEGER"
+        },
+        "max_drawdown_threshold": {
+          "defaultValue": -0.2,
+          "isOptional": true,
+          "parameterType": "NUMBER_DOUBLE"
+        },
+        "min_sharpe_ratio": {
+          "defaultValue": 0.5,
+          "isOptional": true,
+          "parameterType": "NUMBER_DOUBLE"
+        },
+        "min_sortino_ratio": {
+          "defaultValue": 0.75,
+          "isOptional": true,
+          "parameterType": "NUMBER_DOUBLE"
+        },
+        "min_win_rate": {
+          "defaultValue": 0.5,
+          "isOptional": true,
+          "parameterType": "NUMBER_DOUBLE"
+        },
+        "model_staging_bucket": {
+          "defaultValue": "btcbot-models-staging-btcbot276299",
+          "isOptional": true,
+          "parameterType": "STRING"
+        },
+        "num_eval_episodes": {
+          "defaultValue": 10.0,
+          "isOptional": true,
+          "parameterType": "NUMBER_INTEGER"
+        },
+        "processed_data_bucket": {
+          "defaultValue": "btcbot-processed-data-btcbot276299",
+          "isOptional": true,
+          "parameterType": "STRING"
+        },
+        "project_id": {
+          "defaultValue": "btcbot276299",
+          "isOptional": true,
+          "parameterType": "STRING"
+        },
+        "raw_data_bucket": {
+          "defaultValue": "btcbot-raw-data-btcbot276299",
+          "isOptional": true,
+          "parameterType": "STRING"
+        },
+        "region": {
+          "defaultValue": "europe-southwest1",
+          "isOptional": true,
+          "parameterType": "STRING"
+        },
+        "serving_container_image_uri": {
+          "defaultValue": "us-docker.pkg.dev/vertex-ai/prediction/sklearn-cpu.1-0:latest",
+          "isOptional": true,
+          "parameterType": "STRING"
+        },
+        "start_date": {
+          "defaultValue": "2020-01-01",
+          "isOptional": true,
+          "parameterType": "STRING"
+        },
+        "symbol": {
+          "defaultValue": "BTCUSDT",
+          "isOptional": true,
+          "parameterType": "STRING"
+        },
+        "timeframe": {
+          "defaultValue": "1h",
+          "isOptional": true,
+          "parameterType": "STRING"
+        },
+        "total_timesteps": {
+          "defaultValue": 1000000.0,
+          "isOptional": true,
+          "parameterType": "NUMBER_INTEGER"
+        },
+        "use_gpu": {
+          "defaultValue": false,
+          "isOptional": true,
+          "parameterType": "BOOLEAN"
+        }
+      }
+    }
+  },
+  "schemaVersion": "2.1.0",
+  "sdkVersion": "kfp-2.13.0"
+}

@@ -534,6 +534,9 @@ def conditional_deployment(
         machine_spec["accelerator_count"] = accelerator_count
     
     if should_deploy:
+        # Obtener el ID del modelo desde la entrada
+        model_id_str = model_id.metadata.get("model_id", "")
+        
         # Obtener el modelo
         model = aiplatform.Model(model_id_str)
         
