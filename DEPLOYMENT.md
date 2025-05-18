@@ -41,9 +41,39 @@ cd btcbot
 pip install -r requirements.txt
 ```
 
-### 2. Despliegue Completo
+### 2. Uso del Makefile
 
-Para realizar un despliegue completo en un solo paso, utiliza el script maestro:
+El proyecto incluye un Makefile completo para facilitar todas las operaciones de despliegue, entrenamiento y monitoreo. Puedes ver los comandos disponibles con:
+
+```bash
+make help
+```
+
+Ejemplos de comandos útiles:
+
+```bash
+# Desplegar toda la infraestructura en GCP
+make deploy-all
+
+# Entrenar modelo localmente
+make train-local
+
+# Verificar estado del despliegue
+make check-status
+
+# Monitorear el despliegue en tiempo real
+make monitor
+```
+
+### 3. Despliegue Completo
+
+Para realizar un despliegue completo en un solo paso, puedes utilizar:
+
+```bash
+make deploy-all
+```
+
+O ejecutar el script maestro directamente:
 
 ```bash
 bash scripts/deploy_complete_pipeline.sh
@@ -130,7 +160,109 @@ Una vez desplegado el pipeline, puedes:
 
 Si encuentras problemas durante el despliegue:
 
-1. Verifica el estado con `scripts/check_deployment_status.sh`
+1. Verifica el estado con `make check-status` o `scripts/check_deployment_status.sh`
 2. Consulta los logs en la consola de GCP
 3. Asegúrate de que todas las APIs necesarias estén habilitadas
 4. Comprueba que las credenciales de Binance sean válidas
+
+## Scripts Adicionales
+
+El proyecto incluye varios scripts adicionales para ayudarte a gestionar y monitorear la implementación:
+
+### Monitor Interactivo
+
+```bash
+make monitor
+# o directamente
+bash scripts/monitor_deployment.sh
+```
+
+Este script proporciona una interfaz interactiva para monitorear todos los aspectos del despliegue, incluyendo:
+- Estado del despliegue
+- Listado de recursos en GCP
+- Pipelines en ejecución
+- Logs de Cloud Build
+- Contenido de los buckets
+
+### Trading Programado
+
+Para configurar el trading programado en producción:
+
+```bash
+make scheduled-trading
+# o directamente
+bash scripts/scheduled_trading.sh
+```
+
+Este script está diseñado para ser ejecutado periódicamente mediante un cron job, realizando operaciones de trading automáticamente según el modelo entrenado.
+
+### Alertas de Trading
+
+Para configurar alertas cuando se realizan operaciones:
+
+```bash
+make alerts
+# o directamente
+bash scripts/send_trading_alerts.sh
+```
+
+Este script envía alertas a servicios como Slack o Telegram cuando el modelo realiza operaciones importantes.
+- Logs de Cloud Build
+- Contenido de los buckets de almacenamiento
+- Verificación de secretos
+
+### Listado de Recursos
+
+```bash
+bash scripts/list_gcp_resources.sh
+```
+
+Genera un listado detallado de todos los recursos desplegados en GCP para el Bitcoin Trading Bot.
+
+### Trading Programado
+
+```bash
+bash scripts/scheduled_trading.sh
+```
+
+Este script está diseñado para ejecutarse periódicamente (por ejemplo, mediante un cron job) para realizar operaciones de trading automáticas utilizando el modelo entrenado. Descarga el modelo desde GCS, obtiene los datos más recientes de Binance, y ejecuta el trading según la predicción del modelo.
+
+Para configurarlo como un cron job:
+
+```bash
+# Editar la tabla de cron
+crontab -e
+
+# Añadir una entrada para ejecutar el script cada hora
+0 * * * * cd /ruta/a/btcbot && bash scripts/scheduled_trading.sh
+```
+
+### Ejecución Directa del Modelo
+
+```bash
+bash scripts/run_trained_model.sh
+```
+
+Ejecuta el modelo entrenado localmente con datos simulados para verificar su funcionamiento.
+
+### Alertas de Trading
+
+```bash
+bash scripts/send_trading_alerts.sh
+```
+
+Este script lee los resultados del último trading y envía alertas a servicios externos como Slack o Telegram cuando se detectan operaciones importantes (compras o ventas). Para utilizarlo:
+
+1. Configura los webhooks o tokens necesarios:
+   ```bash
+   export SLACK_WEBHOOK_URL="https://hooks.slack.com/services/T00000000/B00000000/XXXXXXXXXXXXXXXXXXXXXXXX"
+   export TELEGRAM_BOT_TOKEN="0000000000:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+   export TELEGRAM_CHAT_ID="-0000000000000"
+   ```
+
+2. Ejecuta el script después del trading automatizado:
+   ```bash
+   bash scripts/scheduled_trading.sh && bash scripts/send_trading_alerts.sh
+   ```
+
+Para una integración completa, puedes configurar estos scripts en cron para que se ejecuten periódicamente.
