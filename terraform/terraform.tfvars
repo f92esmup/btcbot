@@ -12,5 +12,5 @@ environment     = "dev"
 
 # Binance API credentials - Keep these secure!
 # These variables will be used to set secret values in Secret Manager
-# binance_api_key    = "your-binance-api-key"
-# binance_api_secret = "your-binance-api-secret"
+# binance_api_key    = "cPSCcYghXSNToeRCVqaiWkPIvZJMb62yNWAKD9em08NGMSKGWOF2WgxKYHuMPDIm"
+# binance_api_secret = "rHyyrIaoqhMuoz5G1nIfhZvM8CObXGqipAp103zvMnArsp5MVXl5pV49Qhutt90l"

@@ -1,0 +1,103 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+.pytest_cache/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# Virtual environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Terraform
+terraform/.terraform/
+terraform/.terraform.lock.hcl
+.terragrunt-cache/
+*.tfstate
+*.tfstate.*
+terraform.tfvars
+tfplan
+crash.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# Credentials
+*.pem
+*.key
+*.pub
+credentials.json
+credentials.yml
+credentials.yaml
+service-account.json
+.gcloud/
+
+# Mac
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Project specific
+tmp/
+*.zip
+*.pkl
+.coverage
+htmlcov/
+.tox/
+results/
+models/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*.sublime-workspace
+*.sublime-project
+
+# Secrets (explicitly list these to protect sensitive data)
+*secret*
+*api_key*
+*password*
+*.env
+
+# Docker
+.docker/
+docker-compose.override.yml
+
+# Specific to this project
+binance_credentials.json
+backtesting_results/
