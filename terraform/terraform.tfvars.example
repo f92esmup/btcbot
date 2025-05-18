@@ -6,8 +6,8 @@ project_id      = "your-gcp-project-id"
 project_number  = "your-gcp-project-number" # Find this in GCP Console > IAM & Admin > Settings
 
 # Optional variables with defaults
-region          = "us-central1"
-zone            = "us-central1-a"
+region          = "europe-southwest1"
+zone            = "europe-west3-a"
 environment     = "dev"
 
 # Binance API credentials - Keep these secure!

@@ -300,19 +300,46 @@ class FeatureEngineer:
         df['di_plus'] = adx['DMP_14']
         df['di_minus'] = adx['DMN_14']
         
-        # Ichimoku Cloud
-        ichimoku = ta.ichimoku(
-            df['high'],
-            df['low'],
-            tenkan=self.default_feature_params['ichimoku_tenkan_period'],
-            kijun=self.default_feature_params['ichimoku_kijun_period'],
-            senkou=self.default_feature_params['ichimoku_senkou_b_period']
-        )
-        # Add Ichimoku columns to main df
-        df['tenkan_sen'] = ichimoku['ITS_9']
-        df['kijun_sen'] = ichimoku['IKS_26']
-        df['senkou_span_a'] = ichimoku['ISA_9_26']
-        df['senkou_span_b'] = ichimoku['ISB_26_52']
+        try:
+            # Try Ichimoku Cloud with new API
+            ichimoku = ta.ichimoku(
+                df['high'],
+                df['low'],
+                df['close'],
+                tenkan=self.default_feature_params['ichimoku_tenkan_period'],
+                kijun=self.default_feature_params['ichimoku_kijun_period'],
+                senkou=self.default_feature_params['ichimoku_senkou_b_period']
+            )
+            
+            # Check if ichimoku is a tuple (newer pandas_ta versions) or DataFrame (older versions)
+            if isinstance(ichimoku, tuple):
+                ichi_df = ichimoku[0]  # First element contains the main indicators
+                # Extract columns using numerical indices if needed
+                if 'ITS_9' in ichi_df.columns:
+                    df['tenkan_sen'] = ichi_df['ITS_9']
+                    df['kijun_sen'] = ichi_df['IKS_26']
+                    df['senkou_span_a'] = ichi_df['ISA_9_26']
+                    df['senkou_span_b'] = ichi_df['ISB_26_52']
+                else:
+                    # Use the first few columns as a fallback
+                    df['tenkan_sen'] = ichi_df.iloc[:, 0]
+                    df['kijun_sen'] = ichi_df.iloc[:, 1]
+                    df['senkou_span_a'] = ichi_df.iloc[:, 2]
+                    df['senkou_span_b'] = ichi_df.iloc[:, 3]
+            else:
+                # Older pandas_ta versions return a DataFrame
+                df['tenkan_sen'] = ichimoku['ITS_9']
+                df['kijun_sen'] = ichimoku['IKS_26']
+                df['senkou_span_a'] = ichimoku['ISA_9_26']
+                df['senkou_span_b'] = ichimoku['ISB_26_52']
+                
+        except Exception as e:
+            # If Ichimoku fails, use simple moving averages as fallback
+            print(f"Error calculating Ichimoku: {e}")
+            df['tenkan_sen'] = ta.sma(df['close'], length=9)
+            df['kijun_sen'] = ta.sma(df['close'], length=26)
+            df['senkou_span_a'] = (df['tenkan_sen'] + df['kijun_sen']) / 2
+            df['senkou_span_b'] = ta.sma(df['close'], length=52)
     
     def _select_final_features(self, df: pd.DataFrame) -> pd.DataFrame:
         """
@@ -324,27 +351,29 @@ class FeatureEngineer:
         Returns:
             pd.DataFrame: DataFrame with only the selected features.
         """
-        # List of the 20 features to keep (including OHLCV)
+        # List of the 20 features to keep according to the technical design document
         selected_cols = [
             # OHLCV Base (5)
             'open', 'high', 'low', 'close', 'volume',
             
-            # Derived features and indicators (15)
+            # Price-derived features (3)
             'log_return',          # Log return
             'hl_range',            # High-Low range
             'body_size_rel',       # Relative body size
+            
+            # Technical indicators (12)
             'atr',                 # Average True Range
             'rsi',                 # Relative Strength Index
-            'macd',                # MACD
+            'macd',                # MACD line
+            'macd_signal',         # MACD signal line
             'macd_histogram',      # MACD Histogram
             'bb_width',            # Bollinger Band Width
-            'sma_cross',           # SMA Crossover
+            'sma_cross',           # SMA Crossover (fast - slow)
             'stoch_k',             # Stochastic %K
             'adx',                 # Average Directional Index
             'volume_ratio',        # Volume / Volume SMA
             'mfi',                 # Money Flow Index
             'obv',                 # On-Balance Volume
-            'tenkan_sen',          # Ichimoku Tenkan-sen
         ]
         
         # Ensure all columns exist

@@ -15,8 +15,8 @@ terraform {
   }
   
   # Uncomment this block to configure a GCS backend for Terraform state
-  # backend "gcs" {
-  #   bucket  = "your-terraform-state-bucket"
-  #   prefix  = "btc-trading-bot/terraform/state"
-  # }
+  backend "gcs" {
+    bucket  = "btcbot276299-terraform-state"
+    prefix  = "btc-trading-bot/terraform/state"
+  }
 }

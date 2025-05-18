@@ -227,30 +227,54 @@ class DataPreprocessor:
         """
         self.logger.info("Normalizing features...")
         
-        # Make a copy for normalized data
+        # Create a new DataFrame for normalized features
         norm_df = pd.DataFrame(index=df.index)
         
-        # Store column names of original features for reference
-        original_columns = df.columns.tolist()
+        # Ensure OHLCV and ATR columns exist for normalization dependencies
+        required_cols = ['close', 'atr', 'open']
+        missing_deps = [col for col in required_cols if col not in df.columns]
+        if missing_deps:
+            self.logger.error(f"Missing required columns for normalization: {missing_deps}")
+            raise ValueError(f"Required columns missing for normalization: {missing_deps}")
         
-        # Apply normalization to each feature
-        for feature in original_columns:
-            if feature not in self.normalization_methods:
-                self.logger.warning(f"No normalization method specified for feature: {feature}. Skipping.")
-                continue
-            
-            norm_method = self.normalization_methods[feature]
-            
-            # Apply the specified normalization method
+        # Process each feature with its specified normalization method
+        for feature, norm_method in self.normalization_methods.items():
             try:
+                if feature not in df.columns:
+                    self.logger.warning(f"Feature {feature} not found in input DataFrame. Skipping.")
+                    continue
+                
+                # Apply the specified normalization method
                 if norm_method == 'log_diff':
-                    # Log differences: log(x_t / x_{t-1})
-                    norm_df[feature] = np.log(df[feature] / df[feature].shift(1))
+                    # Log difference from previous value: log(x_t / x_{t-1})
+                    # For market prices: log(C/C_prev), log(H/O), log(L/O), log(C/O)
+                    if feature == 'open':
+                        # log(O/O_prev)
+                        norm_df[feature] = np.log(df[feature] / df[feature].shift(1))
+                    elif feature == 'high':
+                        # log(H/O) - log ratio of high to open
+                        norm_df[feature] = np.log(df[feature] / df['open'])
+                    elif feature == 'low':
+                        # log(L/O) - log ratio of low to open
+                        norm_df[feature] = np.log(df[feature] / df['open'])
+                    elif feature == 'close':
+                        # log(C/O) - log ratio of close to open (within candle)
+                        norm_df[feature] = np.log(df[feature] / df['open'])
+                    elif feature == 'volume':
+                        # log(Vol/SMA(Vol,N)) - volume relative to its moving average
+                        vol_sma = df[feature].rolling(window=20).mean().shift(1)
+                        norm_df[feature] = np.log(df[feature] / vol_sma)
+                    else:
+                        # Standard log diff for other features
+                        norm_df[feature] = np.log(df[feature] / df[feature].shift(1))
                 
                 elif norm_method == 'zscore':
                     # Z-score using rolling window: (x_t - mean_{t-1}) / std_{t-1}
+                    # This is causal - only using past data for mean and std
                     mean = df[feature].rolling(window=self.feature_normalization_lookback).mean().shift(1)
                     std = df[feature].rolling(window=self.feature_normalization_lookback).std().shift(1)
+                    # Handle zero std with a small epsilon
+                    std = std.replace(0, 1e-8)
                     norm_df[feature] = (df[feature] - mean) / std
                 
                 elif norm_method == 'divide_by_close':
@@ -258,8 +282,13 @@ class DataPreprocessor:
                     norm_df[feature] = df[feature] / df['close']
                 
                 elif norm_method == 'divide_by_atr':
-                    # Divide by ATR: x_t / atr_t
-                    norm_df[feature] = df[feature] / df['atr']
+                    # Normalize by ATR: (x_t - close_t) / atr_t
+                    # This works better for oscillators and indicators that should be centered
+                    norm_df[feature] = (df[feature] - df['close']) / df['atr']
+                
+                elif norm_method == 'pct_change':
+                    # Percentage change: (x_t / x_{t-1}) - 1
+                    norm_df[feature] = df[feature].pct_change()
                 
                 elif norm_method == 'identity':
                     # No normalization: x_t
@@ -267,10 +296,12 @@ class DataPreprocessor:
                 
                 elif norm_method == 'identity_center':
                     # Center to [-50, 50]: x_t - 50
+                    # Perfect for indicators already in [0, 100] range like RSI, MFI, Stochastic
                     norm_df[feature] = df[feature] - 50
                 
                 elif norm_method == 'identity_scale':
                     # Scale to [0, 1]: x_t / 100
+                    # For indicators in [0, 100] when we want [0, 1] range
                     norm_df[feature] = df[feature] / 100
                 
                 else:

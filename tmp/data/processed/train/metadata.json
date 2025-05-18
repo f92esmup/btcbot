@@ -1,0 +1,1 @@
+{"file_path": "tmp/data/processed/train/btc_data.parquet", "rows": 721, "columns": ["timestamp", "open", "high", "low", "close", "volume"]}

@@ -58,7 +58,12 @@ The BTC Trading Bot is an advanced algorithmic trading system for Bitcoin future
    ./setup_terraform.sh
    ```
 
-2. Deploy GCP infrastructure:
+2. Set up Secret Manager secrets:
+   ```bash
+   ./update_secrets.sh
+   ```
+
+3. Deploy GCP infrastructure:
    ```bash
    ./deploy_infrastructure.sh
    ```

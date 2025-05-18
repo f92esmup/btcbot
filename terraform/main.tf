@@ -171,6 +171,11 @@ resource "google_secret_manager_secret" "binance_api_key" {
   }
   
   depends_on = [google_project_service.required_apis]
+  
+  lifecycle {
+    prevent_destroy = true
+    ignore_changes = all
+  }
 }
 
 resource "google_secret_manager_secret" "binance_api_secret" {
@@ -181,6 +186,11 @@ resource "google_secret_manager_secret" "binance_api_secret" {
   }
   
   depends_on = [google_project_service.required_apis]
+  
+  lifecycle {
+    prevent_destroy = true
+    ignore_changes = all
+  }
 }
 
 # Create Vertex AI TensorBoard instance

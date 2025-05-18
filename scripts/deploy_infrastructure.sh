@@ -53,7 +53,25 @@ fi
 
 # Run terraform plan
 echo "🔍 Planning Terraform deployment..."
-terraform plan -out=tfplan
+terraform plan -out=tfplan || {
+    echo "❌ Terraform plan failed. This might be due to existing resources."
+    echo "📝 Attempting to import existing Secret Manager secrets if they exist..."
+    
+    # Check if the secrets already exist in GCP and import them
+    if gcloud secrets describe binance-api-key --project="$PROJECT_ID" &>/dev/null; then
+        echo "🔄 Importing existing binance-api-key secret..."
+        terraform import google_secret_manager_secret.binance_api_key projects/$PROJECT_ID/secrets/binance-api-key || true
+    fi
+    
+    if gcloud secrets describe binance-api-secret --project="$PROJECT_ID" &>/dev/null; then
+        echo "🔄 Importing existing binance-api-secret secret..."
+        terraform import google_secret_manager_secret.binance_api_secret projects/$PROJECT_ID/secrets/binance-api-secret || true
+    fi
+    
+    # Try planning again
+    echo "🔍 Re-planning Terraform deployment..."
+    terraform plan -out=tfplan
+}
 
 # Ask for confirmation
 echo ""

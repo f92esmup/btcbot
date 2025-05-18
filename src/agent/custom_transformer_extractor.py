@@ -135,8 +135,11 @@ class CustomTransformerFeatureExtractor(BaseFeaturesExtractor):
         else:
             raise ValueError("Portfolio features space must be a Box space")
         
-        # Linear embedding to convert market features to d_model dimensions
-        self.market_embedding = nn.Linear(n_market_features, d_model)
+        # Combined input size (market + portfolio features concatenated)
+        n_combined_features = n_market_features + n_portfolio_features
+        
+        # Linear embedding to convert combined features to d_model dimensions
+        self.market_embedding = nn.Linear(n_combined_features, d_model)
         
         # Positional encoding
         self.positional_encoding = PositionalEncoding(d_model, dropout)
@@ -157,18 +160,17 @@ class CustomTransformerFeatureExtractor(BaseFeaturesExtractor):
             num_layers=n_encoder_layers
         )
         
-        # Linear layer for portfolio features
-        self.portfolio_embedding = nn.Linear(n_portfolio_features, d_model)
-        
-        # Final embedding layer
-        self.final_embedding = nn.Linear(d_model * 2, features_dim)
+        # We don't need a separate portfolio embedding anymore
+        # Final embedding layer to match required features_dim
+        self.final_embedding = nn.Linear(d_model, features_dim)
     
     def forward(self, observations: Dict[str, torch.Tensor]) -> torch.Tensor:
         """
         Forward pass of the feature extractor.
         
-        Process market features through the transformer encoder and combine with
-        portfolio features to create a comprehensive state representation.
+        Process market features with portfolio features through the transformer encoder
+        to create a comprehensive state representation that captures temporal
+        correlations between market state and portfolio state.
         
         Args:
             observations (Dict[str, torch.Tensor]): Dictionary with 'market_features'
@@ -178,32 +180,37 @@ class CustomTransformerFeatureExtractor(BaseFeaturesExtractor):
             torch.Tensor: Extracted features tensor.
         """
         # Extract components from the dict observation
-        market_features = observations['market_features']  # (batch_size, seq_len, n_features)
+        market_features = observations['market_features']  # (batch_size, seq_len, n_market_features)
         portfolio_features = observations['portfolio_features']  # (batch_size, n_portfolio_features)
         
-        # Process market features
-        batch_size, seq_len, _ = market_features.shape
+        # Get dimensions
+        batch_size, seq_len, n_market_features = market_features.shape
+        
+        # Replicate portfolio features for each time step
+        # First, unsqueeze to add seq_len dimension: (batch_size, 1, n_portfolio_features)
+        portfolio_expanded = portfolio_features.unsqueeze(1)
+        
+        # Repeat along seq_len dimension: (batch_size, seq_len, n_portfolio_features)
+        portfolio_repeated = portfolio_expanded.repeat(1, seq_len, 1)
+        
+        # Concatenate market and portfolio features along the feature dimension
+        # (batch_size, seq_len, n_market_features + n_portfolio_features)
+        combined_features = torch.cat([market_features, portfolio_repeated], dim=2)
         
         # Transpose to (seq_len, batch_size, n_features) for transformer
-        market_features = market_features.transpose(0, 1)
+        combined_features = combined_features.transpose(0, 1)
         
         # Linear embedding and positional encoding
-        market_embedded = self.market_embedding(market_features)  # (seq_len, batch_size, d_model)
-        market_embedded = self.positional_encoding(market_embedded)
+        embedded = self.market_embedding(combined_features)  # (seq_len, batch_size, d_model)
+        embedded = self.positional_encoding(embedded)
         
         # Apply transformer encoder
-        transformer_output = self.transformer_encoder(market_embedded)  # (seq_len, batch_size, d_model)
+        transformer_output = self.transformer_encoder(embedded)  # (seq_len, batch_size, d_model)
         
-        # Use the last sequence element as the market representation
-        market_representation = transformer_output[-1]  # (batch_size, d_model)
+        # Use the last sequence element as the representation
+        final_representation = transformer_output[-1]  # (batch_size, d_model)
         
-        # Process portfolio features
-        portfolio_embedded = self.portfolio_embedding(portfolio_features)  # (batch_size, d_model)
-        
-        # Concatenate market and portfolio representations
-        combined_features = torch.cat([market_representation, portfolio_embedded], dim=1)  # (batch_size, d_model*2)
-        
-        # Final embedding
-        output = self.final_embedding(combined_features)  # (batch_size, features_dim)
+        # Final embedding to match expected features_dim
+        output = self.final_embedding(final_representation)  # (batch_size, features_dim)
         
         return output

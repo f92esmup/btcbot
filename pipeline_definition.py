@@ -82,7 +82,10 @@ def btc_trading_pipeline(
     
     # Container image URI for all components
     # If a custom image_uri is provided, use it; otherwise, use the default
-    container_image_uri = image_uri if image_uri else f"{region}-docker.pkg.dev/{project_id}/btc-trading-bot/btc-trading-bot:latest"
+    if image_uri:
+        container_image_uri = image_uri
+    else:
+        container_image_uri = f"{region}-docker.pkg.dev/{project_id}/btc-trading-bot/btc-trading-bot:latest"
     
     # Define the data acquisition component
     @component(
@@ -232,20 +235,22 @@ def btc_trading_pipeline(
     plots_uri = f"{gcs_path_base}/plots/{timestamp}"
     
     # Environment parameters for trading environment
-    env_params = {
-        "project_id": project_id,
-        "gcs_processed_data_uri": train_data_uri,
-        "initial_balance_usd": initial_balance_usd,
-        "max_position_btc": max_position_btc,
-        "commission_rate": commission_rate,
-        "max_leverage": max_leverage,
-        "random_episode_start": True,
-        "episode_steps": 1000,
-        "slippage_model": "atr_based",
-        "slippage_factor": 0.05
-    }
-    
-    env_params_json = json.dumps(env_params)
+    # Create a string representation manually instead of using json.dumps
+    # to avoid issues with PipelineParameterChannel objects
+    env_params_json = (
+        '{'
+        f'"project_id": "{project_id}", '
+        f'"gcs_processed_data_uri": "{train_data_uri}", '
+        f'"initial_balance_usd": {initial_balance_usd}, '
+        f'"max_position_btc": {max_position_btc}, '
+        f'"commission_rate": {commission_rate}, '
+        f'"max_leverage": {max_leverage}, '
+        '"random_episode_start": true, '
+        '"episode_steps": 1000, '
+        '"slippage_model": "atr_based", '
+        '"slippage_factor": 0.05'
+        '}'
+    )
     
     # Run the components
     data_task = data_acquisition_op(

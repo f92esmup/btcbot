@@ -511,46 +511,48 @@ class TradingEnvironment(gym.Env):
     
     def _execute_trade(self, decision, target_position_btc):
         """
-        Execute a trading decision.
+        Execute a trading decision following the technical design document.
+        
+        This implementation handles all cases correctly:
+        - Opening a new position
+        - Closing an existing position
+        - Inverting a position (changing from long to short or vice versa)
+        - Increasing/decreasing position size
+        
+        It also properly calculates the weighted average entry price when adding to a position.
         
         Args:
             decision (str): Trading decision ('buy', 'sell', 'hold', 'close').
             target_position_btc (float): Target position size in BTC.
         """
         if decision == 'hold':
-            # No trade to execute
+            # No change, just update steps in position if in a position
             if self.current_position_btc != 0:
                 self.steps_in_position += 1
             return
         
-        # Calculate the required change in position
+        # Calculate position delta (how much to add or remove)
         position_delta_btc = target_position_btc - self.current_position_btc
         
+        # If delta is very small, consider it as no change
         if abs(position_delta_btc) < 1e-8:
-            # Position change is too small to execute
-            if self.current_position_btc != 0:
-                self.steps_in_position += 1
-            return
-        
-        # Determine order type
-        if position_delta_btc > 0:
-            order_type = 'buy'
-        elif position_delta_btc < 0:
-            order_type = 'sell'
-        else:
-            # No change in position
             if self.current_position_btc != 0:
                 self.steps_in_position += 1
             return
         
         # Calculate order size in USD
-        order_size_usd = abs(position_delta_btc) * self.current_market_price
+        order_value_usd = abs(position_delta_btc * self.current_market_price)
         
         # Execute the order using the broker
+        if position_delta_btc > 0:
+            order_type = 'buy'
+        else:
+            order_type = 'sell'
+            
         execution_details = self.broker.calculate_execution_details(
             order_type=order_type,
             market_price=self.current_market_price,
-            order_size_usd=order_size_usd,
+            order_size_usd=order_value_usd,
             atr=self.current_atr,
             current_position=self.current_position_btc,
             current_position_entry_price=self.current_position_entry_price
@@ -566,8 +568,27 @@ class TradingEnvironment(gym.Env):
         self.current_balance_usd -= execution_details['commission_usd']
         self.current_balance_usd -= execution_details['slippage_usd']
         
-        # Calculate the new position details
-        old_position_value = self.current_position_btc * self.current_position_entry_price
+        # Calculate realized PnL if we're reducing or flipping a position
+        realized_pnl = 0
+        if self.current_position_btc != 0 and (
+                (self.current_position_btc > 0 and position_delta_btc < 0) or 
+                (self.current_position_btc < 0 and position_delta_btc > 0)):
+            
+            # Calculate how much of the position we're closing
+            closing_size = min(abs(self.current_position_btc), abs(position_delta_btc))
+            if self.current_position_btc > 0:  # Closing long position
+                realized_pnl = closing_size * (self.current_market_price - self.current_position_entry_price)
+            else:  # Closing short position
+                realized_pnl = closing_size * (self.current_position_entry_price - self.current_market_price)
+            
+            # Update balance with realized PnL
+            self.current_balance_usd += realized_pnl
+        
+        # Calculate new position
+        old_position_value = 0
+        if abs(self.current_position_btc) > 1e-8:
+            old_position_value = abs(self.current_position_btc * self.current_position_entry_price)
+        
         new_position_delta = execution_details['size_btc']
         new_position_value = abs(new_position_delta) * execution_details['execution_price']
         
@@ -582,38 +603,25 @@ class TradingEnvironment(gym.Env):
         else:
             self.position_direction = 0
         
-        # Update entry price (weighted average)
-        if abs(self.current_position_btc) > 1e-8:
-            # If adding to position
-            if (self.current_position_btc - new_position_delta) * new_position_delta > 0:
-                self.current_position_entry_price = (old_position_value + new_position_value) / abs(self.current_position_btc)
-            # If reducing position
-            elif abs(new_position_delta) < abs(self.current_position_btc - new_position_delta):
-                # Entry price remains the same
-                pass
-            # If opening a new position or flipping direction
-            else:
-                self.current_position_entry_price = execution_details['execution_price']
-        else:
-            # Position closed
-            self.current_position_entry_price = 0.0
+        # Calculate new entry price
+        if abs(self.current_position_btc) < 1e-8:  # Position fully closed
+            self.current_position_entry_price = 0
             self.steps_in_position = 0
-            self.position_direction = 0
-        
-        # If position exists, increment steps in position counter
-        if self.current_position_btc != 0:
-            if (self.current_position_btc - new_position_delta) * new_position_delta <= 0 and self.current_position_btc * (self.current_position_btc - new_position_delta) <= 0:
-                # New position or position flipped, reset counter
-                self.steps_in_position = 0
-            else:
-                # Existing position modified, increment counter
-                self.steps_in_position += 1
+        elif (self.current_position_btc > 0 and self.current_position_btc - new_position_delta > 0) or \
+             (self.current_position_btc < 0 and self.current_position_btc - new_position_delta < 0):
+            # Adding to existing position (same direction) - weighted average
+            self.current_position_entry_price = (old_position_value + new_position_value) / abs(self.current_position_btc)
+            self.steps_in_position += 1  # Continue counting
+        else:
+            # New position or flipped position - use current price
+            self.current_position_entry_price = execution_details['execution_price']
+            self.steps_in_position = 0  # Reset counter for new position
         
         # Update max position value
         current_position_value = abs(self.current_position_btc) * self.current_market_price
         self.max_position_value = max(self.max_position_value, current_position_value)
         
-        self.logger.debug(f"Executed {order_type} order: {abs(new_position_delta):.8f} BTC at {execution_details['execution_price']:.2f} USD")
+        self.logger.debug(f"Executed {order_type} order: {abs(new_position_delta):.8f} BTC at {execution_details['execution_price']:.2f} USD, PnL: {realized_pnl:.2f} USD")
     
     def _calculate_unrealized_pnl(self):
         """
@@ -704,41 +712,47 @@ class TradingEnvironment(gym.Env):
     
     def _get_portfolio_features(self):
         """
-        Calculate and normalize portfolio features.
+        Calculate and normalize portfolio features according to the technical design document.
         
         Returns:
             np.ndarray: Array of normalized portfolio features.
         """
-        # 1. Position size normalized
+        # 1. Position size normalized by max position
         normalized_position = self.current_position_btc / self.max_position_norm_divisor
         
-        # 2. Entry price normalized
-        if self.current_position_entry_price > 0 and self.entry_price_log_scale:
+        # 2. Entry price normalized - use log scale relative to current price
+        if self.current_position_entry_price > 0 and self.current_market_price > 0:
             normalized_entry_price = np.log(self.current_position_entry_price / self.current_market_price)
-        elif self.current_position_entry_price > 0:
-            normalized_entry_price = self.current_position_entry_price / self.current_market_price - 1.0
         else:
             normalized_entry_price = 0.0
         
         # 3. Unrealized P&L normalized
         unrealized_pnl = self._calculate_unrealized_pnl()
-        unrealized_pnl_normalized = unrealized_pnl / self.unrealized_pnl_norm_divisor
-        
-        # 4. Account balance normalized
-        if self.balance_log_scale:
-            normalized_balance = np.log(self.current_balance_usd / self.initial_balance_usd)
+        if self.current_position_btc != 0 and self.current_position_entry_price > 0:
+            # Normalize by the unrealized PnL divisor, but also relative to current equity
+            current_equity = self.current_balance_usd + (self.current_position_btc * self.current_market_price)
+            if current_equity > 0:  # Protect against division by zero
+                unrealized_pnl_normalized = unrealized_pnl / (current_equity * self.unrealized_pnl_norm_divisor/100)
+            else:
+                unrealized_pnl_normalized = 0.0
         else:
-            normalized_balance = self.current_balance_usd / self.initial_balance_usd - 1.0
+            unrealized_pnl_normalized = 0.0
         
-        # 5. Steps in position normalized
+        # 4. Account balance normalized by initial balance (as percentage change)
+        normalized_balance = (self.current_balance_usd / self.initial_balance_usd) - 1.0
+        
+        # 5. Steps in position normalized by steps divisor
         steps_in_position_normalized = self.steps_in_position / self.steps_in_position_norm_divisor
         
         # 6. Max drawdown percentage normalized
         max_drawdown_pct_normalized = self.max_drawdown_pct / self.max_drawdown_pct_norm_divisor
         
         # 7. ATR percentage normalized
-        atr_pct = (self.current_atr / self.current_market_price) * 100
-        atr_pct_normalized = atr_pct / self.atr_pct_norm_divisor
+        if self.current_market_price > 0:  # Protect against division by zero
+            atr_pct = (self.current_atr / self.current_market_price) * 100
+            atr_pct_normalized = atr_pct / self.atr_pct_norm_divisor
+        else:
+            atr_pct_normalized = 0.0
         
         # 8. Maintenance margin percentage normalized
         if abs(self.current_position_btc) > 0:

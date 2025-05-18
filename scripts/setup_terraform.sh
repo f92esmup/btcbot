@@ -44,7 +44,7 @@ fi
 
 # Get GCP region
 if [ -z "$REGION" ]; then
-    REGION="us-central1"
+    REGION="europe-southwest1"
     echo "📋 Using default region: $REGION"
     echo "   To use a different region, press Ctrl+C and set the REGION environment variable."
 fi
