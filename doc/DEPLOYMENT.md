@@ -1,6 +1,7 @@
 # Guía de Despliegue del Bitcoin Trading Bot en GCP
 
-Esta guía proporciona instrucciones detalladas para desplegar el Bitcoin Trading Bot en Google Cloud Platform (GCP) utilizando Vertex AI Pipelines y Cloud Build.
+Esta guía proporciona instrucciones detalladas para desplegar el Bitcoin Trading Bot en Google Cloud Platform (GCP) utilizando Vertex AI Pipelines y Cloud Build. **PERO ES PARA EL FUTURO LEJANO, AHORA MISMO NOS CENTRAMOS EN LA CREACIÓN MANUAL DE RECURSOS**
+
 
 ## Prerrequisitos
 
