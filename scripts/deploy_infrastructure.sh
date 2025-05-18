@@ -58,6 +58,11 @@ terraform plan -out=tfplan || {
     echo "📝 Attempting to import existing Secret Manager secrets if they exist..."
     
     # Check if the secrets already exist in GCP and import them
+    # Get the project ID from terraform.tfvars if not already set
+    if [ -z "$PROJECT_ID" ]; then
+        PROJECT_ID=$(grep 'project_id' terraform.tfvars | cut -d'"' -f2)
+    fi
+    
     if gcloud secrets describe binance-api-key --project="$PROJECT_ID" &>/dev/null; then
         echo "🔄 Importing existing binance-api-key secret..."
         terraform import google_secret_manager_secret.binance_api_key projects/$PROJECT_ID/secrets/binance-api-key || true

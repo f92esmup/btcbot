@@ -167,7 +167,7 @@ resource "google_secret_manager_secret" "binance_api_key" {
   secret_id = "binance-api-key"
   
   replication {
-    automatic = true
+    auto = true
   }
   
   depends_on = [google_project_service.required_apis]
@@ -182,7 +182,7 @@ resource "google_secret_manager_secret" "binance_api_secret" {
   secret_id = "binance-api-secret"
   
   replication {
-    automatic = true
+    auto = true
   }
   
   depends_on = [google_project_service.required_apis]
