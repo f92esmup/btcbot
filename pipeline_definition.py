@@ -50,7 +50,8 @@ def btc_trading_pipeline(
     max_leverage: int = 20,
     training_steps: int = 1000000,
     n_backtest_episodes: int = 5,
-    transformer_params_json: str = '{"n_heads": 4, "n_layers": 2, "d_model": 64}'
+    transformer_params_json: str = '{"n_heads": 4, "n_layers": 2, "d_model": 64}',
+    image_uri: str = None
 ):
     """
     Define the Bitcoin trading bot pipeline.
@@ -74,12 +75,14 @@ def btc_trading_pipeline(
         training_steps (int, optional): Number of training steps.
         n_backtest_episodes (int, optional): Number of backtest episodes.
         transformer_params_json (str, optional): JSON string of transformer parameters.
+        image_uri (str, optional): URI of the Docker image to use for components.
     """
     # Define component URIs
     gcs_path_base = f"gs://{gcs_bucket}/btc-trading-bot"
     
     # Container image URI for all components
-    container_image_uri = f"gcr.io/{project_id}/btc-trading-bot:latest"
+    # If a custom image_uri is provided, use it; otherwise, use the default
+    container_image_uri = image_uri if image_uri else f"{region}-docker.pkg.dev/{project_id}/btc-trading-bot/btc-trading-bot:latest"
     
     # Define the data acquisition component
     @component(
@@ -282,16 +285,18 @@ def btc_trading_pipeline(
         n_episodes=n_backtest_episodes
     ).after(train_task)
 
-def compile_pipeline(output_file: str = "btc_trading_pipeline.json"):
+def compile_pipeline(output_file: str = "btc_trading_pipeline.json", image_uri: str = None):
     """
     Compile the pipeline to a JSON file.
     
     Args:
         output_file (str, optional): Path to the output JSON file.
             Defaults to "btc_trading_pipeline.json".
+        image_uri (str, optional): URI of the Docker image to use for components.
+            If None, the default image URI will be used.
     """
     compiler.Compiler().compile(
-        pipeline_func=btc_trading_pipeline,
+        pipeline_func=lambda **kwargs: btc_trading_pipeline(image_uri=image_uri, **kwargs) if image_uri else btc_trading_pipeline(**kwargs),
         package_path=output_file
     )
 
@@ -300,14 +305,20 @@ def parse_args():
     parser = argparse.ArgumentParser(description='Compile the BTC trading bot pipeline')
     parser.add_argument('--output-file', type=str, default="btc_trading_pipeline.json",
                         help='Path to the output JSON file')
+    parser.add_argument('--image-uri', type=str, default=None,
+                        help='URI of the Docker image to use for components')
     
     return parser.parse_args()
 
 def main():
     """Main entry point for pipeline compilation."""
     args = parse_args()
-    compile_pipeline(output_file=args.output_file)
+    compile_pipeline(output_file=args.output_file, image_uri=args.image_uri)
     print(f"Pipeline compiled successfully to {args.output_file}")
+    if args.image_uri:
+        print(f"Using custom image URI: {args.image_uri}")
+    else:
+        print("Using default image URI from pipeline definition")
 
 if __name__ == '__main__':
     main()

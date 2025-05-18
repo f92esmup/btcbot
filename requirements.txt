@@ -15,8 +15,9 @@ google-cloud-storage>=2.6.0
 google-cloud-bigquery>=3.2.0
 google-cloud-logging>=3.1.2
 google-cloud-secret-manager>=2.12.0
+google-cloud-aiplatform>=1.14.0
+google-cloud-pipeline-components>=2.0.0
 kfp>=2.0.0
-vertex-ai>=1.14.0
 
 # ML/RL libraries
 gymnasium>=0.26.3
@@ -31,9 +32,14 @@ quantstats>=0.0.56
 plotly>=5.10.0
 seaborn>=0.12.0
 
-# Testing
+# Testing and linting
 pytest>=7.0.0
 pytest-cov>=4.0.0
+flake8>=6.0.0
+pylint>=2.15.0
+
+# CI/CD and infrastructure
+python-terraform>=0.10.1
 
 # Jupyter (optional for development)
 jupyter>=1.0.0
