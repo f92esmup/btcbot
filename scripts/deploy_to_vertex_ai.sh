@@ -1,110 +1,95 @@
 #!/bin/bash
-# deploy_to_vertex_ai.sh - Deploy BTC Trading Bot to Vertex AI
+# deploy_to_vertex_ai.sh - Deploy BTC Trading Bot pipeline to Vertex AI
 #
-# This script automates the deployment of the BTC Trading Bot to Vertex AI
-# by compiling the pipeline definition and creating or updating a Vertex AI pipeline.
+# This script compiles the pipeline definition and creates/updates the
+# pipeline in Vertex AI Pipelines.
 
 set -e  # Exit immediately if a command exits with a non-zero status
 
-echo "🚀 Deploying BTC Trading Bot to Vertex AI..."
+echo "🚀 Deploying BTC Trading Bot pipeline to Vertex AI..."
 echo "------------------------------------------------"
 
-# Change to project root directory
-cd "$(dirname "$0")/.."
-echo "📁 Working directory: $(pwd)"
-
 # Get configuration from terraform.tfvars
-PROJECT_ID=$(grep 'project_id' terraform/terraform.tfvars | cut -d'"' -f2)
-REGION=$(grep 'region' terraform/terraform.tfvars | cut -d'"' -f2)
+cd "$(dirname "$0")/../terraform"
+PROJECT_ID=$(grep 'project_id' terraform.tfvars | cut -d'"' -f2)
+REGION=$(grep 'region' terraform.tfvars | cut -d'"' -f2)
+cd ..
 
-# Check if the variables are not empty
-if [ -z "$PROJECT_ID" ] || [ -z "$REGION" ]; then
-    echo "❌ Error: Missing required information."
-    echo "   Project ID: $PROJECT_ID"
-    echo "   Region: $REGION"
-    exit 1
-fi
-
-# Set environment variables
-export PROJECT_ID=$PROJECT_ID
-export REGION=$REGION
-export ARTIFACTS_BUCKET="${PROJECT_ID}-btc-artifacts"
-export IMAGE_URI="${REGION}-docker.pkg.dev/${PROJECT_ID}/btc-trading-bot/btc-trading-bot:latest"
-export SERVICE_ACCOUNT="btc-trading-bot-sa@${PROJECT_ID}.iam.gserviceaccount.com"
-
-# Build Docker image and push it to Artifact Registry if requested
-echo "📋 Do you want to build and push the Docker image? (y/n)"
-read -r BUILD_IMAGE
-
-if [ "$BUILD_IMAGE" = "y" ] || [ "$BUILD_IMAGE" = "Y" ]; then
-    echo "🔧 Building Docker image..."
-    docker build -t "$IMAGE_URI" .
-    
-    echo "📤 Pushing Docker image to Artifact Registry..."
-    gcloud auth configure-docker ${REGION}-docker.pkg.dev --quiet
-    docker push "$IMAGE_URI"
-    
-    echo "✅ Docker image built and pushed successfully!"
-else
-    echo "ℹ️ Skipping Docker image build and push."
-fi
+# Make sure needed packages are installed
+echo "📦 Installing required packages..."
+pip install -q kfp==1.8.22 google-cloud-aiplatform google-cloud-storage
 
 # Compile the pipeline
+TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+OUTPUT_FILE="tmp/compiled_pipeline_${TIMESTAMP}.json"
+
 echo "🔧 Compiling pipeline definition..."
-python pipeline_definition.py --output-file=btc_trading_pipeline.json --image-uri="$IMAGE_URI"
+mkdir -p tmp
+python pipeline_definition.py --output-file "$OUTPUT_FILE"
 
-# Upload the compiled pipeline to GCS
-echo "📤 Uploading pipeline to GCS..."
-TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
-PIPELINE_GCS_PATH="gs://${ARTIFACTS_BUCKET}/pipelines/btc-trading-bot-pipeline-${TIMESTAMP}.json"
-gsutil cp btc_trading_pipeline.json "$PIPELINE_GCS_PATH"
+# Upload the pipeline to GCS
+ARTIFACTS_BUCKET="${PROJECT_ID}-btc-artifacts"
+GCS_PATH="gs://${ARTIFACTS_BUCKET}/pipelines/btc-trading-bot-pipeline-${TIMESTAMP}.json"
 
-# Ask for pipeline parameters
-echo "📋 Enter a start date for data download (YYYY-MM-DD, default: 2021-01-01):"
+echo "📤 Uploading pipeline to GCS: $GCS_PATH"
+gsutil cp "$OUTPUT_FILE" "$GCS_PATH"
+
+# Get Binance API credentials from Secret Manager
+echo "🔑 Retrieving Binance API credentials from Secret Manager..."
+BINANCE_API_KEY=$(gcloud secrets versions access latest --secret="binance-api-key" --project="$PROJECT_ID")
+BINANCE_API_SECRET=$(gcloud secrets versions access latest --secret="binance-api-secret" --project="$PROJECT_ID")
+
+# Configure pipeline parameters
+SERVICE_ACCOUNT="btc-trading-bot-sa@${PROJECT_ID}.iam.gserviceaccount.com"
+
+echo "📋 Enter start date for data download (YYYY-MM-DD, default: 2023-01-01):"
 read -r DOWNLOAD_START_DATE
-DOWNLOAD_START_DATE=${DOWNLOAD_START_DATE:-"2021-01-01"}
+DOWNLOAD_START_DATE=${DOWNLOAD_START_DATE:-"2023-01-01"}
 
-echo "📋 Enter an end date for data download (YYYY-MM-DD, default: 2022-12-31):"
+echo "📋 Enter end date for data download (YYYY-MM-DD, default: $(date +%Y-%m-%d)):"
 read -r DOWNLOAD_END_DATE
-DOWNLOAD_END_DATE=${DOWNLOAD_END_DATE:-"2022-12-31"}
+DOWNLOAD_END_DATE=${DOWNLOAD_END_DATE:-$(date +%Y-%m-%d)}
 
-echo "📋 Enter the number of training steps (default: 100000):"
+echo "📋 Enter training steps (default: 100000):"
 read -r TRAINING_STEPS
-TRAINING_STEPS=${TRAINING_STEPS:-"100000"}
+TRAINING_STEPS=${TRAINING_STEPS:-100000}
 
-echo "📋 Enter the number of backtest episodes (default: 5):"
-read -r BACKTEST_EPISODES
-BACKTEST_EPISODES=${BACKTEST_EPISODES:-"5"}
+echo "📋 Enter number of backtest episodes (default: 5):"
+read -r N_BACKTEST_EPISODES
+N_BACKTEST_EPISODES=${N_BACKTEST_EPISODES:-5}
 
-# Create or update the pipeline in Vertex AI
-echo "🔧 Creating pipeline in Vertex AI..."
+# Deploy the pipeline to Vertex AI
+echo "🚀 Deploying pipeline to Vertex AI..."
 python - << EOF
 from google.cloud import aiplatform
 
-# Initialize the Vertex AI SDK
-aiplatform.init(project='$PROJECT_ID', location='$REGION')
+aiplatform.init(project='${PROJECT_ID}', location='${REGION}')
 
-# Create a pipeline job
+# Create pipeline job
 pipeline_job = aiplatform.PipelineJob(
-    display_name='btc-trading-bot-pipeline',
-    template_path='$PIPELINE_GCS_PATH',
+    display_name='btc-trading-bot-pipeline-${TIMESTAMP}',
+    template_path='${GCS_PATH}',
     parameter_values={
-        'project_id': '$PROJECT_ID',
-        'region': '$REGION',
-        'gcs_bucket': '$ARTIFACTS_BUCKET',
-        'download_start_date': '$DOWNLOAD_START_DATE',
-        'download_end_date': '$DOWNLOAD_END_DATE',
-        'training_steps': $TRAINING_STEPS,
-        'n_backtest_episodes': $BACKTEST_EPISODES
+        'project_id': '${PROJECT_ID}',
+        'region': '${REGION}',
+        'gcs_bucket': '${ARTIFACTS_BUCKET}',
+        'binance_api_key': '${BINANCE_API_KEY}',
+        'binance_api_secret': '${BINANCE_API_SECRET}',
+        'download_start_date': '${DOWNLOAD_START_DATE}',
+        'download_end_date': '${DOWNLOAD_END_DATE}',
+        'symbol': 'BTCUSDT',
+        'timeframe': '1h',
+        'training_steps': ${TRAINING_STEPS},
+        'n_backtest_episodes': ${N_BACKTEST_EPISODES}
     },
     enable_caching=True
 )
 
 # Submit the pipeline job
-pipeline_job.submit(service_account='$SERVICE_ACCOUNT')
-print(f'Pipeline job submitted: {pipeline_job.name}')
+pipeline_job.submit(service_account='${SERVICE_ACCOUNT}')
+print(f'Pipeline job submitted: {pipeline_job.resource_name}')
 EOF
 
-echo "✅ Pipeline deployed to Vertex AI successfully!"
+echo "✅ Pipeline deployment complete!"
 echo "------------------------------------------------"
-echo "🔍 You can view your pipeline at: https://console.cloud.google.com/vertex-ai/pipelines?project=$PROJECT_ID"
+echo "🔍 You can view your pipeline runs at: https://console.cloud.google.com/vertex-ai/pipelines/runs?project=$PROJECT_ID"
