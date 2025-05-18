@@ -1,0 +1,101 @@
+# Cloud Build configuration file for BTC Trading Bot
+# This file defines the CI/CD pipeline that builds and deploys the BTC Trading Bot
+
+# Global timeout for the entire build
+timeout: 3600s
+
+# Steps in the build process
+steps:
+  # Step 1: Run unit tests
+  - name: 'python:3.9'
+    id: 'run-tests'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        pip install -r requirements.txt
+        python -m pytest tests/ -v
+
+  # Step 2: Build Docker image
+  - name: 'gcr.io/cloud-builders/docker'
+    id: 'build-image'
+    args:
+      - 'build'
+      - '-t'
+      - 'gcr.io/$PROJECT_ID/btc-trading-bot:latest'
+      - '-t'
+      - 'gcr.io/$PROJECT_ID/btc-trading-bot:$SHORT_SHA'
+      - '.'
+    waitFor: ['run-tests']
+
+  # Step 3: Push Docker image to Container Registry
+  - name: 'gcr.io/cloud-builders/docker'
+    id: 'push-image'
+    args:
+      - 'push'
+      - 'gcr.io/$PROJECT_ID/btc-trading-bot:latest'
+    waitFor: ['build-image']
+
+  # Step 4: Compile Kubeflow Pipeline
+  - name: 'python:3.9'
+    id: 'compile-pipeline'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        pip install kfp google-cloud-storage
+        python pipeline_definition.py --output-file pipeline.json
+    waitFor: ['push-image']
+
+  # Step 5: Upload pipeline to GCS
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    id: 'upload-pipeline'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        gsutil cp pipeline.json gs://$_GCS_BUCKET/pipelines/btc-trading-bot-pipeline-$SHORT_SHA.json
+    waitFor: ['compile-pipeline']
+
+  # Step 6: Create pipeline in Vertex AI
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    id: 'create-pipeline'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        # Install Google Cloud Pipelines SDK
+        pip install google-cloud-pipeline-components google-cloud-aiplatform
+        
+        # Create pipeline in Vertex AI
+        python -c "
+        from google.cloud import aiplatform
+        aiplatform.init(project='$PROJECT_ID', location='$_REGION')
+        pipeline = aiplatform.PipelineJob(
+            display_name='btc-trading-bot-pipeline-$SHORT_SHA',
+            template_path='gs://$_GCS_BUCKET/pipelines/btc-trading-bot-pipeline-$SHORT_SHA.json',
+            parameter_values={
+                'project_id': '$PROJECT_ID',
+                'region': '$_REGION',
+                'gcs_bucket': '$_GCS_BUCKET'
+            }
+        )
+        pipeline.submit()
+        "
+    waitFor: ['upload-pipeline']
+
+# Images to be pushed to Container Registry
+images:
+  - 'gcr.io/$PROJECT_ID/btc-trading-bot:latest'
+  - 'gcr.io/$PROJECT_ID/btc-trading-bot:$SHORT_SHA'
+
+# Substitution variables (configured in Cloud Build trigger)
+substitutions:
+  _GCS_BUCKET: 'your-gcs-bucket'  # Replace with your actual GCS bucket name
+  _REGION: 'us-central1'          # Replace with your preferred region
+
+# Options for the build
+options:
+  machineType: 'E2_HIGHCPU_8'     # Use a high-CPU machine for faster builds
+  diskSizeGb: '100'               # Allocate 100GB disk space for the build
+  dynamic_substitutions: true     # Enable dynamic variable substitution
