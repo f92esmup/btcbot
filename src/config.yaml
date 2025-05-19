@@ -1,6 +1,11 @@
 data_paths:
+  # Rutas para almacenamiento local (no se utilizan en download_data)
   raw: "data/raw"
   processed: "data/processed"
+  
+  # Rutas para Google Cloud Storage (obligatorias para download_data)
+  gcs_raw: "raw"
+  gcs_processed: "processed"
 
 binance_api:
   futures_base_url: "https://fapi.binance.com"

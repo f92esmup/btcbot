@@ -1,6 +1,11 @@
 import yaml
 import os
 from dotenv import load_dotenv
+from google.cloud import secretmanager
+import json
+import logging
+
+logger = logging.getLogger(__name__)
 
 class ConfigManager:
     _instance = None
@@ -13,15 +18,42 @@ class ConfigManager:
                 with open(config_path, 'r') as f:
                     cls._instance.config = yaml.safe_load(f)
             except FileNotFoundError:
-                # logger.error(f"Archivo de configuración {config_path} no encontrado.") # Necesitarías un logger aquí o lanzar excepción
                 raise FileNotFoundError(f"Archivo de configuración {config_path} no encontrado.")
             except yaml.YAMLError as e:
-                # logger.error(f"Error al parsear el archivo YAML {config_path}: {e}")
                 raise yaml.YAMLError(f"Error al parsear el archivo YAML {config_path}: {e}")
+            
+            # Inicializar cliente de Secret Manager si se define un proyecto de GCP
+            cls._instance.gcp_project_id = cls._instance.get_env_variable('GCP_PROJECT_ID')
+            cls._instance.secret_client = None
+            
+            if cls._instance.gcp_project_id:
+                try:
+                    cls._instance.secret_client = secretmanager.SecretManagerServiceClient()
+                    logger.info(f"Cliente de Google Secret Manager inicializado para proyecto: {cls._instance.gcp_project_id}")
+                except Exception as e:
+                    logger.warning(f"No se pudo inicializar Google Secret Manager: {e}")
+        
         return cls._instance
 
     def get_env_variable(self, var_name: str, default=None):
-        return os.getenv(var_name, default)
+        # Primero intentar obtener de Secret Manager si está configurado
+        if self.secret_client and self.gcp_project_id:
+            try:
+                secret_name = f"projects/{self.gcp_project_id}/secrets/{var_name}/versions/latest"
+                response = self.secret_client.access_secret_version(name=secret_name)
+                secret_value = response.payload.data.decode('UTF-8')
+                logger.debug(f"Secreto {var_name} obtenido correctamente de Secret Manager")
+                return secret_value
+            except Exception as e:
+                logger.info(f"No se pudo obtener secreto {var_name} de Secret Manager: {e}")
+                # Si el error es porque no existe este secreto específico, continuar con variables de entorno
+                pass
+        
+        # Si no hay Secret Manager o no se encontró el secreto, intentar con variables de entorno
+        env_value = os.getenv(var_name, default)
+        if env_value is None:
+            logger.warning(f"Variable {var_name} no encontrada en Secret Manager ni en variables de entorno")
+        return env_value
 
     def get_config_value(self, key_path: str, default=None):
         try:

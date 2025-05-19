@@ -4,6 +4,8 @@ from datetime import datetime, timezone
 import time
 import logging
 import os
+import io
+from google.cloud import storage
 from src.utils.config import ConfigManager
 
 logger = logging.getLogger(__name__) # Configurar el logger a nivel de script o aplicación
@@ -15,7 +17,7 @@ class BinanceFuturesDownloader:
         self.api_secret = self.config_manager.get_env_variable('BINANCE_API_SECRET_FUTURES')
         
         if not self.api_key or not self.api_secret:
-            logger.error("API Key o Secret de Binance Futuros no configuradas en .env")
+            logger.error("API Key o Secret de Binance Futuros no configuradas en .env o Secret Manager")
             raise ValueError("API Key o Secret de Binance Futuros no configuradas.")
 
         try:
@@ -26,14 +28,35 @@ class BinanceFuturesDownloader:
             logger.error(f"Error al conectar con Binance Futures API: {e}")
             raise ConnectionError(f"Error al conectar con Binance Futures API: {e}")
 
+        # Configuración de Google Cloud Storage (obligatoria)
+        self.gcp_project_id = self.config_manager.get_env_variable('GCP_PROJECT_ID')
+        if not self.gcp_project_id:
+            logger.error("GCP_PROJECT_ID no configurado. Es obligatorio para el funcionamiento.")
+            raise ValueError("GCP_PROJECT_ID no configurado. Es obligatorio para el funcionamiento.")
+            
+        self.gcs_bucket_name = self.config_manager.get_env_variable('GCS_BUCKET_NAME')
+        if not self.gcs_bucket_name:
+            logger.error("GCS_BUCKET_NAME no configurado. Es obligatorio para el funcionamiento.")
+            raise ValueError("GCS_BUCKET_NAME no configurado. Es obligatorio para el funcionamiento.")
+        
+        self.gcs_data_path = self.config_manager.get_config_value('data_paths.gcs_raw', 'raw')
+        
+        logger.info(f"Usando Google Cloud Storage para almacenar datos. Bucket: {self.gcs_bucket_name}")
+        try:
+            self.storage_client = storage.Client(project=self.gcp_project_id)
+            self.bucket = self.storage_client.bucket(self.gcs_bucket_name)
+            if not self.bucket.exists():
+                logger.warning(f"El bucket {self.gcs_bucket_name} no existe. Se intentará crear.")
+                self.bucket = self.storage_client.create_bucket(self.gcs_bucket_name)
+                logger.info(f"Bucket {self.gcs_bucket_name} creado con éxito.")
+        except Exception as e:
+            logger.error(f"Error al conectar con Google Cloud Storage: {e}")
+            raise ConnectionError(f"Error al conectar con Google Cloud Storage: {e}")
 
-        self.raw_data_path = self.config_manager.get_config_value('data_paths.raw')
         self.request_limit = self.config_manager.get_config_value('binance_api.request_limit_per_call', 1000)
         self.request_delay = self.config_manager.get_config_value('binance_api.request_delay_seconds', 0.5)
         self.retry_attempts = self.config_manager.get_config_value('binance_api.retry_attempts', 5)
         self.retry_delay = self.config_manager.get_config_value('binance_api.retry_delay_seconds', 60)
-
-        os.makedirs(self.raw_data_path, exist_ok=True)
 
 
     def _interval_to_milliseconds(self, interval_str: str) -> int:
@@ -59,8 +82,8 @@ class BinanceFuturesDownloader:
     def _generate_filename(self, symbol: str, interval: str, start_dt: datetime, end_dt: datetime) -> str:
         start_str = start_dt.strftime('%Y%m%d')
         end_str = end_dt.strftime('%Y%m%d%H%M') # Incluir hora y minuto para la fecha de fin actual
-        # Añadir "_FUTURES" para distinguir de datos spot si alguna vez los usas.
-        return os.path.join(self.raw_data_path, f"{symbol}_FUTURES_{interval}_{start_str}_{end_str}.csv")
+        filename = f"{symbol}_FUTURES_{interval}_{start_str}_{end_str}.csv"
+        return os.path.join(self.gcs_data_path, filename)
 
     def fetch_historical_data(self, symbol: str, interval: str, start_date_str: str):
         logger.info(f"Iniciando descarga de datos históricos para {symbol} ({interval}) desde {start_date_str}.")
@@ -144,10 +167,16 @@ class BinanceFuturesDownloader:
         df.sort_values(by='Open_Time', inplace=True)
         df.reset_index(drop=True, inplace=True)
 
-        # Guardar en CSV
+        # Guardar en Google Cloud Storage
         output_filename = self._generate_filename(symbol, interval, start_dt, current_time_utc)
         try:
-            df.to_csv(output_filename, index=False)
-            logger.info(f"Datos para {symbol} ({len(df)} velas) guardados exitosamente en: {output_filename}")
-        except IOError as e:
-            logger.error(f"Error al guardar el archivo CSV {output_filename}: {e}")
+            # Guardar en Google Cloud Storage
+            csv_buffer = io.StringIO()
+            df.to_csv(csv_buffer, index=False)
+            blob = self.bucket.blob(output_filename)
+            blob.upload_from_string(csv_buffer.getvalue(), content_type="text/csv")
+            
+            logger.info(f"Datos para {symbol} ({len(df)} velas) guardados en GCS bucket: {self.gcs_bucket_name}, ruta: {output_filename}")
+        except Exception as e:
+            logger.error(f"Error al guardar los datos en Google Cloud Storage: {e}")
+            raise Exception(f"Error al guardar los datos en Google Cloud Storage: {e}")

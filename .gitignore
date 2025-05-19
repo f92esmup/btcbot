@@ -16,6 +16,10 @@ __pycache__/
 
 # Archivos de configuración con información sensible
 .env
+**/service-account*.json
+**/credential*.json
+**/google-credentials*.json
+**/gcp-*.json
 
 # Datos descargados y archivos grandes (excepto samples)
 data/raw/*
