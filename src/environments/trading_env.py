@@ -1,936 +1,970 @@
-"""
-Trading environment module for BTC trading bot.
-
-This module contains the TradingEnvironment class, which implements a custom Gymnasium
-environment for the reinforcement learning agent. It simulates trading in the
-Bitcoin futures market using the SimulatedBroker class.
-"""
-
 import os
 import numpy as np
 import pandas as pd
-import logging
 import gymnasium as gym
 from gymnasium import spaces
-import json
-from datetime import datetime
-from typing import Dict, Tuple, Optional, Union, Any, List
+from typing import Dict, Any, Tuple, Optional, Union, List
+import logging
 
-from google.cloud import storage
-
+from src.utils.config import ConfigManager
 from src.environments.simulated_broker import SimulatedBroker
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
+# Configurar logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger('TradingEnv')
+
+import numpy as np
+# Importar torch de manera condicional para no crear dependencia obligatoria
+try:
+    import torch
+    TORCH_AVAILABLE = True
+except ImportError:
+    TORCH_AVAILABLE = False
 
 class TradingEnvironment(gym.Env):
     """
-    A custom Gymnasium environment for Bitcoin futures trading.
+    Entorno de trading de futuros para Gymnasium.
     
-    This environment simulates trading BTC/USDT perpetual futures contracts
-    based on historical market data. It implements the standard Gymnasium
-    interface and uses the SimulatedBroker class to simulate order execution.
-    
-    Attributes:
-        logger (logging.Logger): Class logger.
-        market_data (np.ndarray): Historical market data sequences of shape (N_samples, L, N_features).
-        timestamps (np.ndarray): Timestamps corresponding to each sequence.
-        feature_names (List[str]): Names of the features in the market data.
-        sequence_length (int): Length of each market data sequence.
-        n_features (int): Number of features in the market data.
-        broker (SimulatedBroker): Instance of SimulatedBroker for simulating order execution.
-        initial_balance_usd (float): Initial account balance in USD.
-        max_position_btc (float): Maximum allowed position size in BTC.
-        action_threshold (float): Threshold for converting continuous actions to discrete decisions.
-        random_episode_start (bool): Whether to start episodes at random points in the data.
-        episode_steps (int): Maximum number of steps per episode.
-        current_step (int): Current step in the episode.
-        current_balance_usd (float): Current account balance in USD.
-        current_position_btc (float): Current position size in BTC.
-        current_position_entry_price (float): Entry price of the current position.
-        current_market_price (float): Current market price.
-        current_atr (float): Current Average True Range value.
-        portfolio_history (List[Dict]): History of portfolio state at each step.
-        action_history (List[Dict]): History of actions taken at each step.
-        episode_count (int): Count of episodes run.
-        observation_space (spaces.Dict): The observation space.
-        action_space (spaces.Box): The action space.
+    Este entorno simula el trading de futuros de criptomonedas con apalancamiento
+    fijo y tamaño de posición relativo al equity.
     """
-    
     metadata = {'render_modes': ['human']}
     
-    def __init__(
-        self,
-        project_id: str,
-        gcs_processed_data_uri: str,
-        initial_balance_usd: float = 10000.0,
-        max_position_btc: float = 1.0,
-        action_threshold: float = 0.5,
-        random_episode_start: bool = True,
-        episode_steps: int = 1000,
-        commission_rate: float = 0.0004,
-        max_leverage: int = 20,
-        min_order_size_usd: float = 5.0,
-        slippage_model: str = 'atr_based',
-        slippage_factor: float = 0.05,
-        normalize_portfolio_features: bool = True,
-        # Normalization factors for portfolio features
-        max_position_norm_divisor: float = 1.0,
-        entry_price_log_scale: bool = True, 
-        unrealized_pnl_norm_divisor: float = 1000.0,
-        balance_log_scale: bool = True,
-        steps_in_position_norm_divisor: float = 100.0,
-        max_drawdown_pct_norm_divisor: float = 100.0,
-        atr_pct_norm_divisor: float = 10.0,
-        maintenance_margin_pct_norm_divisor: float = 100.0
-    ):
+    def __init__(self, config_path: str = 'src/environments/environment_config.yaml', render_mode: Optional[str] = None):
         """
-        Initialize the trading environment.
+        Inicializa el entorno de trading.
         
         Args:
-            project_id (str): Google Cloud project ID.
-            gcs_processed_data_uri (str): GCS URI of the processed market data sequences.
-            initial_balance_usd (float, optional): Initial account balance in USD.
-                Defaults to 10000.0.
-            max_position_btc (float, optional): Maximum allowed position size in BTC.
-                Defaults to 1.0.
-            action_threshold (float, optional): Threshold for converting continuous actions
-                to discrete decisions. Defaults to 0.5.
-            random_episode_start (bool, optional): Whether to start episodes at random
-                points in the data. Defaults to True.
-            episode_steps (int, optional): Maximum number of steps per episode.
-                Defaults to 1000.
-            commission_rate (float, optional): Trading commission rate. Defaults to 0.0004 (0.04%).
-            max_leverage (int, optional): Maximum allowed leverage. Defaults to 20.
-            min_order_size_usd (float, optional): Minimum order size in USD. Defaults to 5.0.
-            slippage_model (str, optional): Model for simulating slippage. Defaults to 'atr_based'.
-            slippage_factor (float, optional): Factor for slippage calculation. Defaults to 0.05.
-            normalize_portfolio_features (bool, optional): Whether to normalize portfolio features.
-                Defaults to True.
-            max_position_norm_divisor (float, optional): Divisor for normalizing position size.
-                Defaults to 1.0.
-            entry_price_log_scale (bool, optional): Whether to use log scale for entry price.
-                Defaults to True.
-            unrealized_pnl_norm_divisor (float, optional): Divisor for normalizing unrealized P&L.
-                Defaults to 1000.0.
-            balance_log_scale (bool, optional): Whether to use log scale for account balance.
-                Defaults to True.
-            steps_in_position_norm_divisor (float, optional): Divisor for normalizing steps in position.
-                Defaults to 100.0.
-            max_drawdown_pct_norm_divisor (float, optional): Divisor for normalizing max drawdown.
-                Defaults to 100.0.
-            atr_pct_norm_divisor (float, optional): Divisor for normalizing ATR percentage.
-                Defaults to 10.0.
-            maintenance_margin_pct_norm_divisor (float, optional): Divisor for normalizing
-                maintenance margin percentage. Defaults to 100.0.
+            config_path: Ruta al archivo de configuración yaml
+            render_mode: Modo de renderización (human, etc.)
         """
-        super().__init__()
+        # Carga la configuración del entorno
+        self.config_manager = ConfigManager(config_path=config_path)
+        self.config = self._load_env_config()
         
-        self.logger = logging.getLogger(__name__)
-        self.project_id = project_id
-        self.gcs_processed_data_uri = gcs_processed_data_uri
-        self.initial_balance_usd = initial_balance_usd
-        self.max_position_btc = max_position_btc
-        self.action_threshold = action_threshold
-        self.random_episode_start = random_episode_start
-        self.episode_steps = episode_steps
-        self.normalize_portfolio_features = normalize_portfolio_features
+        # Configura el render_mode
+        self.render_mode = render_mode
         
-        # Normalization factors for portfolio features
-        self.max_position_norm_divisor = max_position_norm_divisor
-        self.entry_price_log_scale = entry_price_log_scale
-        self.unrealized_pnl_norm_divisor = unrealized_pnl_norm_divisor
-        self.balance_log_scale = balance_log_scale
-        self.steps_in_position_norm_divisor = steps_in_position_norm_divisor
-        self.max_drawdown_pct_norm_divisor = max_drawdown_pct_norm_divisor
-        self.atr_pct_norm_divisor = atr_pct_norm_divisor
-        self.maintenance_margin_pct_norm_divisor = maintenance_margin_pct_norm_divisor
+        # Initialize sequence length before loading data
+        self.L = self.config['sequence_length_L']
         
-        # Load market data
-        self._load_market_data()
+        # Carga los datos de mercado preprocesados
+        self.market_data, self.feature_names = self._load_market_data()
         
-        # Initialize the broker
+        # Inicializa el broker simulado
         self.broker = SimulatedBroker(
-            commission_rate=commission_rate,
-            max_leverage=max_leverage,
-            min_order_size_usd=min_order_size_usd,
-            slippage_model=slippage_model,
-            slippage_factor=slippage_factor
+            taker_fee_rate=self.config['taker_fee_rate'],
+            slippage_atr_multiplier=self.config['slippage_atr_multiplier'],
+            min_order_size_btc=self.config['min_order_size_btc']
         )
         
-        # Define the observation space
-        self._define_observation_space()
+        # Configuración del entorno
+        self.initial_equity = self.config['initial_equity']
+        self.leverage = self.config['leverage']
+        self.position_size_pct_equity = self.config['position_size_pct_equity']
+        self.action_threshold = self.config['action_threshold']
+        self.equity_drawdown_threshold = self.config['equity_drawdown_threshold_episode_end']
+        self.liquidation_safety_factor = self.config['liquidation_safety_factor']
         
-        # Define the action space: continuous value from -1 to 1
-        self.action_space = spaces.Box(
-            low=-1.0,
-            high=1.0,
-            shape=(1,),
-            dtype=np.float32
-        )
+        # Estado de la cartera (se inicializa en reset())
+        self.current_step_index = 0
+        self.initial_equity_episode = 0.0
+        self.current_equity = 0.0
+        self.balance = 0.0
+        self.active_position_side = 0  # -1 (Corto), 0 (Neutral), 1 (Largo)
+        self.active_position_size_contracts = 0.0
+        self.active_position_entry_price = 0.0
+        self.unrealized_pnl = 0.0
+        self.margin_used = 0.0
+        self.available_margin = 0.0
+        self.steps_in_current_position = 0
+        self.liquidation_price = 0.0
+        self.last_equity = 0.0  # Para el cálculo de recompensa
         
-        # Initialize counters and history
-        self.current_step = 0
-        self.episode_count = 0
-        self.portfolio_history = []
-        self.action_history = []
-        
-        # Initialize other state variables
-        self.current_balance_usd = self.initial_balance_usd
-        self.current_position_btc = 0.0
-        self.current_position_entry_price = 0.0
-        self.current_market_price = 0.0
-        self.current_atr = 0.0
-        self.steps_in_position = 0
-        self.max_position_value = 0.0
-        self.max_drawdown_pct = 0.0
-        self.position_direction = 0  # 0: no position, 1: long, -1: short
-        self.last_equity = self.initial_balance_usd
-        self.equity_peak = self.initial_balance_usd
-        
-        self.logger.info("TradingEnvironment initialized successfully.")
-        self.logger.info(f"Market data shape: {self.market_data.shape}")
-    
-    def _load_market_data(self):
-        """
-        Load market data sequences from Google Cloud Storage.
-        
-        Raises:
-            Exception: If there's an error loading the data.
-        """
-        try:
-            self.logger.info(f"Loading market data from GCS: {self.gcs_processed_data_uri}")
-            
-            # Parse bucket and blob path from GCS URI
-            if self.gcs_processed_data_uri.startswith('gs://'):
-                gcs_path = self.gcs_processed_data_uri[5:]  # Remove 'gs://' prefix
-            else:
-                gcs_path = self.gcs_processed_data_uri
-            
-            bucket_name, blob_path = gcs_path.split('/', 1)
-            
-            # Initialize GCS client
-            storage_client = storage.Client(project=self.project_id)
-            bucket = storage_client.bucket(bucket_name)
-            blob = bucket.blob(blob_path)
-            
-            # Download to a temporary file
-            temp_file = '/tmp/market_data.npz'
-            blob.download_to_filename(temp_file)
-            
-            # Load the npz file
-            data = np.load(temp_file)
-            self.market_data = data['X_market']
-            self.timestamps = data['timestamps']
-            self.feature_names = data['feature_names'].tolist() if 'feature_names' in data else None
-            
-            # Get dimensions
-            self.n_samples, self.sequence_length, self.n_features = self.market_data.shape
-            
-            # Clean up
-            os.remove(temp_file)
-            
-            self.logger.info(f"Successfully loaded market data with shape: {self.market_data.shape}")
-            
-        except Exception as e:
-            self.logger.error(f"Error loading market data: {str(e)}")
-            raise
-    
-    def _define_observation_space(self):
-        """
-        Define the observation space for the environment.
-        
-        The observation space is a Dict with two components:
-        1. 'market_features': Box of shape (sequence_length, n_features)
-        2. 'portfolio_features': Box of shape (8,) containing:
-           - normalized_position
-           - normalized_entry_price
-           - unrealized_pnl_normalized
-           - normalized_balance
-           - steps_in_position_normalized
-           - max_drawdown_pct_normalized
-           - atr_pct_normalized
-           - maintenance_margin_pct_normalized
-        """
-        # Market features (using actual dimensions from loaded data)
-        market_features_space = spaces.Box(
-            low=-np.inf,
-            high=np.inf,
-            shape=(self.sequence_length, self.n_features),
-            dtype=np.float32
-        )
-        
-        # Portfolio features
-        portfolio_features_space = spaces.Box(
-            low=-np.inf,
-            high=np.inf,
-            shape=(8,),
-            dtype=np.float32
-        )
-        
-        # Define the full observation space
+        # Define el espacio de observación como un Dict
+        market_features_dim = len(self.feature_names)
         self.observation_space = spaces.Dict({
-            'market_features': market_features_space,
-            'portfolio_features': portfolio_features_space
+            # Características de mercado: secuencia de L pasos con N características c/u
+            'market_features': spaces.Box(
+                low=-np.inf, high=np.inf, shape=(self.L, market_features_dim), dtype=np.float32
+            ),
+            # Características de cartera: 8 valores normalizados
+            'portfolio_features': spaces.Box(
+                low=-np.inf, high=np.inf, shape=(8,), dtype=np.float32
+            )
         })
+        
+        # Define el espacio de acción como un Box continuo de una dimensión
+        self.action_space = spaces.Box(low=-1.0, high=1.0, shape=(1,), dtype=np.float32)
+        
+        # Información adicional para episodios
+        self.episode_stats = {
+            'trades': 0,
+            'profitable_trades': 0,
+            'unprofitable_trades': 0,
+            'total_pnl': 0.0,
+            'total_fees': 0.0,
+            'max_equity': 0.0,
+            'min_equity': float('inf')
+        }
+        
+        logger.info("TradingEnvironment initialized successfully.")
     
-    def reset(self, seed=None, options=None):
+    def _load_env_config(self) -> Dict[str, Any]:
+        """Carga la configuración del entorno desde el archivo yaml"""
+        env_config = {}
+        
+        # Configuración general del entorno
+        env_config['env_id'] = self.config_manager.get_config_value('env_id', 'FuturesTradingEnv-v0')
+        env_config['initial_equity'] = self.config_manager.get_config_value('initial_equity', 10000.0)
+        env_config['max_episode_steps_use_dataset_length'] = self.config_manager.get_config_value('max_episode_steps_use_dataset_length', True)
+        env_config['allow_random_episode_start'] = self.config_manager.get_config_value('allow_random_episode_start', True)
+        
+        # Configuración de Trading
+        env_config['leverage'] = self.config_manager.get_config_value('leverage', 10.0)
+        env_config['position_size_pct_equity'] = self.config_manager.get_config_value('position_size_pct_equity', 0.05)
+        env_config['taker_fee_rate'] = self.config_manager.get_config_value('taker_fee_rate', 0.0004)
+        env_config['slippage_atr_multiplier'] = self.config_manager.get_config_value('slippage_atr_multiplier', 0.1)
+        env_config['min_order_size_btc'] = self.config_manager.get_config_value('min_order_size_btc', 0.001)
+        
+        # Lógica de Acción
+        env_config['action_threshold'] = self.config_manager.get_config_value('action_threshold', 0.15)
+        
+        # Lógica de Finalización y Liquidación
+        env_config['equity_drawdown_threshold_episode_end'] = self.config_manager.get_config_value('equity_drawdown_threshold_episode_end', -0.20)
+        env_config['liquidation_safety_factor'] = self.config_manager.get_config_value('liquidation_safety_factor', 0.8)
+        
+        # Características de Observación
+        max_steps_in_position = self.config_manager.get_config_value('portfolio_features_normalization.max_steps_in_position', 288)
+        env_config['portfolio_features_normalization'] = {
+            'max_steps_in_position': max_steps_in_position
+        }
+        
+        # Carga de Datos de Mercado
+        env_config['processed_data_directory'] = self.config_manager.get_config_value('processed_data_directory', 'data/processed/')
+        env_config['processed_data_file_identifier'] = self.config_manager.get_config_value('processed_data_file_identifier', '_L96_market_features.npz')
+        
+        # Obtiene la longitud de secuencia del archivo de preprocesamiento
+        preprocessing_config_path = 'src/data/preprocessing_config.yaml'
+        preprocessing_config = ConfigManager(config_path=preprocessing_config_path)
+        env_config['sequence_length_L'] = preprocessing_config.get_config_value('sequence_length_L', 96)
+        
+        return env_config
+    
+    def _load_market_data(self) -> Tuple[np.ndarray, List[str]]:
         """
-        Reset the environment to start a new episode.
+        Carga los datos de mercado preprocesados.
+        
+        Returns:
+            Tuple con (datos_de_mercado, nombres_de_características)
+        """
+        # Busca el archivo con los datos preprocesados
+        data_dir = self.config['processed_data_directory']
+        file_identifier = self.config['processed_data_file_identifier']
+        
+        # Lista todos los archivos en el directorio
+        all_files = os.listdir(data_dir)
+        
+        # Filtra por el identificador
+        matching_files = [f for f in all_files if file_identifier in f]
+        
+        if not matching_files:
+            raise FileNotFoundError(f"No se encontraron archivos con el identificador {file_identifier} en {data_dir}")
+        
+        # Utiliza el primer archivo que coincida (se podría hacer más sofisticado si hay múltiples)
+        data_file = os.path.join(data_dir, matching_files[0])
+        logger.info(f"Cargando datos de mercado desde: {data_file}")
+        
+        # Carga los datos
+        data = np.load(data_file)
+        
+        # Verificar las claves disponibles en el archivo
+        logger.info(f"Claves disponibles en el archivo: {list(data.keys())}")
+        
+        # Intenta cargar los datos según las claves disponibles
+        if 'X_market' in data:
+            market_features = data['X_market']
+            # Dado que no tenemos feature_names, creamos nombres genéricos basados en la forma
+            feature_names = [f"feature_{i}" for i in range(market_features.shape[2])]
+            logger.info(f"Datos cargados con la clave 'X_market' de forma {market_features.shape}")
+        elif 'market_features' in data:
+            market_features = data['market_features']
+            feature_names = data['feature_names'].tolist() if 'feature_names' in data else [f"feature_{i}" for i in range(market_features.shape[2])]
+            logger.info(f"Datos cargados con la clave 'market_features' de forma {market_features.shape}")
+        else:
+            raise KeyError(f"No se encontró ninguna clave válida para datos de mercado en {data_file}")
+        
+        # Cargar datos adicionales si están disponibles (para optimización)
+        self.close_prices = None
+        self.atr_values = None
+        
+        # Verificar si tenemos precios de cierre y ATR no normalizados
+        if 'close_prices' in data:
+            self.close_prices = data['close_prices']
+            logger.info(f"Precios de cierre no normalizados cargados: {len(self.close_prices)} valores")
+            
+        if 'atr_values' in data:
+            self.atr_values = data['atr_values']
+            logger.info(f"Valores ATR no normalizados cargados: {len(self.atr_values)} valores")
+            
+        # Si alguno de los dos no está disponible, eliminamos ambos para consistencia
+        if self.close_prices is None or self.atr_values is None:
+            self.close_prices = None
+            self.atr_values = None
+            logger.warning("No se encontraron datos de precio y ATR sin normalizar. Usando aproximaciones.")
+        
+        # Asegurar que market_features sea float32
+        if market_features.dtype != np.float32:
+            logger.info(f"Convirtiendo market_features de {market_features.dtype} a float32")
+            market_features = market_features.astype(np.float32)
+            
+        # Verificar que self.L coincide con la dimensión secuencial de los datos
+        if market_features.shape[1] != self.L:
+            logger.warning(f"Advertencia: La longitud de secuencia en los datos ({market_features.shape[1]}) no coincide con self.L ({self.L})")
+            logger.warning(f"Ajustando self.L para que coincida con los datos")
+            self.L = market_features.shape[1]
+            
+            # También actualizar el observation_space
+            market_features_dim = market_features.shape[2]
+            self.observation_space = spaces.Dict({
+                'market_features': spaces.Box(
+                    low=-np.inf, high=np.inf, shape=(self.L, market_features_dim), dtype=np.float32
+                ),
+                'portfolio_features': spaces.Box(
+                    low=-np.inf, high=np.inf, shape=(8,), dtype=np.float32
+                )
+            })
+            
+        logger.info(f"Datos de mercado cargados: {market_features.shape}, dtype: {market_features.dtype}")
+        return market_features, feature_names
+    
+    def reset(self, seed: Optional[int] = None, options: Optional[Dict[str, Any]] = None) -> Tuple[Dict[str, np.ndarray], Dict[str, Any]]:
+        """
+        Reinicia el entorno al principio de un nuevo episodio.
         
         Args:
-            seed (int, optional): Seed for random number generation. Defaults to None.
-            options (dict, optional): Additional options. Defaults to None.
+            seed: Semilla para la generación de números aleatorios (opcional)
+            options: Opciones adicionales (opcional)
             
         Returns:
-            tuple: A tuple containing:
-                - observation (Dict): Initial observation.
-                - info (Dict): Additional information.
+            Tuple con (observación, info)
         """
-        super().reset(seed=seed)
+        # Reinicia el generador de números aleatorios si se proporciona una semilla
+        if seed is not None:
+            super().reset(seed=seed)
         
-        # Select a starting point in the data
-        if self.random_episode_start:
-            # Choose a random starting point, leaving room for a full episode
-            max_start = max(0, self.n_samples - self.episode_steps - 1)
-            self.current_idx = self.np_random.integers(max_start) if max_start > 0 else 0
+        # Reinicia las estadísticas del episodio
+        self.episode_stats = {
+            'trades': 0,
+            'profitable_trades': 0,
+            'unprofitable_trades': 0,
+            'total_pnl': 0.0,
+            'total_fees': 0.0,
+            'max_equity': self.initial_equity,
+            'min_equity': self.initial_equity
+        }
+        
+        # Selecciona un punto de inicio aleatorio en el conjunto de datos si está configurado
+        if self.config['allow_random_episode_start']:
+            # Asegura que haya suficientes datos para al menos un episodio razonable
+            min_episode_steps = 10  # Número mínimo de pasos para un episodio
+            max_start_idx = len(self.market_data) - min_episode_steps
+            self.current_step_index = self.np_random.integers(0, max_start_idx) if max_start_idx > 0 else 0
         else:
-            # Start from the beginning
-            self.current_idx = 0
+            # Comienza desde la primera secuencia disponible
+            self.current_step_index = 0
         
-        # Reset state variables
-        self.current_step = 0
-        self.current_balance_usd = self.initial_balance_usd
-        self.current_position_btc = 0.0
-        self.current_position_entry_price = 0.0
-        self.steps_in_position = 0
-        self.max_position_value = 0.0
-        self.max_drawdown_pct = 0.0
-        self.position_direction = 0  # 0: no position, 1: long, -1: short
-        self.last_equity = self.initial_balance_usd
-        self.equity_peak = self.initial_balance_usd
+        # Reinicia el estado de la cartera
+        self.initial_equity_episode = self.initial_equity
+        self.current_equity = self.initial_equity
+        self.last_equity = self.initial_equity
+        self.balance = self.initial_equity
+        self.active_position_side = 0
+        self.active_position_size_contracts = 0.0
+        self.active_position_entry_price = 0.0
+        self.unrealized_pnl = 0.0
+        self.margin_used = 0.0
+        self.available_margin = self.initial_equity
+        self.steps_in_current_position = 0
+        self.liquidation_price = 0.0
         
-        # Reset history
-        self.portfolio_history = []
-        self.action_history = []
-        
-        # Get the current market data and update current_market_price
-        self._update_market_info()
-        
-        # Get initial observation
+        # Obtiene la observación inicial
         observation = self._get_observation()
         
-        # Increment episode counter
-        self.episode_count += 1
-        
-        self.logger.info(f"Starting episode {self.episode_count} at index {self.current_idx}")
-        
-        # Return initial observation and info
-        info = {
-            'timestamp': str(self.timestamps[self.current_idx]),
-            'balance_usd': self.current_balance_usd,
-            'position_btc': self.current_position_btc,
-            'market_price': self.current_market_price,
-            'episode': self.episode_count,
-            'step': self.current_step
-        }
+        # Info adicional
+        info = {}
         
         return observation, info
     
-    def step(self, action):
+    def step(self, action: np.ndarray) -> Tuple[Dict[str, np.ndarray], float, bool, bool, Dict[str, Any]]:
         """
-        Execute one time step in the environment.
+        Ejecuta un paso en el entorno.
         
         Args:
-            action (np.ndarray): Action to take, a value in the range [-1, 1].
+            action: Acción continua del agente en el rango [-1, 1]
             
         Returns:
-            tuple: A tuple containing:
-                - observation (Dict): New observation.
-                - reward (float): Reward for the action.
-                - terminated (bool): Whether the episode has ended due to termination conditions.
-                - truncated (bool): Whether the episode has ended due to truncation (e.g., max steps).
-                - info (Dict): Additional information.
+            Tuple con (observación, recompensa, terminado, truncado, info)
         """
-        # Extract the action value
-        action_value = float(action[0])
+        # Extrae la señal de acción del array (evitando copias innecesarias)
+        action_signal = float(action[0])
         
-        # Convert continuous action to trading decision
-        decision, target_position_btc = self._interpret_action(action_value)
+        # Guarda el equity anterior para el cálculo de la recompensa
+        self.last_equity = self.current_equity
         
-        # Store the original portfolio state before action
-        old_balance = self.current_balance_usd
-        old_position = self.current_position_btc
-        old_equity = self._calculate_equity()
+        # Avanza al siguiente paso en los datos de mercado
+        self.current_step_index += 1
         
-        # Execute trading decision
-        self._execute_trade(decision, target_position_btc)
+        # Obtiene los datos actuales del mercado (referencia, no copia)
+        current_market_data = self.market_data[self.current_step_index]
         
-        # Move to the next time step
-        self.current_step += 1
-        self.current_idx += 1
+        # Obtiene el precio de cierre usando nuestro método optimizado
+        close_price = self._get_current_close_price()
         
-        # Check if the episode is done
+        # Obtiene el ATR usando el método optimizado que ya maneja atr_values
+        atr_value = self._get_atr_value_optimized(current_market_data, close_price)
+            
+        # Procesa la acción y actualiza el estado del entorno
+        info = self._process_action(action_signal, close_price, atr_value)
+        
+        # Comprueba si hubo liquidación
+        liquidated = self._check_liquidation(current_market_data)
+        
+        # Actualiza estadísticas de episodio
+        self.episode_stats['max_equity'] = max(self.episode_stats['max_equity'], self.current_equity)
+        self.episode_stats['min_equity'] = min(self.episode_stats['min_equity'], self.current_equity)
+        
+        # Calcula la recompensa (retorno logarítmico del equity)
+        reward = np.log(self.current_equity / self.last_equity)
+        
+        # Comprueba condiciones de fin de episodio
         terminated = False
         truncated = False
         
-        # Update market info for the new time step
-        self._update_market_info()
-        
-        # Check for liquidation
-        if self._check_liquidation():
-            self.logger.info(f"Position liquidated at step {self.current_step}")
+        # Condición 1: Drawdown máximo
+        current_drawdown = (self.current_equity / self.initial_equity_episode) - 1.0
+        if current_drawdown <= self.equity_drawdown_threshold:
             terminated = True
+            info['termination_reason'] = 'max_drawdown'
         
-        # Check if we've reached the maximum number of steps or the end of data
-        if self.current_step >= self.episode_steps or self.current_idx >= self.n_samples - 1:
+        # Condición 2: Liquidación
+        if liquidated:
+            terminated = True
+            info['termination_reason'] = 'liquidation'
+        
+        # Condición 3: Fin de datos disponibles
+        if self.current_step_index >= len(self.market_data) - 1:
             truncated = True
+            info['termination_reason'] = 'data_end'
         
-        # Calculate reward (using log returns of equity)
-        new_equity = self._calculate_equity()
-        reward = self._calculate_reward(old_equity, new_equity)
-        
-        # Update equity peak and max drawdown
-        if new_equity > self.equity_peak:
-            self.equity_peak = new_equity
-        
-        current_drawdown_pct = (self.equity_peak - new_equity) / self.equity_peak * 100
-        self.max_drawdown_pct = max(self.max_drawdown_pct, current_drawdown_pct)
-        
-        # Update last equity
-        self.last_equity = new_equity
-        
-        # Get new observation
+        # Obtiene la siguiente observación
         observation = self._get_observation()
         
-        # Record portfolio state
-        self._record_portfolio_state()
+        # Actualiza info con estadísticas de episodio
+        info.update({
+            'current_equity': self.current_equity,
+            'episode_return': self.current_equity / self.initial_equity_episode - 1.0,
+            'current_drawdown': current_drawdown,
+            'trades_count': self.episode_stats['trades'],
+            'win_rate': self.episode_stats['profitable_trades'] / max(1, self.episode_stats['trades']),
+            'position_side': self.active_position_side,
+            'position_size': self.active_position_size_contracts,
+            'entry_price': self.active_position_entry_price,
+            'unrealized_pnl': self.unrealized_pnl,
+            'episode_stats': self.episode_stats
+        })
         
-        # Record action
-        self._record_action(action_value, decision, target_position_btc)
+        # Renderiza si está configurado
+        if self.render_mode == 'human':
+            self.render()
         
-        # Prepare info dictionary
-        info = {
-            'timestamp': str(self.timestamps[self.current_idx - 1]),  # Timestamp of the completed step
-            'balance_usd': self.current_balance_usd,
-            'position_btc': self.current_position_btc,
-            'entry_price': self.current_position_entry_price,
-            'market_price': self.current_market_price,
-            'equity': new_equity,
-            'action': action_value,
-            'decision': decision,
-            'target_position': target_position_btc,
-            'reward': reward,
-            'steps_in_position': self.steps_in_position,
-            'max_drawdown_pct': self.max_drawdown_pct,
-            'unrealized_pnl': self._calculate_unrealized_pnl()
-        }
+        return observation, reward, terminated, truncated, info
+        
+        # Procesa la acción y actualiza el estado del entorno
+        info = self._process_action(action_signal, close_price, atr_value)
+        
+        # Comprueba si hubo liquidación
+        liquidated = self._check_liquidation(current_market_data)
+        
+        # Actualiza estadísticas de episodio
+        self.episode_stats['max_equity'] = max(self.episode_stats['max_equity'], self.current_equity)
+        self.episode_stats['min_equity'] = min(self.episode_stats['min_equity'], self.current_equity)
+        
+        # Calcula la recompensa (retorno logarítmico del equity)
+        reward = np.log(self.current_equity / self.last_equity)
+        
+        # Comprueba condiciones de fin de episodio
+        terminated = False
+        truncated = False
+        
+        # Condición 1: Drawdown máximo
+        current_drawdown = (self.current_equity / self.initial_equity_episode) - 1.0
+        if current_drawdown <= self.equity_drawdown_threshold:
+            terminated = True
+            info['termination_reason'] = 'max_drawdown'
+        
+        # Condición 2: Liquidación
+        if liquidated:
+            terminated = True
+            info['termination_reason'] = 'liquidation'
+        
+        # Condición 3: Fin de datos disponibles
+        if self.current_step_index >= len(self.market_data) - 1:
+            truncated = True
+            info['termination_reason'] = 'data_end'
+        
+        # Obtiene la siguiente observación
+        observation = self._get_observation()
+        
+        # Actualiza info con estadísticas de episodio
+        info.update({
+            'current_equity': self.current_equity,
+            'episode_return': self.current_equity / self.initial_equity_episode - 1.0,
+            'current_drawdown': current_drawdown,
+            'trades_count': self.episode_stats['trades'],
+            'win_rate': self.episode_stats['profitable_trades'] / max(1, self.episode_stats['trades']),
+            'position_side': self.active_position_side,
+            'position_size': self.active_position_size_contracts,
+            'entry_price': self.active_position_entry_price,
+            'unrealized_pnl': self.unrealized_pnl,
+            'episode_stats': self.episode_stats
+        })
+        
+        # Renderiza si está configurado
+        if self.render_mode == 'human':
+            self.render()
         
         return observation, reward, terminated, truncated, info
     
-    def _interpret_action(self, action_value):
+    def _process_action(self, action_signal: float, close_price: float, atr_value: float) -> Dict[str, Any]:
         """
-        Interpret the continuous action value as a trading decision.
+        Procesa la acción del agente y actualiza el estado del entorno.
         
         Args:
-            action_value (float): Action value in the range [-1, 1].
+            action_signal: Señal de acción del agente [-1, 1]
+            close_price: Precio de cierre actual
+            atr_value: Valor ATR actual
             
         Returns:
-            tuple: A tuple containing:
-                - decision (str): Trading decision ('buy', 'sell', 'hold', 'close').
-                - target_position_btc (float): Target position size in BTC.
+            Diccionario con información sobre la acción procesada
         """
-        # Determine decision based on action value and current position
-        if self.current_position_btc == 0:
-            # No position currently
-            if action_value > self.action_threshold:
-                # Open long position
-                decision = 'buy'
-                position_size_pct = (action_value - self.action_threshold) / (1 - self.action_threshold)
-                target_position_btc = self.max_position_btc * position_size_pct
-            elif action_value < -self.action_threshold:
-                # Open short position
-                decision = 'sell'
-                position_size_pct = (-action_value - self.action_threshold) / (1 - self.action_threshold)
-                target_position_btc = -self.max_position_btc * position_size_pct
-            else:
-                # Continue holding no position
-                decision = 'hold'
-                target_position_btc = 0.0
+        info = {"action_type": "hold"}
         
-        elif self.current_position_btc > 0:
-            # Currently long
-            if action_value < -self.action_threshold:
-                # Close long position or go short
-                decision = 'sell'
-                if action_value < -(self.action_threshold + 0.2):  # Requires stronger signal to flip position
-                    # Go short
-                    position_size_pct = (-action_value - (self.action_threshold + 0.2)) / (1 - (self.action_threshold + 0.2))
-                    target_position_btc = -self.max_position_btc * position_size_pct
-                else:
-                    # Just close the position
-                    decision = 'close'
-                    target_position_btc = 0.0
-            elif action_value > self.action_threshold:
-                # Adjust long position size
-                decision = 'buy'
-                position_size_pct = (action_value - self.action_threshold) / (1 - self.action_threshold)
-                target_position_btc = self.max_position_btc * position_size_pct
-            else:
-                # Hold current position
-                decision = 'hold'
-                target_position_btc = self.current_position_btc
+        # Interpreta la acción según el umbral configurado
+        if action_signal > self.action_threshold:  # Intento de Abrir Largo
+            if self.active_position_side == 0:  # Neutral
+                self._open_position(1, close_price, atr_value)
+                info["action_type"] = "open_long"
+            elif self.active_position_side == -1:  # Corto
+                self._close_position(close_price, atr_value)
+                self._open_position(1, close_price, atr_value)
+                info["action_type"] = "close_short_open_long"
+            # Si ya está en posición larga, mantiene
         
-        elif self.current_position_btc < 0:
-            # Currently short
-            if action_value > self.action_threshold:
-                # Close short position or go long
-                decision = 'buy'
-                if action_value > (self.action_threshold + 0.2):  # Requires stronger signal to flip position
-                    # Go long
-                    position_size_pct = (action_value - (self.action_threshold + 0.2)) / (1 - (self.action_threshold + 0.2))
-                    target_position_btc = self.max_position_btc * position_size_pct
-                else:
-                    # Just close the position
-                    decision = 'close'
-                    target_position_btc = 0.0
-            elif action_value < -self.action_threshold:
-                # Adjust short position size
-                decision = 'sell'
-                position_size_pct = (-action_value - self.action_threshold) / (1 - self.action_threshold)
-                target_position_btc = -self.max_position_btc * position_size_pct
-            else:
-                # Hold current position
-                decision = 'hold'
-                target_position_btc = self.current_position_btc
+        elif action_signal < -self.action_threshold:  # Intento de Abrir Corto
+            if self.active_position_side == 0:  # Neutral
+                self._open_position(-1, close_price, atr_value)
+                info["action_type"] = "open_short"
+            elif self.active_position_side == 1:  # Largo
+                self._close_position(close_price, atr_value)
+                self._open_position(-1, close_price, atr_value)
+                info["action_type"] = "close_long_open_short"
+            # Si ya está en posición corta, mantiene
         
-        return decision, target_position_btc
+        else:  # Intento de Neutralizar
+            if self.active_position_side != 0:
+                self._close_position(close_price, atr_value)
+                info["action_type"] = "close_position"
+        
+        # Si hay posición activa, incrementa los pasos en esta posición
+        if self.active_position_side != 0:
+            self.steps_in_current_position += 1
+            
+            # Actualiza P&L no realizado
+            if self.active_position_side == 1:  # Largo
+                self.unrealized_pnl = (close_price - self.active_position_entry_price) * self.active_position_size_contracts
+            else:  # Corto
+                self.unrealized_pnl = (self.active_position_entry_price - close_price) * self.active_position_size_contracts
+            
+            # Actualiza el equity actual con el P&L no realizado
+            self.current_equity = self.balance + self.unrealized_pnl
+        else:
+            self.steps_in_current_position = 0
+            self.unrealized_pnl = 0.0
+            # En estado neutral, equity = balance
+            self.current_equity = self.balance
+        
+        # Actualiza el margen disponible
+        self.available_margin = self.current_equity - self.margin_used
+        
+        return info
     
-    def _execute_trade(self, decision, target_position_btc):
+    def _open_position(self, side: int, market_close_price: float, atr_value: float) -> None:
         """
-        Execute a trading decision following the technical design document.
-        
-        This implementation handles all cases correctly:
-        - Opening a new position
-        - Closing an existing position
-        - Inverting a position (changing from long to short or vice versa)
-        - Increasing/decreasing position size
-        
-        It also properly calculates the weighted average entry price when adding to a position.
+        Abre una nueva posición.
         
         Args:
-            decision (str): Trading decision ('buy', 'sell', 'hold', 'close').
-            target_position_btc (float): Target position size in BTC.
+            side: Lado de la posición (1 para Largo, -1 para Corto)
+            market_close_price: Precio de cierre actual
+            atr_value: Valor ATR actual
         """
-        if decision == 'hold':
-            # No change, just update steps in position if in a position
-            if self.current_position_btc != 0:
-                self.steps_in_position += 1
-            return
+        # Determina el tipo de acción
+        desired_action = "OPEN_LONG" if side == 1 else "OPEN_SHORT"
         
-        # Calculate position delta (how much to add or remove)
-        position_delta_btc = target_position_btc - self.current_position_btc
-        
-        # If delta is very small, consider it as no change
-        if abs(position_delta_btc) < 1e-8:
-            if self.current_position_btc != 0:
-                self.steps_in_position += 1
-            return
-        
-        # Calculate order size in USD
-        order_value_usd = abs(position_delta_btc * self.current_market_price)
-        
-        # Execute the order using the broker
-        if position_delta_btc > 0:
-            order_type = 'buy'
-        else:
-            order_type = 'sell'
-            
+        # Calcula los detalles de ejecución con el broker simulado
         execution_details = self.broker.calculate_execution_details(
-            order_type=order_type,
-            market_price=self.current_market_price,
-            order_size_usd=order_value_usd,
-            atr=self.current_atr,
-            current_position=self.current_position_btc,
-            current_position_entry_price=self.current_position_entry_price
+            desired_action=desired_action,
+            market_close_price=market_close_price,
+            atr_value=atr_value
         )
         
-        if not execution_details['executed']:
-            self.logger.debug(f"Order not executed: {execution_details['reason']}")
-            if self.current_position_btc != 0:
-                self.steps_in_position += 1
+        execution_price = execution_details["execution_price"]
+        
+        # Calcula el tamaño de la posición
+        position_size_contracts, commission, margin_required = self.broker.calculate_position_size_contracts(
+            equity=self.current_equity,
+            position_size_pct_equity=self.position_size_pct_equity,
+            leverage=self.leverage,
+            execution_price=execution_price
+        )
+        
+        # Si el tamaño de la posición es 0, no se puede abrir (ej. si no hay suficiente equity)
+        if position_size_contracts <= 0:
+            logger.warning(f"No se pudo abrir posición {desired_action}: tamaño insuficiente.")
             return
         
-        # Update account balance with commission and slippage costs
-        self.current_balance_usd -= execution_details['commission_usd']
-        self.current_balance_usd -= execution_details['slippage_usd']
+        # Actualiza el estado de la cartera
+        self.active_position_side = side
+        self.active_position_size_contracts = position_size_contracts
+        self.active_position_entry_price = execution_price
+        self.margin_used = margin_required
         
-        # Calculate realized PnL if we're reducing or flipping a position
-        realized_pnl = 0
-        if self.current_position_btc != 0 and (
-                (self.current_position_btc > 0 and position_delta_btc < 0) or 
-                (self.current_position_btc < 0 and position_delta_btc > 0)):
-            
-            # Calculate how much of the position we're closing
-            closing_size = min(abs(self.current_position_btc), abs(position_delta_btc))
-            if self.current_position_btc > 0:  # Closing long position
-                realized_pnl = closing_size * (self.current_market_price - self.current_position_entry_price)
-            else:  # Closing short position
-                realized_pnl = closing_size * (self.current_position_entry_price - self.current_market_price)
-            
-            # Update balance with realized PnL
-            self.current_balance_usd += realized_pnl
+        # Calcula el valor nocional
+        notional_value = position_size_contracts * execution_price
         
-        # Calculate new position
-        old_position_value = 0
-        if abs(self.current_position_btc) > 1e-8:
-            old_position_value = abs(self.current_position_btc * self.current_position_entry_price)
+        # Deduce la comisión del balance
+        self.balance -= commission
+        self.current_equity = self.balance  # El P&L no realizado se actualizará en el próximo paso
         
-        new_position_delta = execution_details['size_btc']
-        new_position_value = abs(new_position_delta) * execution_details['execution_price']
-        
-        # Update position size
-        self.current_position_btc += new_position_delta
-        
-        # Update position direction
-        if self.current_position_btc > 0:
-            self.position_direction = 1
-        elif self.current_position_btc < 0:
-            self.position_direction = -1
-        else:
-            self.position_direction = 0
-        
-        # Calculate new entry price
-        if abs(self.current_position_btc) < 1e-8:  # Position fully closed
-            self.current_position_entry_price = 0
-            self.steps_in_position = 0
-        elif (self.current_position_btc > 0 and self.current_position_btc - new_position_delta > 0) or \
-             (self.current_position_btc < 0 and self.current_position_btc - new_position_delta < 0):
-            # Adding to existing position (same direction) - weighted average
-            self.current_position_entry_price = (old_position_value + new_position_value) / abs(self.current_position_btc)
-            self.steps_in_position += 1  # Continue counting
-        else:
-            # New position or flipped position - use current price
-            self.current_position_entry_price = execution_details['execution_price']
-            self.steps_in_position = 0  # Reset counter for new position
-        
-        # Update max position value
-        current_position_value = abs(self.current_position_btc) * self.current_market_price
-        self.max_position_value = max(self.max_position_value, current_position_value)
-        
-        self.logger.debug(f"Executed {order_type} order: {abs(new_position_delta):.8f} BTC at {execution_details['execution_price']:.2f} USD, PnL: {realized_pnl:.2f} USD")
-    
-    def _calculate_unrealized_pnl(self):
-        """
-        Calculate the unrealized profit and loss of the current position.
-        
-        Returns:
-            float: Unrealized P&L in USD.
-        """
-        if self.current_position_btc == 0:
-            return 0.0
-        
-        # For long positions: (current_price - entry_price) * position_size
-        # For short positions: (entry_price - current_price) * |position_size|
-        if self.current_position_btc > 0:
-            return (self.current_market_price - self.current_position_entry_price) * self.current_position_btc
-        else:
-            return (self.current_position_entry_price - self.current_market_price) * abs(self.current_position_btc)
-    
-    def _calculate_equity(self):
-        """
-        Calculate the total equity (balance + unrealized P&L).
-        
-        Returns:
-            float: Total equity in USD.
-        """
-        return self.current_balance_usd + self._calculate_unrealized_pnl()
-    
-    def _update_market_info(self):
-        """
-        Update market information for the current step.
-        """
-        if self.current_idx < self.n_samples:
-            # Get the latest market data sequence
-            current_sequence = self.market_data[self.current_idx]
-            
-            # Get the close price (assuming it's the 4th column, index 3)
-            close_index = 3 if self.feature_names is None else self.feature_names.index('close')
-            self.current_market_price = float(current_sequence[-1, close_index])
-            
-            # Get the ATR (assuming it's available in the features)
-            atr_index = 8 if self.feature_names is None else self.feature_names.index('atr')
-            self.current_atr = float(current_sequence[-1, atr_index])
-    
-    def _check_liquidation(self):
-        """
-        Check if the current position should be liquidated due to insufficient margin.
-        
-        Returns:
-            bool: True if the position is liquidated, False otherwise.
-        """
-        if self.current_position_btc == 0:
-            return False
-        
-        # Calculate liquidation price
-        liquidation_price = self.broker.calculate_liquidation_price(
-            position_size_btc=self.current_position_btc,
-            entry_price=self.current_position_entry_price,
-            account_balance_usd=self.current_balance_usd
+        # Calcula el precio de liquidación
+        self.liquidation_price = self.broker.calculate_liquidation_price(
+            position_side=side, 
+            entry_price=execution_price, 
+            leverage=self.leverage, 
+            safety_factor=self.liquidation_safety_factor
         )
         
-        if liquidation_price is None:
-            return False
+        # Inicializa los pasos en la posición
+        self.steps_in_current_position = 0
         
-        # Check if liquidation price has been breached
-        if self.current_position_btc > 0:  # Long position
-            liquidated = self.current_market_price <= liquidation_price
-        else:  # Short position
-            liquidated = self.current_market_price >= liquidation_price
+        # Actualiza estadísticas
+        self.episode_stats['trades'] += 1
+        self.episode_stats['total_fees'] += commission
         
-        if liquidated:
-            # Simulate liquidation (close position at current price with extra fees)
-            liquidation_fee = abs(self.current_position_btc) * self.current_market_price * 0.01  # 1% liquidation fee
-            self.current_balance_usd -= liquidation_fee
-            
-            # Realize loss
-            unrealized_pnl = self._calculate_unrealized_pnl()
-            self.current_balance_usd += unrealized_pnl
-            
-            # Reset position
-            self.current_position_btc = 0.0
-            self.current_position_entry_price = 0.0
-            self.steps_in_position = 0
-            self.position_direction = 0
-            
-            self.logger.info(f"Position liquidated. Loss: {unrealized_pnl:.2f} USD, Fee: {liquidation_fee:.2f} USD")
-        
-        return liquidated
+        logger.info(f"Posición abierta: {desired_action}, Precio: {execution_price}, Tamaño: {position_size_contracts}, Comisión: {commission}")
     
-    def _get_portfolio_features(self):
+    def _close_position(self, market_close_price: float, atr_value: float) -> None:
         """
-        Calculate and normalize portfolio features according to the technical design document.
+        Cierra la posición activa.
+        
+        Args:
+            market_close_price: Precio de cierre actual
+            atr_value: Valor ATR actual
+        """
+        # Si no hay posición activa, no hace nada
+        if self.active_position_side == 0:
+            return
+        
+        # Determina el tipo de acción
+        desired_action = "CLOSE_LONG" if self.active_position_side == 1 else "CLOSE_SHORT"
+        
+        # Calcula los detalles de ejecución
+        execution_details = self.broker.calculate_execution_details(
+            desired_action=desired_action,
+            market_close_price=market_close_price,
+            atr_value=atr_value,
+            position_to_close_entry_price=self.active_position_entry_price,
+            position_to_close_size=self.active_position_size_contracts
+        )
+        
+        execution_price = execution_details["execution_price"]
+        pnl = execution_details["potential_pnl"]
+        commission = execution_details["commission_to_be_paid"]
+        
+        # Actualiza el balance con el P&L realizado y deduce la comisión
+        self.balance += pnl - commission
+        
+        # Actualiza estadísticas
+        if pnl > 0:
+            self.episode_stats['profitable_trades'] += 1
+        else:
+            self.episode_stats['unprofitable_trades'] += 1
+        
+        self.episode_stats['total_pnl'] += pnl
+        self.episode_stats['total_fees'] += commission
+        
+        logger.info(f"Posición cerrada: {desired_action}, Precio: {execution_price}, P&L: {pnl}, Comisión: {commission}")
+        
+        # Reinicia el estado de la posición
+        self.active_position_side = 0
+        self.active_position_size_contracts = 0.0
+        self.active_position_entry_price = 0.0
+        self.margin_used = 0.0
+        self.unrealized_pnl = 0.0
+        self.steps_in_current_position = 0
+        self.liquidation_price = 0.0
+        
+        # Actualiza el equity (ahora igual al balance, ya que no hay posición)
+        self.current_equity = self.balance
+    
+    def _check_liquidation(self, current_market_data) -> bool:
+        """
+        Comprueba si la posición activa debe ser liquidada.
+        
+        Args:
+            current_market_data: Datos de mercado actuales
+            
+        Returns:
+            True si la posición fue liquidada, False en caso contrario
+        """
+        # Comprobación rápida: si no hay posición activa, retornar inmediatamente
+        if self.active_position_side == 0:
+            return False
+            
+        # Si no hay precio de liquidación válido, no puede haber liquidación
+        if self.liquidation_price <= 0:
+            return False
+            
+        # Comprobación rápida con precio de cierre
+        close_price = self._get_current_close_price()
+        
+        # Para posiciones largas, liquidación cuando precio <= liquidation_price
+        if self.active_position_side == 1 and close_price <= self.liquidation_price:
+            self._liquidate_position(self.liquidation_price)
+            return True
+            
+        # Para posiciones cortas, liquidación cuando precio >= liquidation_price
+        if self.active_position_side == -1 and close_price >= self.liquidation_price:
+            self._liquidate_position(self.liquidation_price)
+            return True
+            
+        # Si hemos llegado aquí, no hay liquidación con el precio de cierre.
+        # Para optimizar, evitamos cálculos adicionales si la diferencia con el precio 
+        # de liquidación es suficientemente grande
+        margin_to_liquidation = abs(close_price - self.liquidation_price) / close_price
+        if margin_to_liquidation > 0.02:  # 2% de margen es suficientemente seguro
+            return False
+            
+        # Si estamos cerca de la liquidación, hacemos una verificación más precisa
+        # Cache para índices de características - calculamos una vez y reutilizamos
+        if not hasattr(self, '_price_indices_cache'):
+            self._price_indices_cache = {
+                'high_feat_idx': self.feature_names.index('log_ret_H_O_norm') if 'log_ret_H_O_norm' in self.feature_names else -1,
+                'low_feat_idx': self.feature_names.index('log_ret_L_O_norm') if 'log_ret_L_O_norm' in self.feature_names else -1
+            }
+        
+        # Inicializar high/low con valores por defecto (siendo conservadores)
+        high_price = close_price * 1.01
+        low_price = close_price * 0.99
+        
+        # Usar ATR directamente desde datos preprocesados si están disponibles (más rápido)
+        if hasattr(self, 'atr_values') and self.atr_values is not None:
+            try:
+                atr = float(self.atr_values[self.current_step_index])
+                # Usar ATR para aproximaciones más precisas de high y low
+                high_price = close_price + atr * 0.5
+                low_price = close_price - atr * 0.5
+            except (IndexError, AttributeError):
+                pass
+        
+        # Si tenemos índices para high/low, usarlos para cálculo más preciso
+        high_feat_idx = self._price_indices_cache['high_feat_idx']
+        low_feat_idx = self._price_indices_cache['low_feat_idx']
+        
+        if high_feat_idx >= 0 and low_feat_idx >= 0:
+            try:
+                # Acceso directo a los datos con comprobaciones para evitar errores
+                open_price = close_price
+                high_price = open_price * np.exp(current_market_data[-1, high_feat_idx])
+                low_price = open_price * np.exp(current_market_data[-1, low_feat_idx])
+            except Exception:
+                pass
+        
+        # Comprobación de liquidación final
+        if ((self.active_position_side == 1 and low_price <= self.liquidation_price) or
+           (self.active_position_side == -1 and high_price >= self.liquidation_price)):
+            self._liquidate_position(self.liquidation_price)
+            return True
+        
+        return False
+        
+    def _get_current_close_price(self) -> float:
+        """
+        Obtiene el precio de cierre actual del mercado.
         
         Returns:
-            np.ndarray: Array of normalized portfolio features.
+            Precio de cierre actual
         """
-        # 1. Position size normalized by max position
-        normalized_position = self.current_position_btc / self.max_position_norm_divisor
+        # Primero intentamos usar close_prices no normalizados si están disponibles
+        try:
+            if hasattr(self, 'close_prices') and self.close_prices is not None:
+                return float(self.close_prices[self.current_step_index])
+        except (IndexError, AttributeError) as e:
+            # Si hay un error, continuamos con el método anterior
+            logger.warning(f"Error al acceder a self.close_prices[{self.current_step_index}]: {e}. Usando fallback.")
+            pass
+            
+        # Si no tenemos close_prices, usamos el método anterior (optimizado)
+        if not hasattr(self, '_close_idx_cache'):
+            # Cache the index to avoid repeated searches
+            self._close_idx_cache = -1
+            for possible_name in ['close', 'Close', 'price', 'Price', 'log_ret_C_O_norm', 'log_ret_C_C_prev_norm']:
+                if possible_name in self.feature_names:
+                    self._close_idx_cache = self.feature_names.index(possible_name)
+                    break
         
-        # 2. Entry price normalized - use log scale relative to current price
-        if self.current_position_entry_price > 0 and self.current_market_price > 0:
-            normalized_entry_price = np.log(self.current_position_entry_price / self.current_market_price)
+        close_idx = self._close_idx_cache
+        
+        # Si no se encuentra, usamos un valor por defecto
+        if close_idx == -1:
+            return 30000.0  # Valor por defecto para BTC
+        
+        # Acceso directo al dato usando el índice cacheado
+        current_market_data = self.market_data[self.current_step_index]
+        
+        # Si es un retorno log, aproximamos el precio absoluto
+        if 'log_ret' in self.feature_names[close_idx]:
+            return 30000.0 * (1 + current_market_data[-1, close_idx])
         else:
-            normalized_entry_price = 0.0
+            # Si es el precio directo
+            return float(current_market_data[-1, close_idx])
+    
+    def _liquidate_position(self, liquidation_price: float) -> None:
+        """
+        Ejecuta la liquidación forzosa de la posición actual.
         
-        # 3. Unrealized P&L normalized
-        unrealized_pnl = self._calculate_unrealized_pnl()
-        if self.current_position_btc != 0 and self.current_position_entry_price > 0:
-            # Normalize by the unrealized PnL divisor, but also relative to current equity
-            current_equity = self.current_balance_usd + (self.current_position_btc * self.current_market_price)
-            if current_equity > 0:  # Protect against division by zero
-                unrealized_pnl_normalized = unrealized_pnl / (current_equity * self.unrealized_pnl_norm_divisor/100)
+        Args:
+            liquidation_price: Precio al que se liquida la posición
+        """
+        # Si no hay posición activa, no hace nada
+        if self.active_position_side == 0:
+            return
+        
+        # Calcula el P&L realizado (siempre será negativo en una liquidación)
+        if self.active_position_side == 1:  # Largo
+            pnl = (liquidation_price - self.active_position_entry_price) * self.active_position_size_contracts
+        else:  # Corto
+            pnl = (self.active_position_entry_price - liquidation_price) * self.active_position_size_contracts
+        
+        # Calcula la comisión (taker fee sobre el valor nocional)
+        notional_value = self.active_position_size_contracts * liquidation_price
+        commission = notional_value * self.broker.taker_fee_rate
+        
+        # Actualiza el balance
+        self.balance += pnl - commission
+        
+        # Actualiza estadísticas
+        self.episode_stats['trades'] += 1
+        self.episode_stats['unprofitable_trades'] += 1
+        self.episode_stats['total_pnl'] += pnl
+        self.episode_stats['total_fees'] += commission
+        
+        logger.warning(f"Posición liquidada: Precio: {liquidation_price}, P&L: {pnl}, Comisión: {commission}")
+        
+        # Reinicia el estado de la posición
+        self.active_position_side = 0
+        self.active_position_size_contracts = 0.0
+        self.active_position_entry_price = 0.0
+        self.margin_used = 0.0
+        self.unrealized_pnl = 0.0
+        self.steps_in_current_position = 0
+        self.liquidation_price = 0.0
+        
+        # Actualiza el equity (ahora igual al balance, ya que no hay posición)
+        self.current_equity = self.balance
+    
+    def _get_observation(self) -> Dict[str, np.ndarray]:
+        """
+        Construye la observación para el agente.
+        
+        Returns:
+            Dict con características de mercado y cartera
+        """
+        try:
+            # Cada índice en market_data ya representa una secuencia completa de longitud L
+            # Seleccionamos la secuencia actual directamente
+            
+            # Extraemos la secuencia actual de datos de mercado
+            market_features = self.market_data[self.current_step_index]
+            
+            # Aseguramos que sea float32
+            if market_features.dtype != np.float32:
+                market_features = market_features.astype(np.float32)
+            
+            # Normaliza las características de cartera (ya en float32)
+            portfolio_features = self._get_normalized_portfolio_features()
+            
+            # Construye la observación como un Dict (reusamos el mismo diccionario si ya existe)
+            if not hasattr(self, '_observation_cache'):
+                self._observation_cache = {
+                    'market_features': market_features,
+                    'portfolio_features': portfolio_features
+                }
             else:
-                unrealized_pnl_normalized = 0.0
+                # Actualizamos el diccionario existente sin crear uno nuevo
+                self._observation_cache['market_features'] = market_features
+                self._observation_cache['portfolio_features'] = portfolio_features
+            
+            return self._observation_cache
+        except Exception as e:
+            logger.error(f"Error al construir observación: {e}")
+            logger.error(f"Índice actual: {self.current_step_index}, L: {self.L}, Forma market_data: {self.market_data.shape}")
+            raise
+            
+    def get_torch_observation(self, observation: Dict[str, np.ndarray], device: str = "cuda") -> Dict[str, torch.Tensor]:
+        """
+        Convierte una observación numpy a tensores de PyTorch para uso con GPU.
+        
+        Args:
+            observation: Observación en formato numpy
+            device: Dispositivo donde colocar los tensores ('cuda', 'mps', 'cpu')
+            
+        Returns:
+            Diccionario con tensores de PyTorch
+        """
+        if not TORCH_AVAILABLE:
+            raise ImportError("PyTorch no está disponible. Instálalo para usar esta función.")
+            
+        # Crear diccionario para tensores
+        torch_obs = {}
+        
+        # Convertir cada array numpy a tensor
+        for key, value in observation.items():
+            # Asegurar que los datos están en float32 para PyTorch
+            if value.dtype != np.float32:
+                value = value.astype(np.float32)
+                
+            # Convertir a tensor y mover al dispositivo especificado
+            torch_obs[key] = torch.tensor(value, dtype=torch.float32, device=device)
+            
+        return torch_obs
+    
+    def _get_normalized_portfolio_features(self) -> np.ndarray:
+        """
+        Normaliza las características de la cartera optimizado con buffer preasignado.
+        
+        Returns:
+            Array con 8 características normalizadas
+        """
+        # Inicializar buffer de características si no existe
+        if not hasattr(self, '_portfolio_features_buffer'):
+            self._portfolio_features_buffer = np.zeros(8, dtype=np.float32)
+            
+        # Ref para más claridad en el código
+        features = self._portfolio_features_buffer
+        
+        # 1. Estado Posición: {-1, 0, 1}
+        features[0] = self.active_position_side
+        
+        is_neutral = self.active_position_side == 0
+        
+        # 2. Tamaño Posición Normalizado
+        if is_neutral:
+            features[1] = 0.0
         else:
-            unrealized_pnl_normalized = 0.0
+            features[1] = (self.active_position_size_contracts * self.active_position_entry_price) / self.initial_equity_episode
         
-        # 4. Account balance normalized by initial balance (as percentage change)
-        normalized_balance = (self.current_balance_usd / self.initial_balance_usd) - 1.0
-        
-        # 5. Steps in position normalized by steps divisor
-        steps_in_position_normalized = self.steps_in_position / self.steps_in_position_norm_divisor
-        
-        # 6. Max drawdown percentage normalized
-        max_drawdown_pct_normalized = self.max_drawdown_pct / self.max_drawdown_pct_norm_divisor
-        
-        # 7. ATR percentage normalized
-        if self.current_market_price > 0:  # Protect against division by zero
-            atr_pct = (self.current_atr / self.current_market_price) * 100
-            atr_pct_normalized = atr_pct / self.atr_pct_norm_divisor
+        # 3. Precio Entrada Normalizado
+        if is_neutral:
+            features[2] = 0.0
         else:
-            atr_pct_normalized = 0.0
+            # Calculamos close_price una sola vez y lo reutilizamos
+            close_price = self._get_current_close_price()
+            features[2] = self.active_position_entry_price / close_price - 1.0
         
-        # 8. Maintenance margin percentage normalized
-        if abs(self.current_position_btc) > 0:
-            position_value = abs(self.current_position_btc) * self.current_market_price
-            margin_reqs = self.broker.calculate_required_margin(
-                position_size_btc=self.current_position_btc,
-                entry_price=self.current_position_entry_price
-            )
-            maintenance_margin_pct = (margin_reqs['maintenance_margin_usd'] / position_value) * 100
-            maintenance_margin_pct_normalized = maintenance_margin_pct / self.maintenance_margin_pct_norm_divisor
-        else:
-            maintenance_margin_pct_normalized = 0.0
+        # 4. P&L No Realizado Normalizado
+        features[3] = self.unrealized_pnl / max(self.current_equity, 1.0)  # Evita división por cero
         
-        # Combine all features
-        portfolio_features = np.array([
-            normalized_position,
-            normalized_entry_price,
-            unrealized_pnl_normalized,
-            normalized_balance,
-            steps_in_position_normalized,
-            max_drawdown_pct_normalized,
-            atr_pct_normalized,
-            maintenance_margin_pct_normalized
-        ], dtype=np.float32)
+        # 5. Retorno Log Equity (último paso)
+        features[4] = np.log(self.current_equity / max(self.last_equity, 1.0))  # max evita división por cero
+        
+        # 6. Ratio de Margen Disponible
+        features[5] = self.available_margin / max(self.current_equity, 1.0)
+        
+        # 7. Pasos en Posición Normalizados
+        max_steps = self.config['portfolio_features_normalization']['max_steps_in_position']
+        features[6] = min(self.steps_in_current_position / max_steps, 1.0)  # Clamp a 1.0
+        
+        # 8. Apalancamiento Configurado
+        features[7] = self.leverage
+        
+        # Devolver la referencia al buffer ya rellenado (sin crear copias)
+        return features
         
         return portfolio_features
     
-    def _get_observation(self):
+    def render(self):
         """
-        Get the current observation.
-        
-        Returns:
-            Dict: Observation dictionary with market and portfolio features.
+        Renderiza el estado actual del entorno.
         """
-        # Market features
-        market_features = self.market_data[self.current_idx].astype(np.float32)
-        
-        # Portfolio features
-        portfolio_features = self._get_portfolio_features()
-        
-        return {
-            'market_features': market_features,
-            'portfolio_features': portfolio_features
-        }
-    
-    def _calculate_reward(self, old_equity, new_equity):
-        """
-        Calculate the reward for the current step.
-        
-        Using log returns of equity as rewards.
-        
-        Args:
-            old_equity (float): Equity before action.
-            new_equity (float): Equity after action.
+        if self.render_mode == 'human':
+            print(f"\n--- Paso {self.current_step_index} ---")
+            print(f"Equity: ${self.current_equity:.2f} (Inicial: ${self.initial_equity_episode:.2f})")
+            print(f"Retorno: {(self.current_equity / self.initial_equity_episode - 1.0) * 100:.2f}%")
             
-        Returns:
-            float: Reward value.
-        """
-        # Prevent division by zero or negative equity
-        if old_equity <= 0 or new_equity <= 0:
-            return -1.0  # Penalize negative equity
-        
-        # Calculate log return
-        log_return = np.log(new_equity / old_equity)
-        
-        return log_return
+            if self.active_position_side == 1:
+                position_text = f"LARGO: {self.active_position_size_contracts:.3f} contratos @ ${self.active_position_entry_price:.2f}"
+                print(position_text)
+                print(f"Precio de liquidación: ${self.liquidation_price:.2f}")
+                print(f"P&L No Realizado: ${self.unrealized_pnl:.2f}")
+            elif self.active_position_side == -1:
+                position_text = f"CORTO: {self.active_position_size_contracts:.3f} contratos @ ${self.active_position_entry_price:.2f}"
+                print(position_text)
+                print(f"Precio de liquidación: ${self.liquidation_price:.2f}")
+                print(f"P&L No Realizado: ${self.unrealized_pnl:.2f}")
+            else:
+                print("Posición: NEUTRAL")
+            
+            print(f"Operaciones: {self.episode_stats['trades']}, Ganadores: {self.episode_stats['profitable_trades']}")
+            print(f"P&L Total: ${self.episode_stats['total_pnl']:.2f}, Comisiones: ${self.episode_stats['total_fees']:.2f}")
+            print("-------------------")
     
-    def _record_portfolio_state(self):
+    def close(self):
         """
-        Record the current portfolio state in the history.
-        """
-        state = {
-            'timestamp': str(self.timestamps[self.current_idx - 1]),
-            'step': self.current_step,
-            'balance_usd': self.current_balance_usd,
-            'position_btc': self.current_position_btc,
-            'position_entry_price': self.current_position_entry_price,
-            'market_price': self.current_market_price,
-            'unrealized_pnl': self._calculate_unrealized_pnl(),
-            'equity': self._calculate_equity(),
-            'steps_in_position': self.steps_in_position,
-            'max_drawdown_pct': self.max_drawdown_pct,
-            'atr': self.current_atr
-        }
-        
-        self.portfolio_history.append(state)
-    
-    def _record_action(self, action_value, decision, target_position_btc):
-        """
-        Record the action taken in the history.
-        
-        Args:
-            action_value (float): Raw action value.
-            decision (str): Trading decision.
-            target_position_btc (float): Target position size.
-        """
-        action_record = {
-            'timestamp': str(self.timestamps[self.current_idx - 1]),
-            'step': self.current_step,
-            'action_value': float(action_value),
-            'decision': decision,
-            'target_position_btc': float(target_position_btc),
-            'actual_position_btc': float(self.current_position_btc),
-            'position_changed': abs(self.current_position_btc - (self.portfolio_history[-2]['position_btc'] if len(self.portfolio_history) >= 2 else 0)) > 1e-8
-        }
-        
-        self.action_history.append(action_record)
-    
-    def render(self, mode="human"):
-        """
-        Render the environment.
-        
-        Not implemented for this environment as it's intended for use in a headless environment.
+        Cierra el entorno y libera recursos.
         """
         pass
     
-    def get_portfolio_history_df(self):
+    def _get_atr_value_optimized(self, current_market_data, close_price):
         """
-        Get the portfolio history as a pandas DataFrame.
-        
-        Returns:
-            pd.DataFrame: DataFrame with portfolio history.
-        """
-        return pd.DataFrame(self.portfolio_history)
-    
-    def get_action_history_df(self):
-        """
-        Get the action history as a pandas DataFrame.
-        
-        Returns:
-            pd.DataFrame: DataFrame with action history.
-        """
-        return pd.DataFrame(self.action_history)
-    
-    def save_history_to_gcs(self, gcs_bucket, gcs_prefix=None):
-        """
-        Save the portfolio and action history to Google Cloud Storage.
+        Método auxiliar para obtener el valor ATR con caché de índices.
         
         Args:
-            gcs_bucket (str): GCS bucket name.
-            gcs_prefix (str, optional): Prefix for GCS path. Defaults to None.
+            current_market_data: Datos de mercado actuales
+            close_price: Precio de cierre actual
             
         Returns:
-            tuple: A tuple containing:
-                - portfolio_gcs_uri (str): GCS URI of the portfolio history file.
-                - actions_gcs_uri (str): GCS URI of the action history file.
+            Valor ATR (desnormalizado)
         """
+        # Intentar usar ATR pre-calculado primero si está disponible
         try:
-            storage_client = storage.Client(project=self.project_id)
-            bucket = storage_client.bucket(gcs_bucket)
+            if hasattr(self, 'atr_values') and self.atr_values is not None:
+                return float(self.atr_values[self.current_step_index])
+        except (IndexError, AttributeError, TypeError):
+            # Si falla, continuamos con el método basado en features
+            pass
             
-            # Generate GCS paths
-            timestamp = datetime.now().strftime('%Y%m%d%H%M%S')
-            base_path = f"{gcs_prefix}/" if gcs_prefix else ""
+        # Cachear el índice ATR para evitar búsquedas repetidas
+        if not hasattr(self, '_atr_idx_cache'):
+            self._atr_idx_cache = self.feature_names.index('ATR_norm') if 'ATR_norm' in self.feature_names else -1
             
-            portfolio_path = f"{base_path}portfolio_history_{timestamp}.json"
-            actions_path = f"{base_path}action_history_{timestamp}.json"
-            
-            # Convert history to JSON
-            portfolio_json = json.dumps(self.portfolio_history, indent=2)
-            actions_json = json.dumps(self.action_history, indent=2)
-            
-            # Upload to GCS
-            portfolio_blob = bucket.blob(portfolio_path)
-            portfolio_blob.upload_from_string(portfolio_json, content_type='application/json')
-            
-            actions_blob = bucket.blob(actions_path)
-            actions_blob.upload_from_string(actions_json, content_type='application/json')
-            
-            # Return URIs
-            portfolio_uri = f"gs://{gcs_bucket}/{portfolio_path}"
-            actions_uri = f"gs://{gcs_bucket}/{actions_path}"
-            
-            self.logger.info(f"Saved portfolio history to {portfolio_uri}")
-            self.logger.info(f"Saved action history to {actions_uri}")
-            
-            return portfolio_uri, actions_uri
-            
-        except Exception as e:
-            self.logger.error(f"Error saving history to GCS: {str(e)}")
-            raise
+        atr_idx = self._atr_idx_cache
+        
+        # Si tenemos el índice, extraer el valor
+        if atr_idx >= 0:
+            # Des-normalizar si ATR_norm = ATR / Close
+            atr_value = current_market_data[-1, atr_idx] * close_price
+            return atr_value
+        else:
+            # Valor por defecto
+            return close_price * 0.01  # 1% del precio como aproximación

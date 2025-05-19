@@ -1,216 +1,208 @@
 """
-Custom Transformer feature extractor module for the RL agent.
-
-This module contains the CustomTransformerFeatureExtractor class, which implements
-a feature extractor using a Transformer architecture for processing sequential
-market data and portfolio information.
+Implementación personalizada del extractor de características basado en Transformer 
+para el agente de trading SAC dentro de Stable Baselines3.
 """
 
-import numpy as np
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-import gym
-from gym import spaces
-from typing import Dict, List, Tuple, Optional, Any
-
+import numpy as np
+import gymnasium as gym
+from typing import Dict, Tuple
 from stable_baselines3.common.preprocessing import get_flattened_obs_dim
 from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
 
 
 class PositionalEncoding(nn.Module):
     """
-    Positional encoding layer for transformer models.
-    
-    This implementation follows the original positional encoding described
-    in "Attention is All You Need" using sine and cosine functions of different frequencies.
-    
-    Attributes:
-        d_model (int): The embedding dimension.
-        dropout (nn.Dropout): Dropout layer.
-        pe (Tensor): The positional encoding tensor.
+    Implementación del Positional Encoding Sinusoidal para el Transformer.
     """
-    
-    def __init__(self, d_model: int, dropout: float = 0.1, max_len: int = 5000):
+    def __init__(self, d_model: int, dropout_rate: float = 0.1, max_len: int = 100):
         """
-        Initialize the positional encoding layer.
+        Inicializa el encoding posicional.
         
         Args:
-            d_model (int): The embedding dimension.
-            dropout (float, optional): Dropout rate. Defaults to 0.1.
-            max_len (int, optional): Maximum sequence length. Defaults to 5000.
+            d_model: Dimensión del modelo del Transformer
+            dropout_rate: Tasa de dropout para regularización
+            max_len: Longitud máxima de secuencia esperada
         """
         super().__init__()
-        self.dropout = nn.Dropout(p=dropout)
+        self.dropout = nn.Dropout(p=dropout_rate)
         
-        # Create positional encoding matrix
+        # Crear matriz de codificación posicional
+        position = torch.arange(max_len).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, d_model, 2) * (-np.log(10000.0) / d_model))
+        
         pe = torch.zeros(max_len, d_model)
-        position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
-        div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-np.log(10000.0) / d_model))
-        
         pe[:, 0::2] = torch.sin(position * div_term)
         pe[:, 1::2] = torch.cos(position * div_term)
-        pe = pe.unsqueeze(0).transpose(0, 1)
         
-        # Register pe buffer
+        # Registrar pe como un buffer (parte del estado del módulo pero no un parámetro)
         self.register_buffer('pe', pe)
-    
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        Forward pass of the positional encoding layer.
         
-        Args:
-            x (torch.Tensor): Input tensor of shape (seq_len, batch_size, d_model).
-            
-        Returns:
-            torch.Tensor: Output tensor with positional encoding added.
+    def forward(self, x):
         """
-        x = x + self.pe[:x.size(0), :]
+        Args:
+            x: Tensor de forma [seq_len, batch_size, d_model] o [batch_size, seq_len, d_model]
+        """
+        # Asumimos que x tiene forma [batch_size, seq_len, d_model]
+        x = x + self.pe[:x.size(1)].unsqueeze(0)
         return self.dropout(x)
 
 
 class CustomTransformerFeatureExtractor(BaseFeaturesExtractor):
     """
-    Custom feature extractor using a Transformer architecture for RL agent.
-    
-    This class processes sequential market data and portfolio information using
-    a Transformer Encoder architecture. It handles Dictionary observation spaces
-    with 'market_features' and 'portfolio_features' components.
-    
-    Attributes:
-        features_dim (int): Output dimension of the feature extractor.
-        market_embedding (nn.Linear): Linear embedding layer for market features.
-        positional_encoding (PositionalEncoding): Positional encoding layer.
-        transformer_encoder (nn.TransformerEncoder): Transformer encoder layers.
-        portfolio_embedding (nn.Linear): Linear embedding layer for portfolio features.
-        final_embedding (nn.Linear): Final linear layer to combine transformer and portfolio embeddings.
+    Extractor de características personalizado que:
+    1. Toma observaciones en formato Dict con 'market_features' y 'portfolio_features'
+    2. Replica y concatena las características de la cartera con cada paso temporal de las características del mercado
+    3. Procesa la secuencia resultante a través de una arquitectura Transformer
+    4. Devuelve un vector de características para las redes del actor y del crítico
     """
     
-    def __init__(
-        self,
-        observation_space: spaces.Dict,
-        features_dim: int = 256,
-        d_model: int = 128,
-        n_heads: int = 4,
-        n_encoder_layers: int = 2,
-        dim_feedforward: int = 512,
-        activation: str = "relu",
-        dropout: float = 0.1
-    ):
+    def __init__(self, 
+                 observation_space: gym.spaces.Dict, 
+                 market_features_key: str = "market_features", 
+                 portfolio_features_key: str = "portfolio_features",
+                 features_in_transformer: int = 28, 
+                 d_model: int = 128, 
+                 n_heads: int = 4, 
+                 n_encoder_layers: int = 3, 
+                 dim_feedforward: int = 512, 
+                 dropout_rate: float = 0.1):
         """
-        Initialize the CustomTransformerFeatureExtractor.
+        Inicializa el extractor de características basado en Transformer.
         
         Args:
-            observation_space (spaces.Dict): Observation space with 'market_features' and 'portfolio_features'.
-            features_dim (int, optional): Output dimension of the feature extractor. Defaults to 256.
-            d_model (int, optional): Dimension of the transformer model. Defaults to 128.
-            n_heads (int, optional): Number of attention heads. Defaults to 4.
-            n_encoder_layers (int, optional): Number of transformer encoder layers. Defaults to 2.
-            dim_feedforward (int, optional): Dimension of feedforward network. Defaults to 512.
-            activation (str, optional): Activation function. Defaults to "relu".
-            dropout (float, optional): Dropout rate. Defaults to 0.1.
-            
-        Raises:
-            ValueError: If observation_space is not a Dict with required keys.
+            observation_space: Espacio de observación de gymnasium (Dict)
+            market_features_key: Clave para acceder a las características del mercado en el Dict
+            portfolio_features_key: Clave para acceder a las características del portafolio en el Dict
+            features_in_transformer: Número total de características después de concatenar (mercado+portafolio)
+            d_model: Dimensión del modelo del Transformer
+            n_heads: Número de cabezas de atención
+            n_encoder_layers: Número de capas del encoder Transformer
+            dim_feedforward: Dimensión de la capa feed-forward interna de cada capa del Transformer
+            dropout_rate: Tasa de dropout para regularización
         """
+        # La dimensión de salida del extractor será d_model
+        features_dim = d_model
         super().__init__(observation_space, features_dim)
         
-        # Check if observation space has the expected structure
-        if not isinstance(observation_space, spaces.Dict) or \
-           'market_features' not in observation_space.spaces or \
-           'portfolio_features' not in observation_space.spaces:
-            raise ValueError("Observation space must be a Dict with 'market_features' and 'portfolio_features' keys")
+        self.market_features_key = market_features_key
+        self.portfolio_features_key = portfolio_features_key
         
-        market_space = observation_space.spaces['market_features']
-        portfolio_space = observation_space.spaces['portfolio_features']
+        # Obtener las dimensiones del espacio de observación
+        self.seq_length = observation_space[market_features_key].shape[0]
+        self.n_market_features = observation_space[market_features_key].shape[1]
+        self.n_portfolio_features = observation_space[portfolio_features_key].shape[0]
         
-        # Get shapes from spaces
-        if isinstance(market_space, spaces.Box):
-            seq_len, n_market_features = market_space.shape
-        else:
-            raise ValueError("Market features space must be a Box space")
+        # Verificar que features_in_transformer sea consistente
+        assert features_in_transformer == (self.n_market_features + self.n_portfolio_features), \
+            f"features_in_transformer ({features_in_transformer}) debe ser igual a la suma de las características " \
+            f"de mercado ({self.n_market_features}) y del portafolio ({self.n_portfolio_features})"
         
-        if isinstance(portfolio_space, spaces.Box):
-            n_portfolio_features = portfolio_space.shape[0]
-        else:
-            raise ValueError("Portfolio features space must be a Box space")
+        # Capa de embedding lineal para proyectar las características concatenadas a la dimensión del modelo
+        self.input_embedding = nn.Linear(features_in_transformer, d_model)
         
-        # Combined input size (market + portfolio features concatenated)
-        n_combined_features = n_market_features + n_portfolio_features
+        # Positional Encoding
+        self.positional_encoding = PositionalEncoding(
+            d_model=d_model,
+            dropout_rate=dropout_rate,
+            max_len=self.seq_length
+        )
         
-        # Linear embedding to convert combined features to d_model dimensions
-        self.market_embedding = nn.Linear(n_combined_features, d_model)
+        # Crear una máscara para padding (si es necesaria)
+        # self.register_buffer('src_mask', self._generate_square_subsequent_mask(self.seq_length))
         
-        # Positional encoding
-        self.positional_encoding = PositionalEncoding(d_model, dropout)
-        
-        # Transformer encoder layer
+        # Capas del Encoder Transformer
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=d_model,
             nhead=n_heads,
             dim_feedforward=dim_feedforward,
-            dropout=dropout,
-            activation=activation,
-            batch_first=False  # seq_len first (seq_len, batch, feature)
+            dropout=dropout_rate,
+            batch_first=True  # Para usar secuencias en formato [batch, seq, features]
         )
         
-        # Stack encoder layers
         self.transformer_encoder = nn.TransformerEncoder(
             encoder_layer=encoder_layer,
             num_layers=n_encoder_layers
         )
         
-        # We don't need a separate portfolio embedding anymore
-        # Final embedding layer to match required features_dim
-        self.final_embedding = nn.Linear(d_model, features_dim)
-    
     def forward(self, observations: Dict[str, torch.Tensor]) -> torch.Tensor:
         """
-        Forward pass of the feature extractor.
-        
-        Process market features with portfolio features through the transformer encoder
-        to create a comprehensive state representation that captures temporal
-        correlations between market state and portfolio state.
+        Procesa las observaciones a través del extractor.
         
         Args:
-            observations (Dict[str, torch.Tensor]): Dictionary with 'market_features'
-                and 'portfolio_features' tensors.
-                
+            observations: Diccionario con las claves 'market_features' y 'portfolio_features'
+                - market_features: Tensor de forma [batch_size, seq_length, n_market_features]
+                - portfolio_features: Tensor de forma [batch_size, n_portfolio_features]
+        
         Returns:
-            torch.Tensor: Extracted features tensor.
+            Tensor de características procesadas de forma [batch_size, features_dim]
         """
-        # Extract components from the dict observation
-        market_features = observations['market_features']  # (batch_size, seq_len, n_market_features)
-        portfolio_features = observations['portfolio_features']  # (batch_size, n_portfolio_features)
+        # Extraer los componentes de la observación
+        market_features = observations[self.market_features_key]
+        portfolio_features = observations[self.portfolio_features_key]
         
-        # Get dimensions
-        batch_size, seq_len, n_market_features = market_features.shape
+        # Detectar el dispositivo de los tensores de entrada
+        device = market_features.device
+        batch_size = market_features.shape[0]
         
-        # Replicate portfolio features for each time step
-        # First, unsqueeze to add seq_len dimension: (batch_size, 1, n_portfolio_features)
-        portfolio_expanded = portfolio_features.unsqueeze(1)
+        # Replicar las características del portafolio para cada paso temporal
+        # [batch_size, n_portfolio_features] -> [batch_size, seq_length, n_portfolio_features]
+        portfolio_features_expanded = portfolio_features.unsqueeze(1).expand(-1, self.seq_length, -1)
         
-        # Repeat along seq_len dimension: (batch_size, seq_len, n_portfolio_features)
-        portfolio_repeated = portfolio_expanded.repeat(1, seq_len, 1)
+        # Concatenar las características del mercado y del portafolio
+        # [batch_size, seq_length, n_market_features + n_portfolio_features]
+        combined_features = torch.cat([market_features, portfolio_features_expanded], dim=2)
         
-        # Concatenate market and portfolio features along the feature dimension
-        # (batch_size, seq_len, n_market_features + n_portfolio_features)
-        combined_features = torch.cat([market_features, portfolio_repeated], dim=2)
+        # Pasar a través de la capa de embedding
+        # [batch_size, seq_length, d_model]
+        embedded_features = self.input_embedding(combined_features)
         
-        # Transpose to (seq_len, batch_size, n_features) for transformer
-        combined_features = combined_features.transpose(0, 1)
+        # Añadir Positional Encoding
+        encoded_features = self.positional_encoding(embedded_features)
         
-        # Linear embedding and positional encoding
-        embedded = self.market_embedding(combined_features)  # (seq_len, batch_size, d_model)
-        embedded = self.positional_encoding(embedded)
+        # Pasar a través del Transformer Encoder
+        # [batch_size, seq_length, d_model]
+        transformer_output = self.transformer_encoder(encoded_features)
         
-        # Apply transformer encoder
-        transformer_output = self.transformer_encoder(embedded)  # (seq_len, batch_size, d_model)
+        # Extraer la representación final: usar el último token de la secuencia
+        # [batch_size, d_model]
+        features = transformer_output[:, -1, :]
         
-        # Use the last sequence element as the representation
-        final_representation = transformer_output[-1]  # (batch_size, d_model)
+        # Alternativa: se puede usar Global Average Pooling en la dimensión temporal
+        # features = transformer_output.mean(dim=1)
         
-        # Final embedding to match expected features_dim
-        output = self.final_embedding(final_representation)  # (batch_size, features_dim)
+        return features
+
+
+# Funciones de utilidad para registro de la política personalizada con Stable Baselines3
+def register_policy_with_custom_extractor(observation_space, action_space, policy_kwargs=None):
+    """
+    Registra la política MLP de SB3 con nuestro extractor personalizado.
+    
+    Args:
+        observation_space: Espacio de observación
+        action_space: Espacio de acción
+        policy_kwargs: Argumentos adicionales para la política
         
-        return output
+    Returns:
+        Una instancia de la política SB3 configurada con nuestro extractor personalizado
+    """
+    from stable_baselines3.sac.policies import SACPolicy
+    
+    # Asegurarse de que policy_kwargs está inicializado
+    if policy_kwargs is None:
+        policy_kwargs = {}
+    
+    # Si no se especifica la clase del extractor, usar nuestro CustomTransformerFeatureExtractor
+    if "features_extractor_class" not in policy_kwargs:
+        policy_kwargs["features_extractor_class"] = CustomTransformerFeatureExtractor
+    
+    # Crear la política SAC con el extractor personalizado
+    policy = SACPolicy(
+        observation_space=observation_space,
+        action_space=action_space,
+        **policy_kwargs
+    )
+    
+    return policy

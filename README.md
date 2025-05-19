@@ -1,123 +1,156 @@
-# BTC Trading Bot with Reinforcement Learning and Transformers
+# Trading Bot con Reinforcement Learning para Futuros de Criptomonedas
 
-A cutting-edge Bitcoin trading bot that uses Reinforcement Learning with Transformer architecture for autonomous trading on Binance futures. This project is designed to be fully cloud-native, running on Google Cloud Platform (GCP) with a robust MLOps pipeline.
+## Descripción
 
-## Overview
+Este proyecto implementa un agente de trading basado en Reinforcement Learning para operar en el mercado de futuros de criptomonedas. Utiliza el algoritmo SAC (Soft Actor-Critic) con una arquitectura de red neuronal basada en Transformers para procesar datos históricos del mercado y tomar decisiones de trading.
 
-The BTC Trading Bot is an advanced algorithmic trading system for Bitcoin futures (BTC/USDT) on Binance. It leverages:
+**Estado Actual del Proyecto**: Esta es una versión de desarrollo para entrenamiento local funcional. **No está lista para trading en vivo**.
 
-- **Reinforcement Learning (RL)**: A Soft Actor-Critic (SAC) agent that learns to make trading decisions autonomously
-- **Transformer Architecture**: For processing market data sequences and portfolio state
-- **Google Cloud Platform (GCP)**: For infrastructure, training, and deployment
-- **MLOps Pipeline**: End-to-end automation from data acquisition to model deployment
+## Características Principales
 
-## Project Structure
+- Descarga de datos históricos de Binance Futures API
+- Preprocesamiento y cálculo de características técnicas de trading
+- Simulación de un entorno de trading de futuros BTCUSDT con Gymnasium
+- Agente de RL (Soft Actor-Critic) con extractor de características basado en Transformers
+- Visualización de resultados y métricas de rendimiento
+
+## Estructura del Proyecto
 
 ```
-├── cloudbuild.yaml       # CI/CD configuration for Cloud Build
-├── Dockerfile            # Container definition for all components
-├── pipeline_definition.py # Vertex AI Pipeline definition
-├── requirements.txt      # Python dependencies
-├── doc/                  # Documentation
-├── scripts/              # Deployment and utility scripts
-├── src/                  # Source code
-│   ├── agent/            # RL agent with Transformer
-│   ├── backtesting/      # Backtesting framework
-│   ├── components/       # Vertex AI Pipeline components
-│   ├── data_acquisition/ # Data download from Binance
-│   ├── environments/     # Trading environment (gym compatible)
-│   ├── preprocessing/    # Data preprocessing
-│   └── utils/            # Utilities
-├── terraform/            # Infrastructure as Code (IaC)
-└── tests/                # Unit tests
+btcbot/
+├── data/                      # Datos del mercado
+│   ├── raw/                   # Datos sin procesar de Binance
+│   └── processed/             # Datos preprocesados con features
+├── docs/                      # Documentación detallada
+├── logs/                      # Logs de entrenamiento y evaluación
+├── models/                    # Modelos guardados
+├── results/                   # Resultados de evaluación
+├── scripts/                   # Scripts ejecutables
+└── src/                       # Código fuente
+    ├── agent/                 # Implementación del agente RL
+    ├── data/                  # Código para adquisición y preprocesamiento
+    ├── environments/          # Entorno de simulación
+    └── utils/                 # Utilidades generales
 ```
 
-## Features
+## Requisitos Previos
 
-- **Autonomous Trading**: The agent learns to make trading decisions (open long/short, close, hold) based on market data and portfolio state
-- **Infrastructure as Code**: All GCP resources defined with Terraform
-- **CI/CD Pipeline**: Automated testing, building, and deployment with Cloud Build
-- **Vertex AI Integration**: End-to-end ML pipeline with data acquisition, preprocessing, training, and backtesting
-- **Cloud-Native**: Designed to run entirely on GCP with scalable compute resources
-- **Modular Design**: Components can be improved or replaced independently
+- Python 3.9+
+- Git
 
-## Setup and Deployment
+## Instalación
 
-### Prerequisites
-
-- Google Cloud Platform (GCP) account with billing enabled
-- Terraform installed locally
-- Google Cloud SDK (gcloud) installed and configured
-- Binance API key and secret (for data acquisition)
-
-### Infrastructure Setup
-
-1. Configure and initialize Terraform:
-   ```bash
-   cd scripts
-   ./setup_terraform.sh
+1. **Clonar el repositorio**:
+   ```
+   git clone https://github.com/yourusername/btcbot.git
+   cd btcbot
    ```
 
-2. Set up Secret Manager secrets:
-   ```bash
-   ./update_secrets.sh
+2. **Crear y activar un entorno virtual**:
+   ```
+   python3 -m venv .venv
+   source .venv/bin/activate  # En Windows: .venv\Scripts\activate
    ```
 
-3. Deploy GCP infrastructure:
-   ```bash
-   ./deploy_infrastructure.sh
+3. **Instalar dependencias**:
    ```
-
-This creates all necessary GCP resources:
-- GCS buckets for data and artifacts
-- Artifact Registry for Docker images
-- Secret Manager for Binance API credentials
-- Vertex AI TensorBoard instance
-- Service accounts and IAM permissions
-
-### CI/CD Pipeline
-
-The CI/CD pipeline is configured in `cloudbuild.yaml` and automatically:
-1. Runs linting and unit tests
-2. Builds and pushes the Docker image
-3. Compiles the Vertex AI Pipeline
-4. Deploys the pipeline to Vertex AI
-
-The pipeline can be triggered manually or automatically on GitHub commits.
-
-### ML Pipeline
-
-The Vertex AI Pipeline includes the following stages:
-1. **Data Acquisition**: Downloads historical OHLCV data from Binance
-2. **Preprocessing**: Feature engineering, normalization, and sequence creation
-3. **Training**: RL agent training with GPU acceleration
-4. **Backtesting**: Evaluation of the trained agent
-
-## Development
-
-### Local Development
-
-1. Clone the repository
-2. Install requirements:
-   ```bash
    pip install -r requirements.txt
    ```
-3. Run tests:
-   ```bash
-   pytest tests/
+
+4. **Configurar Variables de Entorno**:
+   
+   Crear un archivo `.env` en la raíz del proyecto con el siguiente contenido:
+   
    ```
+   BINANCE_API_KEY_FUTURES="TU_CLAVE_AQUI"
+   BINANCE_API_SECRET_FUTURES="TU_SECRETO_AQUI"
+   ```
+   
+   > **Nota**: Las claves API reales de Binance solo son necesarias para `download_data.py`. Para el resto de los scripts (preprocesamiento, entrenamiento, evaluación) puedes usar valores de placeholder si ya tienes datos descargados.
 
-### Adding Features
+## Uso
 
-1. Create a feature branch
-2. Implement changes
-3. Add tests
-4. Submit a pull request
+### 1. Descarga de Datos
 
-## License
+```
+python scripts/download_data.py
+```
 
-[Specify your license here]
+Este script descargará datos históricos de BTCUSDT de Binance Futures y los guardará en `data/raw/`.
 
-## Acknowledgments
+### 2. Preprocesamiento de Datos
 
-- Design developed with assistance from Gemini AI
+```
+python scripts/preprocess_data.py
+```
+
+Procesa los datos descargados para calcular características técnicas y los guarda en `data/processed/`.
+
+### 3. Prueba del Entorno
+
+```
+python scripts/test_environment.py
+```
+
+Verifica que el entorno de trading funcione correctamente, simulando un agente aleatorio.
+
+### 4. Entrenamiento del Agente
+
+Para un entrenamiento de prueba rápido:
+```
+python scripts/train_rl_agent.py --timesteps 1000
+```
+
+Para un entrenamiento más extenso:
+```
+python scripts/train_rl_agent.py --timesteps 1000000
+```
+
+### 5. Evaluación del Agente
+
+```
+python scripts/evaluate_rl_agent.py --model-path models/sac_transformer_trading_agent_final_1000_steps.zip --episodes 1
+```
+
+## Archivos de Configuración
+
+- `src/config.yaml`: Configuración general del proyecto
+- `src/data/preprocessing_config.yaml`: Parámetros para el preprocesamiento de datos
+- `src/environments/environment_config.yaml`: Configuración del entorno de simulación
+- `src/agent/agent_config.yaml`: Hiperparámetros del agente RL
+
+## Tecnologías Clave
+
+- PyTorch: Framework de aprendizaje profundo
+- Stable Baselines3: Implementaciones de algoritmos de RL
+- Gymnasium: Framework para entornos de RL
+- Pandas & NumPy: Procesamiento de datos
+- Matplotlib: Visualización
+- python-binance: API para conexión con Binance
+
+## Documentación Adicional
+
+Para información más detallada sobre cada componente, consulta los archivos en el directorio `docs/`:
+
+- [Adquisición de Datos](docs/adquisición_datos.md)
+- [Preprocesamiento](docs/preprocesamiento.md)
+- [Entorno de Simulación](docs/entorno.md)
+- [Agente RL](docs/agente.md)
+
+## Limitaciones Conocidas
+
+- Esta versión es solo para entrenamiento local, no está preparada para trading en vivo
+- No incluye optimización avanzada de hiperparámetros
+- La simulación no tiene en cuenta la profundidad del mercado ni el impacto de las operaciones
+- El rendimiento del modelo no está garantizado en mercados reales
+
+## Próximos Pasos
+
+- Implementar backtest más rigurosos
+- Añadir optimización automática de hiperparámetros
+- Desarrollar módulo para trading en vivo (paper trading)
+- Mejorar la arquitectura del modelo con atención a múltiples timeframes
+
+## Licencia
+
+MIT
