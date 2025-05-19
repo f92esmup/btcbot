@@ -95,47 +95,11 @@ def main():
     output_filename_base = os.path.splitext(raw_data_filename)[0] # ej. BTCUSDT_FUTURES_1h_20200101_20250516
 
     try:
-        # Extraer símbolo e intervalo del nombre del archivo
-        # Formato esperado: SYMBOL_FUTURES_INTERVAL_STARTDATE_ENDDATE.csv
-        file_parts = output_filename_base.split('_')
-        
-        if len(file_parts) >= 3:
-            symbol = file_parts[0]
-            
-            # Detectar el formato específico del nombre de archivo
-            if "FUTURES" in file_parts:
-                futures_index = file_parts.index("FUTURES")
-                if len(file_parts) > futures_index + 1:
-                    interval = file_parts[futures_index + 1]
-                else:
-                    interval = "1h"  # Valor por defecto
-            else:
-                # Si no tiene FUTURES, asumimos que el segundo elemento es el intervalo
-                interval = file_parts[1]
-                
-            logger.info(f"Símbolo extraído: {symbol}, Intervalo: {interval}")
-        else:
-            logger.warning(f"No se pudo extraer símbolo e intervalo correctamente del nombre de archivo: {raw_data_filename}")
-            # Usar valores por defecto de la configuración
-            symbol = general_config_manager.get_config_value('data_acquisition_defaults.symbol', 'BTCUSDT')
-            interval = general_config_manager.get_config_value('data_acquisition_defaults.interval', '1h')
-            logger.info(f"Usando valores por defecto: Símbolo={symbol}, Intervalo={interval}")
-        
         logger.info(f"Procesando archivo de datos crudos: {raw_data_filename}")
-        logger.info(f"Usando: Symbol={symbol}, Interval={interval}, Output base={output_filename_base}")
-        
-        # Procesar los datos
-        gcs_path = preprocessor.process_data(raw_data_filename, symbol, interval, output_filename_base)
-        
-        if gcs_path:
-            logger.info(f"Proceso de preprocesamiento de datos finalizado exitosamente.")
-            logger.info(f"Datos procesados disponibles en: {gcs_path}")
-        else:
-            logger.warning("El proceso de preprocesamiento no generó datos de salida.")
-        
+        preprocessor.process_data(raw_data_filename, output_filename_base)
+        logger.info("Proceso de preprocesamiento de datos finalizado exitosamente.")
     except Exception as e:
         logger.error(f"Ocurrió un error crítico durante el proceso de preprocesamiento: {e}", exc_info=True)
-        sys.exit(1)
 
 if __name__ == "__main__":
     main()

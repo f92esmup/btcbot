@@ -2,7 +2,6 @@ import pandas as pd
 import numpy as np
 import logging
 import math
-import pandas_ta as ta
 
 logger = logging.getLogger(__name__)
 
@@ -44,80 +43,19 @@ class FeatureEngineer:
         
     def add_technical_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
         """
-        Calcula indicadores técnicos basados en el DataFrame OHLCV usando pandas_ta
+        Calcula indicadores técnicos basados en el DataFrame OHLCV
         """
-        logger.debug("Calculando indicadores técnicos con pandas_ta.")
+        logger.debug("Calculando indicadores técnicos.")
         df_out = df.copy()
-        self._add_pandas_ta_indicators(df_out)
+        
+        try:
+            import pandas_ta as ta
+            self._add_pandas_ta_indicators(df_out)
+        except ImportError:
+            logger.error("No se pudo importar pandas_ta. No se pueden calcular indicadores técnicos.")
+            raise ImportError("Se requiere pandas_ta para calcular indicadores técnicos")
+        
         return df_out
-    
-    def _add_talib_indicators(self, df_out: pd.DataFrame) -> None:
-        """
-        Implementa indicadores técnicos usando TA-Lib
-        """
-        import talib
-        
-        # SMAs
-        df_out['SMA_short'] = talib.SMA(df_out['Close'], timeperiod=self.ic['sma_short_period'])
-        df_out['SMA_long'] = talib.SMA(df_out['Close'], timeperiod=self.ic['sma_long_period'])
-        
-        # EMAs
-        df_out['EMA_short'] = talib.EMA(df_out['Close'], timeperiod=self.ic['ema_short_period'])
-        df_out['EMA_long'] = talib.EMA(df_out['Close'], timeperiod=self.ic['ema_long_period'])
-        
-        # RSI
-        df_out['RSI'] = talib.RSI(df_out['Close'], timeperiod=self.ic['rsi_period'])
-        
-        # ATR
-        df_out['ATR'] = talib.ATR(df_out['High'], df_out['Low'], df_out['Close'], 
-                                timeperiod=self.ic['atr_period'])
-        
-        # MACD
-        macd, macdsignal, macdhist = talib.MACD(
-            df_out['Close'],
-            fastperiod=self.ic['macd_fast_period'],
-            slowperiod=self.ic['macd_slow_period'],
-            signalperiod=self.ic['macd_signal_period']
-        )
-        df_out['MACD_line'] = macd
-        df_out['MACD_signal'] = macdsignal
-        df_out['MACD_hist'] = macdhist
-        
-        # Bandas de Bollinger
-        upper, middle, lower = talib.BBANDS(
-            df_out['Close'],
-            timeperiod=self.ic['bollinger_period'],
-            nbdevup=self.ic['bollinger_std_dev'],
-            nbdevdn=self.ic['bollinger_std_dev'],
-            matype=0  # 0 para SMA
-        )
-        df_out['BB_upper'] = upper
-        df_out['BB_middle'] = middle  # Es la SMA(periodo_bollinger)
-        df_out['BB_lower'] = lower
-        df_out['BB_width'] = upper - lower  # Ancho absoluto
-        
-        # CCI
-        df_out['CCI'] = talib.CCI(
-            df_out['High'], 
-            df_out['Low'], 
-            df_out['Close'], 
-            timeperiod=self.ic['cci_period']
-        )
-        
-        # Stochastic Oscillator (%K lento, %D)
-        # TA-Lib STOCH: fastk_period, slowk_period (slowing), slowd_period (smoothing de slowk)
-        slowk, slowd = talib.STOCH(
-            df_out['High'], 
-            df_out['Low'], 
-            df_out['Close'],
-            fastk_period=self.ic['stochastic_k_period'],
-            slowk_period=self.ic['stochastic_slowing_period'],
-            slowk_matype=0,  # SMA para cálculo de %K lento
-            slowd_period=self.ic['stochastic_d_period'],
-            slowd_matype=0  # SMA para suavizar %K lento (que es %D)
-        )
-        df_out['STOCH_slowk'] = slowk
-        df_out['STOCH_slowd'] = slowd
             
     def _add_pandas_ta_indicators(self, df_out: pd.DataFrame) -> None:
         """

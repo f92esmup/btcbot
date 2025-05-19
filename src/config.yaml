@@ -1,9 +1,6 @@
-# IMPORTANTE: Este sistema requiere acceso a Google Cloud Platform para funcionar.
-# No podrá operar sin acceso a servicios GCP (BigQuery, GCS, Secret Manager).
-
 data_paths:
-  raw: "data/raw"  # Solo para logs, no para almacenamiento persistente
-  processed: "data/processed"  # Solo para logs, no para almacenamiento persistente
+  raw: "data/raw"
+  processed: "data/processed"
 
 binance_api:
   futures_base_url: "https://fapi.binance.com"
@@ -16,18 +13,3 @@ data_acquisition_defaults:
   symbol: "BTCUSDT"
   interval: "1h"
   historical_start_date: "2020-01-01"
-
-gcp:
-  project_id: ""  # Se puede inferir en GCP automáticamente o proveer en variables de entorno GOOGLE_CLOUD_PROJECT
-  bigquery:
-    raw_dataset_id: "market_data_raw"
-    processed_dataset_id: "market_data_processed"
-    raw_table_id_prefix: "klines_"
-    processed_table_id_prefix: "features_"
-  gcs:
-    raw_bucket_name: "btcbot-raw-data"
-    processed_bucket_name: "btcbot-processed-data"
-    models_bucket_name: "btcbot-models"
-    raw_prefix: "raw/"
-    processed_prefix: "processed/"
-    models_prefix: "models/"

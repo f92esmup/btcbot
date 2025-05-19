@@ -9,7 +9,7 @@ Este proyecto implementa un agente de trading basado en Reinforcement Learning p
 ## Características Principales
 
 - Descarga de datos históricos de Binance Futures API
-- Preprocesamiento y cálculo de características técnicas de trading
+- Preprocesamiento y cálculo de características técnicas de trading usando pandas-ta
 - Simulación de un entorno de trading de futuros BTCUSDT con Gymnasium
 - Agente de RL (Soft Actor-Critic) con extractor de características basado en Transformers
 - Visualización de resultados y métricas de rendimiento

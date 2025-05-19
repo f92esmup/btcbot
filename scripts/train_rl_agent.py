@@ -5,9 +5,14 @@ con la arquitectura personalizada basada en Transformer.
 """
 
 import os
+import sys
 import argparse
 import logging
 from pathlib import Path
+
+# Añadir el directorio raíz del proyecto al path de Python
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+sys.path.insert(0, project_root)
 
 # Importaciones locales
 from src.agent.rl_agent_manager import RLAgentManager

@@ -27,9 +27,9 @@ indicators:
   bollinger_period: 20
   bollinger_std_dev: 2
   cci_period: 20
-  stochastic_k_period: 14 # fastk_period en TA-Lib
-  stochastic_d_period: 3  # slowd_period en TA-Lib
-  stochastic_slowing_period: 3 # slowk_period en TA-Lib (para %K suavizado)
+  stochastic_k_period: 14 # k en pandas_ta
+  stochastic_d_period: 3  # d en pandas_ta
+  stochastic_slowing_period: 3 # smooth_k en pandas_ta
 
 # Lista de características de mercado finales a incluir en las secuencias (el orden importa)
 # Estos nombres deben coincidir con las columnas generadas después de la ingeniería y normalización.

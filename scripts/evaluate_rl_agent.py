@@ -5,6 +5,7 @@ en el entorno de trading simulado.
 """
 
 import os
+import sys
 import argparse
 import numpy as np
 import gymnasium as gym
@@ -12,6 +13,10 @@ import logging
 from pathlib import Path
 import pandas as pd
 import matplotlib.pyplot as plt
+
+# Añadir el directorio raíz del proyecto al path de Python
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+sys.path.insert(0, project_root)
 
 # Importaciones locales
 from src.agent.rl_agent_manager import RLAgentManager

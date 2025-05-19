@@ -5,7 +5,6 @@ import gymnasium as gym
 from gymnasium import spaces
 from typing import Dict, Any, Tuple, Optional, Union, List
 import logging
-import io
 
 from src.utils.config import ConfigManager
 from src.environments.simulated_broker import SimulatedBroker
@@ -14,19 +13,13 @@ from src.environments.simulated_broker import SimulatedBroker
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger('TradingEnv')
 
+import numpy as np
 # Importar torch de manera condicional para no crear dependencia obligatoria
 try:
     import torch
     TORCH_AVAILABLE = True
 except ImportError:
     TORCH_AVAILABLE = False
-
-# Importar Google Cloud Storage de manera condicional
-try:
-    from google.cloud import storage
-    GCS_AVAILABLE = True
-except ImportError:
-    GCS_AVAILABLE = False
 
 class TradingEnvironment(gym.Env):
     """
@@ -160,63 +153,30 @@ class TradingEnvironment(gym.Env):
     
     def _load_market_data(self) -> Tuple[np.ndarray, List[str]]:
         """
-        Carga los datos de mercado preprocesados exclusivamente desde GCS.
+        Carga los datos de mercado preprocesados.
         
         Returns:
             Tuple con (datos_de_mercado, nombres_de_características)
-        
-        Raises:
-            RuntimeError: Si no se pueden cargar los datos desde GCS
         """
-        data = None
-        gcs_path = None
+        # Busca el archivo con los datos preprocesados
+        data_dir = self.config['processed_data_directory']
+        file_identifier = self.config['processed_data_file_identifier']
         
-        # Verificar que GCS está disponible
-        if not GCS_AVAILABLE:
-            raise ImportError("La biblioteca de Google Cloud Storage no está disponible. Instala google-cloud-storage.")
+        # Lista todos los archivos en el directorio
+        all_files = os.listdir(data_dir)
         
-        # Verificar que se ha configurado un bucket de GCS
-        gcs_bucket = self.config.get('gcs_processed_bucket')
-        if not gcs_bucket:
-            # Intenta obtener directamente del archivo de configuración
-            gcs_bucket = self.config_manager.get_config_value('gcs_processed_bucket')
-            if not gcs_bucket:
-                raise ValueError("No se ha configurado 'gcs_processed_bucket' en environment_config.yaml. Este campo es obligatorio.")
+        # Filtra por el identificador
+        matching_files = [f for f in all_files if file_identifier in f]
         
-        try:
-            logger.info(f"Cargando datos desde Google Cloud Storage: {gcs_bucket}")
-            
-            # Inicializar cliente GCS
-            gcs_client = storage.Client()
-            bucket = gcs_client.bucket(gcs_bucket)
-            
-            # Buscar el blob con el identificador especificado
-            file_identifier = self.config.get('processed_data_file_identifier') or "_L96_market_features.npz"
-            prefix = self.config.get('gcs_processed_data_prefix', 'processed/')
-            
-            # Listar blobs en el bucket
-            blobs = list(bucket.list_blobs(prefix=prefix))
-            matching_blobs = [blob for blob in blobs if file_identifier in blob.name]
-            
-            if matching_blobs:
-                # Usar el último blob que coincida (ordenar por nombre)
-                target_blob = sorted(matching_blobs, key=lambda x: x.name)[-1]
-                gcs_path = f"gs://{gcs_bucket}/{target_blob.name}"
-                logger.info(f"Cargando datos desde GCS: {gcs_path}")
-                
-                # Descargar a memoria
-                in_memory_file = io.BytesIO()
-                target_blob.download_to_file(in_memory_file)
-                in_memory_file.seek(0)  # Rebobinar al inicio del stream
-                
-                # Cargar los datos
-                data = np.load(in_memory_file)
-                logger.info(f"Datos cargados exitosamente desde GCS")
-            else:
-                raise FileNotFoundError(f"No se encontraron archivos con el identificador {file_identifier} en gs://{gcs_bucket}/{prefix}")
-        except Exception as e:
-            logger.error(f"Error cargando datos desde GCS: {e}")
-            raise RuntimeError(f"No se pudieron cargar datos desde GCS. El proceso no puede continuar sin acceso a GCS: {e}")
+        if not matching_files:
+            raise FileNotFoundError(f"No se encontraron archivos con el identificador {file_identifier} en {data_dir}")
+        
+        # Utiliza el primer archivo que coincida (se podría hacer más sofisticado si hay múltiples)
+        data_file = os.path.join(data_dir, matching_files[0])
+        logger.info(f"Cargando datos de mercado desde: {data_file}")
+        
+        # Carga los datos
+        data = np.load(data_file)
         
         # Verificar las claves disponibles en el archivo
         logger.info(f"Claves disponibles en el archivo: {list(data.keys())}")
@@ -224,15 +184,15 @@ class TradingEnvironment(gym.Env):
         # Intenta cargar los datos según las claves disponibles
         if 'X_market' in data:
             market_features = data['X_market']
-            # Intentar cargar feature_names si existe
-            feature_names = data['feature_names'].tolist() if 'feature_names' in data else [f"feature_{i}" for i in range(market_features.shape[2])]
+            # Dado que no tenemos feature_names, creamos nombres genéricos basados en la forma
+            feature_names = [f"feature_{i}" for i in range(market_features.shape[2])]
             logger.info(f"Datos cargados con la clave 'X_market' de forma {market_features.shape}")
         elif 'market_features' in data:
             market_features = data['market_features']
             feature_names = data['feature_names'].tolist() if 'feature_names' in data else [f"feature_{i}" for i in range(market_features.shape[2])]
             logger.info(f"Datos cargados con la clave 'market_features' de forma {market_features.shape}")
         else:
-            raise KeyError(f"No se encontró ninguna clave válida para datos de mercado en el archivo {'GCS' if gcs_path else 'local'}")
+            raise KeyError(f"No se encontró ninguna clave válida para datos de mercado en {data_file}")
         
         # Cargar datos adicionales si están disponibles (para optimización)
         self.close_prices = None
