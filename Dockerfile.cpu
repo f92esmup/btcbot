@@ -1,4 +1,4 @@
-FROM python:3.10-slim
+FROM python:3.11.6-slim
 
 # Instalación de dependencias base
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -12,12 +12,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Directorio de trabajo
 WORKDIR /app
 
+# Actualizar pip a la última versión
+RUN pip install --no-cache-dir --upgrade pip
+
 # Copia de archivos de requisitos e instalación de dependencias de Python
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt --timeout 300
 
 # Instalación de PyTorch versión CPU
-RUN pip install --no-cache-dir torch==2.2.2+cpu torchvision==0.17.2+cpu --extra-index-url https://download.pytorch.org/whl/cpu
+RUN pip install --no-cache-dir torch==2.2.2+cpu torchvision==0.17.2+cpu --extra-index-url https://download.pytorch.org/whl/cpu --timeout 300
 
 # Instalación del cliente de Google Cloud
 RUN pip install --no-cache-dir google-cloud-storage google-cloud-secret-manager
