@@ -41,10 +41,15 @@ class ConfigManager:
             except yaml.YAMLError as e:
                 raise yaml.YAMLError(f"Error al parsear el archivo YAML {config_path}: {e}")
             
-            # Obtener el ID del proyecto directamente de las variables de entorno
+            # Obtener y validar el ID del proyecto de GCP (OBLIGATORIO)
             cls._instance.gcp_project_id = os.getenv('GCP_PROJECT_ID')
             if not cls._instance.gcp_project_id:
-                raise ValueError("GCP_PROJECT_ID no configurado en .env - es obligatorio para Secret Manager")
+                raise ValueError("GCP_PROJECT_ID no configurado en .env - es obligatorio para el funcionamiento del sistema")
+            
+            # Obtener y validar el nombre del bucket de GCS (OBLIGATORIO)
+            cls._instance.gcs_bucket_name = os.getenv('GCS_BUCKET_NAME')
+            if not cls._instance.gcs_bucket_name:
+                raise ValueError("GCS_BUCKET_NAME no configurado en .env - es obligatorio para el funcionamiento del sistema")
             
             # Inicializar Secret Manager (obligatorio)
             try:

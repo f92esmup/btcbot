@@ -3,6 +3,8 @@ import numpy as np
 import os
 import logging
 import yaml
+import io
+from google.cloud import storage
 from src.utils.config import ConfigManager
 from src.data.feature_engineering import FeatureEngineer
 
@@ -13,9 +15,34 @@ class DataPreprocessor:
         self.config_manager = config_manager
         self.preprocessing_config = config_manager.get_preprocessing_config()
 
-        self.raw_data_path = self.config_manager.get_config_value('data_paths.raw')
-        self.processed_data_path = self.config_manager.get_config_value('data_paths.processed')
-        os.makedirs(self.processed_data_path, exist_ok=True)
+        # Configuración GCS (obligatoria)
+        self.gcp_project_id = self.config_manager.get_env_variable('GCP_PROJECT_ID')
+        if not self.gcp_project_id:
+            logger.error("GCP_PROJECT_ID no configurado. Es obligatorio para el procesamiento de datos.")
+            raise ValueError("GCP_PROJECT_ID no configurado. Es obligatorio para el procesamiento de datos.")
+            
+        self.gcs_bucket_name = self.config_manager.get_env_variable('GCS_BUCKET_NAME')
+        if not self.gcs_bucket_name:
+            logger.error("GCS_BUCKET_NAME no configurado. Es obligatorio para el procesamiento de datos.")
+            raise ValueError("GCS_BUCKET_NAME no configurado. Es obligatorio para el procesamiento de datos.")
+        
+        # Rutas de datos en GCS
+        self.gcs_raw_path = self.config_manager.get_config_value('data_paths.gcs_raw', 'raw')
+        self.gcs_processed_path = self.config_manager.get_config_value('data_paths.gcs_processed', 'processed')
+        
+        # Inicializar cliente GCS
+        try:
+            self.storage_client = storage.Client(project=self.gcp_project_id)
+            self.bucket = self.storage_client.bucket(self.gcs_bucket_name)
+            
+            if not self.bucket.exists():
+                logger.error(f"El bucket {self.gcs_bucket_name} no existe. Verifique el nombre o cree el bucket desde la consola de Google Cloud.")
+                raise ValueError(f"El bucket {self.gcs_bucket_name} no existe.")
+            
+            logger.info(f"Conexión establecida con bucket GCS: {self.gcs_bucket_name}")
+        except Exception as e:
+            logger.error(f"Error al conectar con Google Cloud Storage: {e}")
+            raise ConnectionError(f"Error al conectar con Google Cloud Storage: {e}")
 
         self.L = self.preprocessing_config['sequence_length_L']
         self.norm_window = self.L * self.preprocessing_config['normalization_window_multiplier_for_L']
@@ -28,35 +55,52 @@ class DataPreprocessor:
 
     def _load_and_prepare_base_df(self, raw_data_filename: str) -> pd.DataFrame:
         """
-        Carga y prepara el DataFrame base desde un archivo CSV de forma eficiente.
+        Carga y prepara el DataFrame base desde un archivo CSV en Google Cloud Storage.
         
         Args:
-            raw_data_filename: Nombre del archivo CSV con datos crudos
+            raw_data_filename: Nombre del archivo CSV con datos crudos en GCS
             
         Returns:
             DataFrame preparado y limpio
         """
-        filepath = os.path.join(self.raw_data_path, raw_data_filename)
-        logger.info(f"Cargando datos crudos desde: {filepath}")
+        gcs_filepath = f"{self.gcs_raw_path}/{raw_data_filename}"
+        logger.info(f"Cargando datos crudos desde GCS: {gcs_filepath}")
         
-        # Comprobar si debemos usar formato Parquet si el archivo existe
-        parquet_path = f"{os.path.splitext(filepath)[0]}.parquet"
+        # Verificar si existe el archivo en formato Parquet
         use_float32 = self.preprocessing_config.get('use_float32', False)
         dtype_config = {col: 'float32' for col in ['Open', 'High', 'Low', 'Close', 'Volume']} if use_float32 else None
         
         try:
-            # Intentar cargar desde Parquet si existe (más eficiente)
-            if os.path.exists(parquet_path) and self.preprocessing_config.get('use_parquet_storage', False):
-                logger.info(f"Cargando datos desde Parquet: {parquet_path}")
-                df = pd.read_parquet(parquet_path)
+            # Comprobar si existe versión Parquet del archivo
+            parquet_gcs_filepath = f"{self.gcs_raw_path}/{os.path.splitext(raw_data_filename)[0]}.parquet"
+            parquet_blob = self.bucket.blob(parquet_gcs_filepath)
+            
+            if parquet_blob.exists() and self.preprocessing_config.get('use_parquet_storage', False):
+                # Cargar desde Parquet en GCS
+                logger.info(f"Cargando datos desde Parquet en GCS: {parquet_gcs_filepath}")
+                buffer = io.BytesIO()
+                parquet_blob.download_to_file(buffer)
+                buffer.seek(0)
+                df = pd.read_parquet(buffer)
                 logger.info(f"Datos cargados desde Parquet con éxito: {df.shape}")
                 return df
-                
-            # Si no hay Parquet, cargar desde CSV de forma optimizada
-            logger.info(f"Cargando datos desde CSV: {filepath}")
+            
+            # Si no hay Parquet, cargar desde CSV en GCS
+            logger.info(f"Cargando datos desde CSV en GCS: {gcs_filepath}")
+            csv_blob = self.bucket.blob(gcs_filepath)
+            
+            if not csv_blob.exists():
+                logger.error(f"Archivo CSV no encontrado en GCS: {gcs_filepath}")
+                raise FileNotFoundError(f"Archivo CSV no encontrado en GCS: {gcs_filepath}")
+            
+            # Descargar CSV a buffer y leer con pandas
+            buffer = io.BytesIO()
+            csv_blob.download_to_file(buffer)
+            buffer.seek(0)
+            
             # Usar dtypes específicos y especificar parse_dates para eficiencia
             df = pd.read_csv(
-                filepath,
+                buffer,
                 parse_dates=['Open_Time'],
                 dtype=dtype_config
             )
@@ -125,11 +169,11 @@ class DataPreprocessor:
             logger.info(f"Datos crudos cargados y preparados inicialmente para {raw_data_filename}. Forma final del DataFrame base: {df.shape}")
             return df
 
-        except FileNotFoundError:
-            logger.error(f"Archivo de datos crudos no encontrado: {filepath}")
+        except FileNotFoundError as e:
+            logger.error(f"Archivo de datos crudos no encontrado en GCS: {gcs_filepath}")
             raise
         except Exception as e:
-            logger.error(f"Error crítico durante la carga y preparación básica de datos desde {filepath}: {e}", exc_info=True)
+            logger.error(f"Error crítico durante la carga y preparación básica de datos desde GCS {gcs_filepath}: {e}", exc_info=True)
             raise
 
     def _apply_feature_normalization(self, df_with_features: pd.DataFrame) -> pd.DataFrame:
@@ -301,9 +345,10 @@ class DataPreprocessor:
              logger.warning("No se generaron secuencias válidas.")
              return
 
-        # 6. Guardado de Datos Procesados
+        # 6. Guardado de Datos Procesados en GCS
         output_filename = f"{output_filename_base}_L{self.L}_market_features.npz"
-        output_path = os.path.join(self.processed_data_path, output_filename)
+        gcs_output_path = f"{self.gcs_processed_path}/{output_filename}"
+        
         try:
             # Guardamos también las series originales de 'Close' y 'ATR' sin normalizar para cálculos más precisos
             close_series = df_with_features['Close'].values
@@ -315,16 +360,23 @@ class DataPreprocessor:
             close_for_sequences = np.array([close_series[i + self.L - 1] for i in range(seq_count)], dtype=np.float32)
             atr_for_sequences = np.array([atr_series[i + self.L - 1] for i in range(seq_count)], dtype=np.float32)
             
-            # Guardamos en formato comprimido
+            # Guardamos en formato comprimido en un buffer temporal
+            buffer = io.BytesIO()
             np.savez_compressed(
-                output_path, 
+                buffer, 
                 X_market=X_sequences, 
                 timestamps=ts_sequences,
                 close_prices=close_for_sequences,
                 atr_values=atr_for_sequences,
                 feature_names=np.array(self.final_feature_columns)
             )
-            logger.info(f"Secuencias procesadas ({X_sequences.shape[0]} muestras de forma {X_sequences.shape}) guardadas en: {output_path}")
+            buffer.seek(0)
+            
+            # Subir el archivo a GCS
+            blob = self.bucket.blob(gcs_output_path)
+            blob.upload_from_file(buffer, content_type="application/octet-stream")
+            
+            logger.info(f"Secuencias procesadas ({X_sequences.shape[0]} muestras de forma {X_sequences.shape}) guardadas en GCS: {gcs_output_path}")
             logger.info(f"También se guardaron series de Close y ATR sin normalizar para cálculos precisos de slippage y liquidación")
             
             # Guardar también en formato Parquet para datasets muy grandes
@@ -333,11 +385,17 @@ class DataPreprocessor:
                 import pyarrow.parquet as pq
                 
                 parquet_filename = f"{output_filename_base}_processed.parquet"
-                parquet_path = os.path.join(self.processed_data_path, parquet_filename)
+                gcs_parquet_path = f"{self.gcs_processed_path}/{parquet_filename}"
                 
-                # Guardamos el DataFrame completo en formato Parquet
-                df_cleaned.to_parquet(parquet_path, compression='snappy')
-                logger.info(f"Datos también guardados en formato Parquet para mejor eficiencia: {parquet_path}")
+                # Guardar DataFrame en buffer y subir a GCS
+                parquet_buffer = io.BytesIO()
+                df_cleaned.to_parquet(parquet_buffer, compression='snappy')
+                parquet_buffer.seek(0)
+                
+                parquet_blob = self.bucket.blob(gcs_parquet_path)
+                parquet_blob.upload_from_file(parquet_buffer, content_type="application/octet-stream")
+                
+                logger.info(f"Datos también guardados en formato Parquet para mejor eficiencia en GCS: {gcs_parquet_path}")
         except Exception as e:
-            logger.error(f"Error guardando las secuencias procesadas: {e}")
+            logger.error(f"Error guardando las secuencias procesadas en GCS: {e}", exc_info=True)
             raise

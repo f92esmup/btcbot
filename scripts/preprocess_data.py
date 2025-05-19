@@ -46,6 +46,16 @@ def main():
         config_manager = ConfigManager(config_path="src/config.yaml", env_path=".env")
         logger.info("Configuración centralizada cargada correctamente")
 
+        # Verificar si están disponibles las variables obligatorias para GCS
+        gcp_project_id = config_manager.get_env_variable('GCP_PROJECT_ID')
+        gcs_bucket_name = config_manager.get_env_variable('GCS_BUCKET_NAME')
+        
+        if not gcp_project_id or not gcs_bucket_name:
+            logger.error("Variables de entorno obligatorias para GCS no configuradas. Verifique GCP_PROJECT_ID y GCS_BUCKET_NAME en el archivo .env")
+            return
+
+        logger.info(f"Usando Google Cloud Storage para procesamiento de datos. Bucket: {gcs_bucket_name}")
+
     except Exception as e:
         logger.error(f"Error al cargar la configuración: {e}")
         return
@@ -57,35 +67,54 @@ def main():
         logger.error(f"Error al inicializar DataPreprocessor: {e}", exc_info=True)
         return
 
-    # Determinar el archivo de datos crudos a procesar
-    raw_data_dir = config_manager.get_config_value('data_paths.raw')
+    # Inicializar cliente Storage
+    try:
+        from google.cloud import storage
+        storage_client = storage.Client(project=gcp_project_id)
+        bucket = storage_client.bucket(gcs_bucket_name)
+    except Exception as e:
+        logger.error(f"Error al inicializar cliente de Google Cloud Storage: {e}", exc_info=True)
+        return
+    
+    # Determinar el archivo de datos crudos a procesar en GCS
+    gcs_raw_path = config_manager.get_config_value('data_paths.gcs_raw', 'raw')
     
     if args.file:
         # Usar el archivo específico proporcionado por el usuario
         raw_data_filename = args.file
-        if not os.path.exists(os.path.join(raw_data_dir, raw_data_filename)):
-            logger.error(f"El archivo especificado {raw_data_filename} no existe en {raw_data_dir}")
+        
+        # Verificar si el archivo existe en GCS
+        blob = bucket.blob(f"{gcs_raw_path}/{raw_data_filename}")
+        if not blob.exists():
+            logger.error(f"El archivo especificado {raw_data_filename} no existe en el bucket {gcs_bucket_name}, ruta {gcs_raw_path}")
             return
     else:
-        # Lógica para seleccionar el archivo más reciente
+        # Lógica para seleccionar el archivo más reciente en GCS
         default_symbol = config_manager.get_config_value('data_acquisition_defaults.symbol', 'BTCUSDT')
-        raw_files = [f for f in os.listdir(raw_data_dir) if f.startswith(default_symbol) and f.endswith('.csv')]
+        
+        # Listar blobs en el bucket/carpeta
+        gcs_prefix = f"{gcs_raw_path}/"
+        blobs = list(bucket.list_blobs(prefix=gcs_prefix))
+        
+        # Filtrar por archivos CSV que contienen el símbolo
+        raw_files = [blob.name.split('/')[-1] for blob in blobs 
+                  if blob.name.endswith('.csv') and default_symbol in blob.name]
 
         if not raw_files:
-            logger.error(f"No se encontraron archivos de datos crudos para {default_symbol} en {raw_data_dir}. Ejecuta primero el script de adquisición.")
+            logger.error(f"No se encontraron archivos de datos crudos para {default_symbol} en GCS {gcs_raw_path}. Ejecuta primero el script de adquisición.")
             return
         
         # Procesar el archivo más reciente (asumiendo que el nombre contiene fecha/hora o se ordena alfabéticamente)
-        raw_data_filename = sorted(raw_files, reverse=True)[0] 
+        raw_data_filename = sorted(raw_files, reverse=True)[0]
     
-    output_filename_base = os.path.splitext(raw_data_filename)[0] # ej. BTCUSDT_FUTURES_1h_20200101_20250516
+    output_filename_base = os.path.splitext(raw_data_filename)[0]  # ej. BTCUSDT_FUTURES_1h_20200101_20250516
 
     try:
-        logger.info(f"Procesando archivo de datos crudos: {raw_data_filename}")
+        logger.info(f"Procesando archivo de datos crudos desde GCS: {raw_data_filename}")
         preprocessor.process_data(raw_data_filename, output_filename_base)
-        logger.info("Proceso de preprocesamiento de datos finalizado exitosamente.")
+        logger.info("Proceso de preprocesamiento de datos en GCS finalizado exitosamente.")
     except Exception as e:
-        logger.error(f"Ocurrió un error crítico durante el proceso de preprocesamiento: {e}", exc_info=True)
+        logger.error(f"Ocurrió un error crítico durante el proceso de preprocesamiento con GCS: {e}", exc_info=True)
 
 if __name__ == "__main__":
     main()

@@ -5,6 +5,8 @@ import gymnasium as gym
 from gymnasium import spaces
 from typing import Dict, Any, Tuple, Optional, Union, List
 import logging
+import io
+from google.cloud import storage
 
 from src.utils.config import ConfigManager
 from src.environments.simulated_broker import SimulatedBroker
@@ -120,30 +122,54 @@ class TradingEnvironment(gym.Env):
     
     def _load_market_data(self) -> Tuple[np.ndarray, List[str]]:
         """
-        Carga los datos de mercado preprocesados.
+        Carga los datos de mercado preprocesados desde Google Cloud Storage.
         
         Returns:
             Tuple con (datos_de_mercado, nombres_de_características)
         """
+        # Inicializar cliente de GCS
+        try:
+            # Obtener variables de GCS
+            gcp_project_id = self.config_manager.get_env_variable('GCP_PROJECT_ID')
+            gcs_bucket_name = self.config_manager.get_env_variable('GCS_BUCKET_NAME')
+            
+            if not gcp_project_id or not gcs_bucket_name:
+                raise ValueError("Variables de entorno GCP_PROJECT_ID o GCS_BUCKET_NAME no configuradas.")
+                
+            # Inicializar cliente de almacenamiento
+            storage_client = storage.Client(project=gcp_project_id)
+            bucket = storage_client.bucket(gcs_bucket_name)
+        except Exception as e:
+            logger.error(f"Error al inicializar cliente de Google Cloud Storage: {e}")
+            raise
+            
         # Busca el archivo con los datos preprocesados
         data_dir = self.config['processed_data_directory']
         file_identifier = self.config['processed_data_file_identifier']
         
-        # Lista todos los archivos en el directorio
-        all_files = os.listdir(data_dir)
+        # Listar blobs en el bucket con el prefijo del directorio
+        prefix = f"{data_dir}/"
+        blobs = list(bucket.list_blobs(prefix=prefix))
         
-        # Filtra por el identificador
-        matching_files = [f for f in all_files if file_identifier in f]
+        # Filtrar por el identificador en el nombre del archivo
+        matching_files = [blob.name.split('/')[-1] for blob in blobs if file_identifier in blob.name]
         
         if not matching_files:
-            raise FileNotFoundError(f"No se encontraron archivos con el identificador {file_identifier} en {data_dir}")
+            raise FileNotFoundError(f"No se encontraron archivos con el identificador {file_identifier} en GCS: {gcs_bucket_name}/{data_dir}")
         
         # Utiliza el primer archivo que coincida (se podría hacer más sofisticado si hay múltiples)
-        data_file = os.path.join(data_dir, matching_files[0])
-        logger.info(f"Cargando datos de mercado desde: {data_file}")
+        matching_file = sorted(matching_files, reverse=True)[0]  # Usar el más reciente
+        gcs_file_path = f"{data_dir}/{matching_file}"
+        logger.info(f"Cargando datos de mercado desde GCS: {gcs_bucket_name}/{gcs_file_path}")
+        
+        # Descargar archivo a un buffer de memoria
+        blob = bucket.blob(gcs_file_path)
+        buffer = io.BytesIO()
+        blob.download_to_file(buffer)
+        buffer.seek(0)
         
         # Carga los datos
-        data = np.load(data_file)
+        data = np.load(buffer)
         
         # Verificar las claves disponibles en el archivo
         logger.info(f"Claves disponibles en el archivo: {list(data.keys())}")
@@ -159,7 +185,7 @@ class TradingEnvironment(gym.Env):
             feature_names = data['feature_names'].tolist() if 'feature_names' in data else [f"feature_{i}" for i in range(market_features.shape[2])]
             logger.info(f"Datos cargados con la clave 'market_features' de forma {market_features.shape}")
         else:
-            raise KeyError(f"No se encontró ninguna clave válida para datos de mercado en {data_file}")
+            raise KeyError(f"No se encontró ninguna clave válida para datos de mercado en el archivo descargado de GCS")
         
         # Cargar datos adicionales si están disponibles (para optimización)
         self.close_prices = None

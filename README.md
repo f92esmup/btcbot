@@ -18,10 +18,6 @@ Este proyecto implementa un agente de trading basado en Reinforcement Learning p
 
 ```
 btcbot/
-├── data/                      # Datos del mercado (opcionalmente local)
-│   ├── raw/                   # Datos sin procesar de Binance
-│   └── processed/             # Datos preprocesados con features
-├── docs/                      # Documentación detallada
 ├── logs/                      # Logs de entrenamiento y evaluación
 ├── models/                    # Modelos guardados
 ├── results/                   # Resultados de evaluación
@@ -34,10 +30,14 @@ btcbot/
     └── utils/                 # Utilidades generales
 ```
 
-## Almacenamiento en la Nube
+## Almacenamiento en la Nube (Obligatorio)
 
-- Google Cloud Storage (GCS): Almacenamiento principal para datos brutos y procesados
-- Google Cloud Secret Manager: Gestión segura de credenciales API
+El proyecto ahora funciona exclusivamente con almacenamiento en la nube:
+
+- **Google Cloud Storage (GCS)**: Almacenamiento tanto para datos brutos como procesados
+- **Google Cloud Secret Manager**: Gestión segura de credenciales de la API de Binance
+
+> **Nota importante**: Ya no se utiliza almacenamiento local para datos. Todos los datos se cargan y guardan directamente desde/hacia Google Cloud Storage.
 
 ## Requisitos Previos
 
@@ -89,6 +89,9 @@ btcbot/
    
    # Habilitar APIs necesarias
    gcloud services enable secretmanager.googleapis.com storage.googleapis.com
+   
+   # Crear bucket de GCS (si no existe)
+   gsutil mb -p tu-proyecto-id -l tu-region gs://tu-bucket-nombre
    ```
 
 ## Uso
@@ -99,7 +102,7 @@ btcbot/
 python scripts/download_data.py
 ```
 
-Este script descargará datos históricos de BTCUSDT de Binance Futures y los guardará en `data/raw/`.
+Este script descargará datos históricos de BTCUSDT de Binance Futures y los guardará directamente en Google Cloud Storage.
 
 ### 2. Preprocesamiento de Datos
 
@@ -107,7 +110,12 @@ Este script descargará datos históricos de BTCUSDT de Binance Futures y los gu
 python scripts/preprocess_data.py
 ```
 
-Procesa los datos descargados para calcular características técnicas y los guarda en `data/processed/`.
+Procesa los datos descargados para calcular características técnicas y los guarda en Google Cloud Storage.
+
+Para procesar un archivo específico:
+```
+python scripts/preprocess_data.py --file BTCUSDT_FUTURES_1h_20200101_20250516.csv
+```
 
 ### 3. Prueba del Entorno
 
@@ -143,11 +151,12 @@ python scripts/evaluate_rl_agent.py --config src/config.yaml --model-path models
 
 ## Almacenamiento de Datos y Credenciales
 
-- **Datos**: Google Cloud Storage (GCS)
+- **Datos**: Google Cloud Storage (GCS) [Obligatorio]
   - Bucket: Definido en `.env` como `GCS_BUCKET_NAME`
   - Rutas configuradas en `src/config.yaml`
+  - Todo el procesamiento de datos se realiza directamente en la nube, sin almacenamiento local
 
-- **Credenciales API**: Google Cloud Secret Manager
+- **Credenciales API**: Google Cloud Secret Manager [Obligatorio]
   - Las credenciales de Binance se almacenan como secretos
   - Proyecto GCP: Definido en `.env` como `GCP_PROJECT_ID`
   - Secretos requeridos: `BINANCE_API_KEY_FUTURES` y `BINANCE_API_SECRET_FUTURES`

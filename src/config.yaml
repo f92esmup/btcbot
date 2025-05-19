@@ -4,11 +4,7 @@
 # Configuración de Rutas y Acceso a Datos
 # =====================================================================
 data_paths:
-  # Rutas para almacenamiento local
-  raw: "data/raw"
-  processed: "data/processed"
-  
-  # Rutas para Google Cloud Storage (obligatorias para download_data)
+  # Rutas para Google Cloud Storage (obligatorias)
   gcs_raw: "raw"
   gcs_processed: "processed"
 
@@ -116,7 +112,7 @@ environment:
     max_steps_in_position: 288 # ej. L * 3 (para normalizar 'steps_in_current_position')
 
   # --- Carga de Datos de Mercado (del Módulo 2) ---
-  processed_data_directory: "data/processed/"
+  processed_data_directory: "processed"  # Directorio en GCS (sin barra final)
   processed_data_file_identifier: "_L96_market_features.npz" # Parte del nombre del archivo
 
 # =====================================================================
