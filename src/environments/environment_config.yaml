@@ -25,5 +25,6 @@ portfolio_features_normalization:
   # Otros parámetros de normalización si son necesarios (ej. medias/std para Z-score de P&L o precio entrada)
 
 # --- Carga de Datos de Mercado (del Módulo 2) ---
-processed_data_directory: "data/processed/"
+gcs_processed_bucket: "btcbot-processed-data"  # Nombre del bucket para datos procesados
+gcs_processed_data_prefix: "processed/"  # Prefijo (carpeta) en GCS
 processed_data_file_identifier: "_L96_market_features.npz" # Parte del nombre del archivo

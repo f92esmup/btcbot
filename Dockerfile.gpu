@@ -1,0 +1,24 @@
+# Dockerfile for GPU-based image (for training)
+FROM pytorch/pytorch:2.2.2-cuda11.8-cudnn8-runtime
+
+WORKDIR /app
+
+# Copiar los archivos de requisitos primero para aprovechar la cache de Docker
+COPY requirements.txt .
+
+# Instalar las dependencias
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Instalar dependencias de GCP
+RUN pip install --no-cache-dir google-cloud-secret-manager google-cloud-bigquery google-cloud-storage pandas-gbq db-dtypes
+
+# Copiar el resto del código
+COPY . .
+
+# Configuraciones para contenedor
+ENV PYTHONPATH=/app
+ENV PYTHONUNBUFFERED=1
+ENV GOOGLE_APPLICATION_CREDENTIALS=/app/google-credentials.json
+
+# El comando se proporciona durante la ejecución con docker run
+CMD ["python", "-c", "print('Imagen GPU lista. Especifique un comando para ejecutar.')"]

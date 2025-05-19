@@ -1,6 +1,11 @@
 import logging
 import sys
 import os
+from pathlib import Path
+
+# Add the project root directory to the Python path
+project_root = Path(__file__).parent.parent
+sys.path.append(str(project_root))
 
 from src.utils.config import ConfigManager
 from src.data.binance_futures_downloader import BinanceFuturesDownloader

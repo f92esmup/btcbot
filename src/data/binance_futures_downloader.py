@@ -5,18 +5,21 @@ import time
 import logging
 import os
 from src.utils.config import ConfigManager
+from google.cloud import bigquery
 
 logger = logging.getLogger(__name__) # Configurar el logger a nivel de script o aplicación
 
 class BinanceFuturesDownloader:
     def __init__(self, config_manager): # ConfigManager debería ser inyectado
         self.config_manager = config_manager
-        self.api_key = self.config_manager.get_env_variable('BINANCE_API_KEY_FUTURES')
-        self.api_secret = self.config_manager.get_env_variable('BINANCE_API_SECRET_FUTURES')
         
-        if not self.api_key or not self.api_secret:
-            logger.error("API Key o Secret de Binance Futuros no configuradas en .env")
-            raise ValueError("API Key o Secret de Binance Futuros no configuradas.")
+        # Obtener credenciales de API exclusivamente de Secret Manager
+        try:
+            self.api_key = self.config_manager.get_secret('binance_api_key')
+            self.api_secret = self.config_manager.get_secret('binance_api_secret')
+        except Exception as e:
+            logger.error(f"No se pudieron obtener credenciales de Binance desde Secret Manager: {e}")
+            raise ValueError("Se requieren las credenciales de Binance en Secret Manager (binance_api_key y binance_api_secret)")
 
         try:
             self.client = Client(self.api_key, self.api_secret)
@@ -33,6 +36,34 @@ class BinanceFuturesDownloader:
         self.retry_attempts = self.config_manager.get_config_value('binance_api.retry_attempts', 5)
         self.retry_delay = self.config_manager.get_config_value('binance_api.retry_delay_seconds', 60)
 
+        # Inicializar cliente BigQuery
+        self.gcp_project_id = self.config_manager.gcp_project_id
+        
+        if not self.gcp_project_id:
+            raise ValueError("Se requiere un ID de proyecto GCP para continuar. Establece GOOGLE_CLOUD_PROJECT en el entorno.")
+            
+        try:
+            self.bq_client = bigquery.Client(project=self.gcp_project_id)
+            self.bq_dataset_id = self.config_manager.get_config_value('gcp.bigquery.raw_dataset_id', 'market_data_raw')
+            self.bq_raw_table_id_prefix = self.config_manager.get_config_value('gcp.bigquery.raw_table_id_prefix', 'klines_')
+            logger.info(f"Cliente BigQuery inicializado para el proyecto {self.gcp_project_id}")
+        except Exception as e:
+            raise ConnectionError(f"Error al inicializar el cliente BigQuery: {e}")
+
+        # Verificar si el dataset existe y crearlo si es necesario
+        try:
+            dataset_ref = self.bq_client.dataset(self.bq_dataset_id)
+            self.bq_client.get_dataset(dataset_ref)
+            logger.info(f"Dataset {self.bq_dataset_id} encontrado en BigQuery")
+        except Exception:
+            # Crear dataset si no existe
+            logger.info(f"Dataset {self.bq_dataset_id} no encontrado, creando...")
+            dataset = bigquery.Dataset(f"{self.gcp_project_id}.{self.bq_dataset_id}")
+            dataset.location = "europe-southwest1"  # Usar la ubicación de Madrid
+            dataset = self.bq_client.create_dataset(dataset)
+            logger.info(f"Dataset {self.bq_dataset_id} creado en BigQuery")
+            
+        # Mantener directorio local para logs pero no es el almacenamiento principal
         os.makedirs(self.raw_data_path, exist_ok=True)
 
 
@@ -144,10 +175,39 @@ class BinanceFuturesDownloader:
         df.sort_values(by='Open_Time', inplace=True)
         df.reset_index(drop=True, inplace=True)
 
-        # Guardar en CSV
+        # Guardar en CSV (local, solo como registro)
         output_filename = self._generate_filename(symbol, interval, start_dt, current_time_utc)
         try:
             df.to_csv(output_filename, index=False)
-            logger.info(f"Datos para {symbol} ({len(df)} velas) guardados exitosamente en: {output_filename}")
+            logger.info(f"Datos para {symbol} ({len(df)} velas) guardados localmente en: {output_filename}")
         except IOError as e:
-            logger.error(f"Error al guardar el archivo CSV {output_filename}: {e}")
+            logger.warning(f"Error al guardar el archivo CSV local {output_filename}: {e}")
+        
+        # Guardar en BigQuery (obligatorio)
+        try:
+            # Definir el nombre de la tabla
+            output_table_id = f"{self.bq_raw_table_id_prefix}{symbol}_{interval}"
+            full_table_id = f"{self.gcp_project_id}.{self.bq_dataset_id}.{output_table_id}"
+            
+            # Configurar job para BigQuery
+            job_config = bigquery.LoadJobConfig(
+                schema=[
+                    bigquery.SchemaField("Open_Time", "TIMESTAMP"),
+                    bigquery.SchemaField("Open", "FLOAT64"),
+                    bigquery.SchemaField("High", "FLOAT64"),
+                    bigquery.SchemaField("Low", "FLOAT64"),
+                    bigquery.SchemaField("Close", "FLOAT64"),
+                    bigquery.SchemaField("Volume", "FLOAT64")
+                ],
+                write_disposition="WRITE_APPEND",  # Append para mantener el historial
+            )
+            
+            # Cargar a BigQuery
+            job = self.bq_client.load_table_from_dataframe(df, full_table_id, job_config=job_config)
+            job.result()  # Esperar a que el job termine
+            logger.info(f"Datos para {symbol} ({len(df)} velas) cargados exitosamente en BigQuery: {full_table_id}")
+            
+            return df, full_table_id
+        except Exception as e:
+            logger.error(f"Error al cargar datos a BigQuery {output_table_id}: {e}")
+            raise RuntimeError(f"No se pudieron cargar los datos a BigQuery. El proceso no puede continuar: {e}")

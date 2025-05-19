@@ -2,6 +2,7 @@ import pandas as pd
 import numpy as np
 import logging
 import math
+import pandas_ta as ta
 
 logger = logging.getLogger(__name__)
 
@@ -43,24 +44,11 @@ class FeatureEngineer:
         
     def add_technical_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
         """
-        Calcula indicadores técnicos basados en el DataFrame OHLCV
+        Calcula indicadores técnicos basados en el DataFrame OHLCV usando pandas_ta
         """
-        logger.debug("Calculando indicadores técnicos.")
+        logger.debug("Calculando indicadores técnicos con pandas_ta.")
         df_out = df.copy()
-        
-        try:
-            # Intentamos importar talib primero (es más eficiente)
-            import talib
-            self._add_talib_indicators(df_out)
-        except ImportError:
-            logger.warning("TA-Lib no está instalado. Usando pandas_ta como alternativa.")
-            try:
-                import pandas_ta as ta
-                self._add_pandas_ta_indicators(df_out)
-            except ImportError:
-                logger.error("No se pudo importar ni TA-Lib ni pandas_ta. No se pueden calcular indicadores técnicos.")
-                raise ImportError("Se requiere TA-Lib o pandas_ta para calcular indicadores técnicos")
-        
+        self._add_pandas_ta_indicators(df_out)
         return df_out
     
     def _add_talib_indicators(self, df_out: pd.DataFrame) -> None:
