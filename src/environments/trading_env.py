@@ -111,12 +111,14 @@ class TradingEnvironment(gym.Env):
             'min_equity': float('inf')
         }
         
-        # Registrar en gym
-        gym.register(
-            id=self.config.get('env_id', 'FuturesTradingEnv-v0'),
-            entry_point='src.environments.trading_env:TradingEnvironment',
-            max_episode_steps=None  # Se configura dinámicamente en reset()
-        )
+        # Registrar en gym solo si no está ya registrado
+        env_id = self.config.get('env_id', 'FuturesTradingEnv-v0')
+        if env_id not in gym.envs.registry:
+            gym.register(
+                id=env_id,
+                entry_point='src.environments.trading_env:TradingEnvironment',
+                max_episode_steps=None  # Se configura dinámicamente en reset()
+            )
         
         logger.info("TradingEnvironment initialized successfully.")
     
