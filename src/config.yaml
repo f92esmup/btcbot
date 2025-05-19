@@ -138,8 +138,8 @@ agent:
     features_extractor_kwargs:
       market_features_key: "market_features"
       portfolio_features_key: "portfolio_features"
-      # N_features_mercado = 20, N_features_cartera = 8 => N_features_entrada_transformer = 28
-      features_in_transformer: 28 # 20 (mercado) + 8 (cartera)
+      # N_features_mercado = 15, N_features_cartera = 8 => N_features_entrada_transformer = 23
+      features_in_transformer: 23 # 15 (mercado) + 8 (cartera)
       d_model: 128
       n_heads: 4
       n_encoder_layers: 3
