@@ -1,7 +1,6 @@
 import logging
 import sys
 import os
-import yaml
 import argparse
 
 # Añadir src al PYTHONPATH si es necesario
@@ -31,13 +30,6 @@ def parse_arguments():
         help='Nombre del archivo específico de datos crudos a procesar (ej. BTCUSDT_FUTURES_1h_20200101_20250516.csv).'
     )
     
-    parser.add_argument(
-        '--config', '-c',
-        type=str,
-        default='src/data/preprocessing_config.yaml',
-        help='Ruta al archivo de configuración de preprocesamiento. Por defecto: src/data/preprocessing_config.yaml'
-    )
-    
     return parser.parse_args()
 
 def main():
@@ -50,29 +42,23 @@ def main():
     args = parse_arguments()
     
     try:
-        # Cargar configuración general y del módulo
-        general_config_manager = ConfigManager(config_path="src/config.yaml", env_path=".env")
-        
-        preprocessing_config_path = args.config
-        with open(preprocessing_config_path, 'r') as f:
-            module_specific_config = yaml.safe_load(f)
-        logger.info(f"Configuración de preprocesamiento cargada desde {preprocessing_config_path}")
+        # Cargar configuración general 
+        config_manager = ConfigManager(config_path="src/config.yaml", env_path=".env")
+        logger.info("Configuración centralizada cargada correctamente")
 
-    except FileNotFoundError as e:
-        logger.error(f"Error: Archivo de configuración no encontrado. {e}")
-        return
     except Exception as e:
         logger.error(f"Error al cargar la configuración: {e}")
         return
 
     try:
-        preprocessor = DataPreprocessor(general_config_manager, module_specific_config)
+        # Inicializar el preprocesador con la configuración centralizada
+        preprocessor = DataPreprocessor(config_manager)
     except Exception as e:
         logger.error(f"Error al inicializar DataPreprocessor: {e}", exc_info=True)
         return
 
     # Determinar el archivo de datos crudos a procesar
-    raw_data_dir = general_config_manager.get_config_value('data_paths.raw')
+    raw_data_dir = config_manager.get_config_value('data_paths.raw')
     
     if args.file:
         # Usar el archivo específico proporcionado por el usuario
@@ -82,7 +68,7 @@ def main():
             return
     else:
         # Lógica para seleccionar el archivo más reciente
-        default_symbol = general_config_manager.get_config_value('data_acquisition_defaults.symbol', 'BTCUSDT')
+        default_symbol = config_manager.get_config_value('data_acquisition_defaults.symbol', 'BTCUSDT')
         raw_files = [f for f in os.listdir(raw_data_dir) if f.startswith(default_symbol) and f.endswith('.csv')]
 
         if not raw_files:

@@ -36,17 +36,10 @@ def parse_arguments():
     parser = argparse.ArgumentParser(description="Entrena un agente de RL para trading")
     
     parser.add_argument(
-        "--agent-config",
+        "--config",
         type=str,
-        default="src/agent/agent_config.yaml",
-        help="Ruta al archivo de configuración del agente"
-    )
-    
-    parser.add_argument(
-        "--env-config",
-        type=str,
-        default="src/environments/environment_config.yaml",
-        help="Ruta al archivo de configuración del entorno"
+        default="src/config.yaml",
+        help="Ruta al archivo de configuración centralizada"
     )
     
     parser.add_argument(
@@ -79,17 +72,17 @@ def main():
     # Parsear argumentos
     args = parse_arguments()
     
-    # Cargar la configuración del agente
-    config_manager = ConfigManager(config_path=args.agent_config)
-    agent_config = config_manager.config
+    # Cargar la configuración centralizada
+    config_manager = ConfigManager(config_path=args.config)
+    agent_config = config_manager.get_agent_config()
     
     # Actualizar la configuración si se solicita no usar GPU
     if args.no_gpu:
         agent_config["use_gpu"] = False
         logger.info("Uso de GPU desactivado por argumento de línea de comandos")
     
-    # Crear el administrador del agente con la configuración actualizada
-    agent_manager = RLAgentManager(config_path=args.agent_config)
+    # Crear el administrador del agente con la configuración centralizada
+    agent_manager = RLAgentManager(config_path=args.config)
     
     # Si se desactivó la GPU por argumento, aplicar la configuración al administrador
     if args.no_gpu:
@@ -99,7 +92,6 @@ def main():
     # Configurar el agente
     should_load_model = args.load_model is not None
     agent_manager.setup_agent(
-        env_config_path=args.env_config,
         load_model=should_load_model,
         model_path=args.load_model
     )

@@ -18,7 +18,7 @@ Este proyecto implementa un agente de trading basado en Reinforcement Learning p
 
 ```
 btcbot/
-├── data/                      # Datos del mercado
+├── data/                      # Datos del mercado (opcionalmente local)
 │   ├── raw/                   # Datos sin procesar de Binance
 │   └── processed/             # Datos preprocesados con features
 ├── docs/                      # Documentación detallada
@@ -27,11 +27,17 @@ btcbot/
 ├── results/                   # Resultados de evaluación
 ├── scripts/                   # Scripts ejecutables
 └── src/                       # Código fuente
+    ├── config.yaml            # Configuración centralizada
     ├── agent/                 # Implementación del agente RL
     ├── data/                  # Código para adquisición y preprocesamiento
     ├── environments/          # Entorno de simulación
     └── utils/                 # Utilidades generales
 ```
+
+## Almacenamiento en la Nube
+
+- Google Cloud Storage (GCS): Almacenamiento principal para datos brutos y procesados
+- Google Cloud Secret Manager: Gestión segura de credenciales API
 
 ## Requisitos Previos
 
@@ -62,11 +68,28 @@ btcbot/
    Crear un archivo `.env` en la raíz del proyecto con el siguiente contenido:
    
    ```
-   BINANCE_API_KEY_FUTURES="TU_CLAVE_AQUI"
-   BINANCE_API_SECRET_FUTURES="TU_SECRETO_AQUI"
+   # Configuración de Google Cloud (OBLIGATORIO)
+   GCP_PROJECT_ID="tu-proyecto-id"
+   GCS_BUCKET_NAME="tu-bucket-nombre"
+   
+   # Configuración regional de Google Cloud
+   GCP_REGION="tu-region-preferida"
    ```
    
-   > **Nota**: Las claves API reales de Binance solo son necesarias para `download_data.py`. Para el resto de los scripts (preprocesamiento, entrenamiento, evaluación) puedes usar valores de placeholder si ya tienes datos descargados.
+   > **Nota**: Las credenciales de Binance deben estar almacenadas en Google Cloud Secret Manager como `BINANCE_API_KEY_FUTURES` y `BINANCE_API_SECRET_FUTURES`. La autenticación con GCP se realiza mediante Application Default Credentials (ejecuta `gcloud auth application-default login`).
+
+5. **Configurar Google Cloud**:
+
+   ```
+   # Iniciar sesión en Google Cloud
+   gcloud auth login
+   
+   # Configurar credenciales de aplicación por defecto
+   gcloud auth application-default login
+   
+   # Habilitar APIs necesarias
+   gcloud services enable secretmanager.googleapis.com storage.googleapis.com
+   ```
 
 ## Uso
 
@@ -98,26 +121,36 @@ Verifica que el entorno de trading funcione correctamente, simulando un agente a
 
 Para un entrenamiento de prueba rápido:
 ```
-python scripts/train_rl_agent.py --timesteps 1000
+python scripts/train_rl_agent.py --config src/config.yaml --timesteps 1000
 ```
 
 Para un entrenamiento más extenso:
 ```
-python scripts/train_rl_agent.py --timesteps 1000000
+python scripts/train_rl_agent.py --config src/config.yaml --timesteps 1000000
 ```
 
 ### 5. Evaluación del Agente
 
 ```
-python scripts/evaluate_rl_agent.py --model-path models/sac_transformer_trading_agent_final_1000_steps.zip --episodes 1
+python scripts/evaluate_rl_agent.py --config src/config.yaml --model-path models/sac_transformer_trading_agent_final_1000_steps.zip --episodes 1
 ```
 
 ## Archivos de Configuración
 
-- `src/config.yaml`: Configuración general del proyecto
-- `src/data/preprocessing_config.yaml`: Parámetros para el preprocesamiento de datos
-- `src/environments/environment_config.yaml`: Configuración del entorno de simulación
-- `src/agent/agent_config.yaml`: Hiperparámetros del agente RL
+- `src/config.yaml`: Configuración centralizada para todo el proyecto
+  - Incluye configuración de rutas, API de Binance, preprocesamiento, entorno y agente RL
+  - Toda la configuración se gestiona desde este único archivo
+
+## Almacenamiento de Datos y Credenciales
+
+- **Datos**: Google Cloud Storage (GCS)
+  - Bucket: Definido en `.env` como `GCS_BUCKET_NAME`
+  - Rutas configuradas en `src/config.yaml`
+
+- **Credenciales API**: Google Cloud Secret Manager
+  - Las credenciales de Binance se almacenan como secretos
+  - Proyecto GCP: Definido en `.env` como `GCP_PROJECT_ID`
+  - Secretos requeridos: `BINANCE_API_KEY_FUTURES` y `BINANCE_API_SECRET_FUTURES`
 
 ## Tecnologías Clave
 

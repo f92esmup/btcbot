@@ -41,17 +41,10 @@ def parse_arguments():
     parser = argparse.ArgumentParser(description="Evalúa un agente de RL para trading")
     
     parser.add_argument(
-        "--agent-config",
+        "--config",
         type=str,
-        default="src/agent/agent_config.yaml",
-        help="Ruta al archivo de configuración del agente"
-    )
-    
-    parser.add_argument(
-        "--env-config",
-        type=str,
-        default="src/environments/environment_config.yaml",
-        help="Ruta al archivo de configuración del entorno"
+        default="src/config.yaml",
+        help="Ruta al archivo de configuración centralizada"
     )
     
     parser.add_argument(
@@ -215,17 +208,17 @@ def main():
     # Parsear argumentos
     args = parse_arguments()
     
-    # Cargar la configuración del agente
-    config_manager = ConfigManager(config_path=args.agent_config)
-    agent_config = config_manager.config
+    # Cargar la configuración centralizada
+    config_manager = ConfigManager(config_path=args.config)
+    agent_config = config_manager.get_agent_config()
     
     # Actualizar la configuración si se solicita no usar GPU
     if args.no_gpu:
         agent_config["use_gpu"] = False
         logger.info("Uso de GPU desactivado por argumento de línea de comandos")
     
-    # Crear el administrador del agente
-    agent_manager = RLAgentManager(config_path=args.agent_config)
+    # Crear el administrador del agente con la configuración centralizada
+    agent_manager = RLAgentManager(config_path=args.config)
     
     # Si se desactivó la GPU por argumento, aplicar la configuración al administrador
     if args.no_gpu:
@@ -234,14 +227,13 @@ def main():
     
     # Cargar el modelo entrenado
     agent_manager.setup_agent(
-        env_config_path=args.env_config,
         load_model=True,
         model_path=args.model_path
     )
     
     # Configurar el entorno de evaluación (modo determinístico)
     # Pasar directamente la ruta de configuración y establecer el modo de renderización
-    eval_env = TradingEnvironment(config_path=args.env_config, render_mode='human')
+    eval_env = TradingEnvironment(config_path=args.config, render_mode='human')
     
     # Evaluar el agente
     evaluate_agent(

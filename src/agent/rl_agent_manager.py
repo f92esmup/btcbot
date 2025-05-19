@@ -40,16 +40,16 @@ class RLAgentManager:
     - Interacción con el entorno para predicciones
     """
     
-    def __init__(self, config_path: str = "src/agent/agent_config.yaml"):
+    def __init__(self, config_path: str = "src/config.yaml"):
         """
         Inicializa el administrador del agente de RL.
         
         Args:
-            config_path: Ruta al archivo de configuración YAML del agente
+            config_path: Ruta al archivo de configuración centralizada YAML
         """
         self.config_path = config_path
-        config_manager_instance = ConfigManager(config_path=config_path)
-        self.config = config_manager_instance.config
+        self.config_manager = ConfigManager(config_path=config_path)
+        self.config = self.config_manager.get_agent_config()
         self.model = None
         self.env = None
         self.eval_env = None
@@ -91,21 +91,16 @@ class RLAgentManager:
         return device
         
     def setup_environment(self, 
-                          env_config_path: str = "src/environments/environment_config.yaml",
                           is_eval: bool = False) -> TradingEnvironment:
         """
         Configura y crea una instancia del entorno de trading.
         
         Args:
-            env_config_path: Ruta al archivo de configuración del entorno
             is_eval: Si se está configurando un entorno para evaluación
             
         Returns:
             Instancia del entorno de trading configurado
         """
-        # Cargar configuración del entorno pero sin pasarla directamente al constructor
-        # En lugar de eso, simplemente pasamos la ruta al archivo de config
-        
         # Determinar el modo de renderización
         render_mode = None
         if is_eval:
@@ -113,8 +108,8 @@ class RLAgentManager:
             # render_mode = 'human'  # Descomentar esta línea si quieres renderización en evaluación
             pass
         
-        # Crear instancia del entorno pasando solo los parámetros que acepta
-        env = TradingEnvironment(config_path=env_config_path, render_mode=render_mode)
+        # Crear instancia del entorno pasando la ruta a la configuración centralizada
+        env = TradingEnvironment(config_path=self.config_path, render_mode=render_mode)
         
         # Envolver con Monitor para seguimiento de recompensas y otra telemetría
         log_dir = "logs/"
@@ -125,7 +120,6 @@ class RLAgentManager:
         
     def setup_agent(self,
                     env: Optional[gym.Env] = None,
-                    env_config_path: str = "src/environments/environment_config.yaml",
                     load_model: bool = False,
                     model_path: Optional[str] = None) -> SAC:
         """
@@ -133,7 +127,6 @@ class RLAgentManager:
         
         Args:
             env: Entorno de gymnasium (opcional, si ya está creado)
-            env_config_path: Ruta al archivo de configuración del entorno (si env no se proporciona)
             load_model: Si se debe cargar un modelo existente
             model_path: Ruta al modelo guardado (si load_model es True)
             
@@ -142,12 +135,12 @@ class RLAgentManager:
         """
         # Si no se proporciona un entorno, crearlo
         if env is None:
-            self.env = self.setup_environment(env_config_path)
+            self.env = self.setup_environment()
         else:
             self.env = env
             
         # Configurar el entorno de evaluación
-        self.eval_env = self.setup_environment(env_config_path, is_eval=True)
+        self.eval_env = self.setup_environment(is_eval=True)
         
         # Si se debe cargar un modelo existente
         if load_model:

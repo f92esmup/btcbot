@@ -30,23 +30,24 @@ class TradingEnvironment(gym.Env):
     """
     metadata = {'render_modes': ['human']}
     
-    def __init__(self, config_path: str = 'src/environments/environment_config.yaml', render_mode: Optional[str] = None):
+    def __init__(self, config_path: str = 'src/config.yaml', render_mode: Optional[str] = None):
         """
         Inicializa el entorno de trading.
         
         Args:
-            config_path: Ruta al archivo de configuración yaml
+            config_path: Ruta al archivo de configuración yaml centralizada
             render_mode: Modo de renderización (human, etc.)
         """
-        # Carga la configuración del entorno
+        # Carga la configuración centralizada
         self.config_manager = ConfigManager(config_path=config_path)
-        self.config = self._load_env_config()
+        self.config = self.config_manager.get_environment_config()
         
         # Configura el render_mode
         self.render_mode = render_mode
         
-        # Initialize sequence length before loading data
-        self.L = self.config['sequence_length_L']
+        # Initialize sequence length from preprocessing config
+        preprocessing_config = self.config_manager.get_preprocessing_config()
+        self.L = preprocessing_config['sequence_length_L']
         
         # Carga los datos de mercado preprocesados
         self.market_data, self.feature_names = self._load_market_data()
@@ -108,48 +109,14 @@ class TradingEnvironment(gym.Env):
             'min_equity': float('inf')
         }
         
+        # Registrar en gym
+        gym.register(
+            id=self.config.get('env_id', 'FuturesTradingEnv-v0'),
+            entry_point='src.environments.trading_env:TradingEnvironment',
+            max_episode_steps=None  # Se configura dinámicamente en reset()
+        )
+        
         logger.info("TradingEnvironment initialized successfully.")
-    
-    def _load_env_config(self) -> Dict[str, Any]:
-        """Carga la configuración del entorno desde el archivo yaml"""
-        env_config = {}
-        
-        # Configuración general del entorno
-        env_config['env_id'] = self.config_manager.get_config_value('env_id', 'FuturesTradingEnv-v0')
-        env_config['initial_equity'] = self.config_manager.get_config_value('initial_equity', 10000.0)
-        env_config['max_episode_steps_use_dataset_length'] = self.config_manager.get_config_value('max_episode_steps_use_dataset_length', True)
-        env_config['allow_random_episode_start'] = self.config_manager.get_config_value('allow_random_episode_start', True)
-        
-        # Configuración de Trading
-        env_config['leverage'] = self.config_manager.get_config_value('leverage', 10.0)
-        env_config['position_size_pct_equity'] = self.config_manager.get_config_value('position_size_pct_equity', 0.05)
-        env_config['taker_fee_rate'] = self.config_manager.get_config_value('taker_fee_rate', 0.0004)
-        env_config['slippage_atr_multiplier'] = self.config_manager.get_config_value('slippage_atr_multiplier', 0.1)
-        env_config['min_order_size_btc'] = self.config_manager.get_config_value('min_order_size_btc', 0.001)
-        
-        # Lógica de Acción
-        env_config['action_threshold'] = self.config_manager.get_config_value('action_threshold', 0.15)
-        
-        # Lógica de Finalización y Liquidación
-        env_config['equity_drawdown_threshold_episode_end'] = self.config_manager.get_config_value('equity_drawdown_threshold_episode_end', -0.20)
-        env_config['liquidation_safety_factor'] = self.config_manager.get_config_value('liquidation_safety_factor', 0.8)
-        
-        # Características de Observación
-        max_steps_in_position = self.config_manager.get_config_value('portfolio_features_normalization.max_steps_in_position', 288)
-        env_config['portfolio_features_normalization'] = {
-            'max_steps_in_position': max_steps_in_position
-        }
-        
-        # Carga de Datos de Mercado
-        env_config['processed_data_directory'] = self.config_manager.get_config_value('processed_data_directory', 'data/processed/')
-        env_config['processed_data_file_identifier'] = self.config_manager.get_config_value('processed_data_file_identifier', '_L96_market_features.npz')
-        
-        # Obtiene la longitud de secuencia del archivo de preprocesamiento
-        preprocessing_config_path = 'src/data/preprocessing_config.yaml'
-        preprocessing_config = ConfigManager(config_path=preprocessing_config_path)
-        env_config['sequence_length_L'] = preprocessing_config.get_config_value('sequence_length_L', 96)
-        
-        return env_config
     
     def _load_market_data(self) -> Tuple[np.ndarray, List[str]]:
         """

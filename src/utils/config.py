@@ -4,10 +4,20 @@ from dotenv import load_dotenv
 from google.cloud import secretmanager
 import json
 import logging
+from typing import Any, Dict, List, Optional, Union
 
 logger = logging.getLogger(__name__)
 
 class ConfigManager:
+    """
+    Clase singleton que proporciona acceso centralizado a toda la configuración del proyecto.
+    
+    Características:
+    - Acceso a configuración desde un único archivo YAML centralizado
+    - Acceso a variables de entorno
+    - Acceso a secretos almacenados en Google Cloud Secret Manager
+    - Métodos de conveniencia para acceder a secciones específicas de configuración
+    """
     _instance = None
 
     def __new__(cls, config_path="src/config.yaml", env_path=".env"):
@@ -25,6 +35,7 @@ class ConfigManager:
             try:
                 with open(config_path, 'r') as f:
                     cls._instance.config = yaml.safe_load(f)
+                logger.info(f"Configuración cargada correctamente desde {config_path}")
             except FileNotFoundError:
                 raise FileNotFoundError(f"Archivo de configuración {config_path} no encontrado.")
             except yaml.YAMLError as e:
@@ -47,7 +58,18 @@ class ConfigManager:
         
         return cls._instance
 
-    def get_env_variable(self, var_name: str, default=None):
+    def get_env_variable(self, var_name: str, default=None) -> str:
+        """
+        Obtiene una variable de entorno o un secreto de Secret Manager.
+        Para variables sensibles (credenciales, claves API), solo se obtienen de Secret Manager.
+        
+        Args:
+            var_name: Nombre de la variable
+            default: Valor por defecto si no se encuentra
+            
+        Returns:
+            Valor de la variable o secreto
+        """
         # Valores considerados secretos (claves de API, etc.) - SOLO obtenerse de Secret Manager
         secretos = ["BINANCE_API_KEY_FUTURES", "BINANCE_API_SECRET_FUTURES"]
         
@@ -70,7 +92,17 @@ class ConfigManager:
         env_value = os.getenv(var_name, default)
         return env_value
 
-    def get_config_value(self, key_path: str, default=None):
+    def get_config_value(self, key_path: str, default=None) -> Any:
+        """
+        Obtiene un valor de configuración mediante una ruta de claves separadas por puntos.
+        
+        Args:
+            key_path: Ruta a la configuración (ej. "data_paths.raw")
+            default: Valor por defecto si no se encuentra
+            
+        Returns:
+            Valor de configuración o valor por defecto
+        """
         try:
             keys = key_path.split('.')
             value = self.config
@@ -78,11 +110,39 @@ class ConfigManager:
                 value = value[key]
             return value
         except KeyError:
-            # logger.warning(f"Clave de configuración '{key_path}' no encontrada. Usando default: {default}")
+            logger.debug(f"Clave de configuración '{key_path}' no encontrada. Usando default: {default}")
             return default
-        except TypeError: # En caso de que self.config no se haya cargado
-             # logger.error(f"Configuración no cargada. Imposible obtener '{key_path}'.")
-             raise TypeError(f"Configuración no cargada. Imposible obtener '{key_path}'.")
+        except TypeError:
+            raise TypeError(f"Configuración no cargada. Imposible obtener '{key_path}'.")
+
+    # Métodos de conveniencia para secciones específicas
+    def get_data_paths(self) -> Dict[str, str]:
+        """Obtiene todas las rutas de datos configuradas"""
+        return self.get_config_value('data_paths', {})
+    
+    def get_binance_api_config(self) -> Dict[str, Any]:
+        """Obtiene la configuración de la API de Binance"""
+        return self.get_config_value('binance_api', {})
+    
+    def get_data_acquisition_defaults(self) -> Dict[str, Any]:
+        """Obtiene la configuración por defecto para adquisición de datos"""
+        return self.get_config_value('data_acquisition_defaults', {})
+    
+    def get_preprocessing_config(self) -> Dict[str, Any]:
+        """Obtiene la configuración de preprocesamiento"""
+        return self.get_config_value('preprocessing', {})
+    
+    def get_environment_config(self) -> Dict[str, Any]:
+        """Obtiene la configuración del entorno de trading"""
+        return self.get_config_value('environment', {})
+    
+    def get_agent_config(self) -> Dict[str, Any]:
+        """Obtiene la configuración del agente RL"""
+        return self.get_config_value('agent', {})
+
+    def get_full_config(self) -> Dict[str, Any]:
+        """Obtiene la configuración completa"""
+        return self.config
 
 
 if __name__ == '__main__': # Para pruebas rápidas
@@ -90,3 +150,11 @@ if __name__ == '__main__': # Para pruebas rápidas
     print(f"Raw Data Path: {manager.get_config_value('data_paths.raw')}")
     print(f"API Key: {manager.get_env_variable('BINANCE_API_KEY_FUTURES')}")
     print(f"Default Symbol: {manager.get_config_value('data_acquisition_defaults.symbol')}")
+    
+    # Prueba los nuevos métodos de conveniencia
+    print("\nMétodos de conveniencia:")
+    print(f"Data Paths: {manager.get_data_paths()}")
+    print(f"Binance API Config: {manager.get_binance_api_config()}")
+    print(f"Preprocessing Sequence Length: {manager.get_preprocessing_config().get('sequence_length_L')}")
+    print(f"Environment Initial Equity: {manager.get_environment_config().get('initial_equity')}")
+    print(f"Agent Learning Rate: {manager.get_agent_config().get('learning_rate')}")

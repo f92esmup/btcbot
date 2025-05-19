@@ -1,5 +1,10 @@
+# Configuración centralizada para todo el proyecto BTCBot
+
+# =====================================================================
+# Configuración de Rutas y Acceso a Datos
+# =====================================================================
 data_paths:
-  # Rutas para almacenamiento local (no se utilizan en download_data)
+  # Rutas para almacenamiento local
   raw: "data/raw"
   processed: "data/processed"
   
@@ -7,6 +12,9 @@ data_paths:
   gcs_raw: "raw"
   gcs_processed: "processed"
 
+# =====================================================================
+# Configuración de la API de Binance
+# =====================================================================
 binance_api:
   futures_base_url: "https://fapi.binance.com"
   request_limit_per_call: 1000
@@ -14,7 +22,142 @@ binance_api:
   retry_attempts: 5
   retry_delay_seconds: 60
 
+# =====================================================================
+# Configuración de Adquisición de Datos
+# =====================================================================
 data_acquisition_defaults:
   symbol: "BTCUSDT"
   interval: "1h"
   historical_start_date: "2020-01-01"
+
+# =====================================================================
+# Configuración de Preprocesamiento de Datos
+# =====================================================================
+preprocessing:
+  # Longitud de la secuencia para el Transformer
+  sequence_length_L: 96
+
+  # Multiplicador para la ventana de normalización Z-score (ventana = L * multiplicador)
+  normalization_window_multiplier_for_L: 2
+
+  # Optimizaciones de rendimiento y almacenamiento
+  use_float32: true  # Usar float32 en lugar de float64 para reducir uso de memoria
+  use_parquet_storage: true  # Guardar también en formato Parquet para mejor compresión y velocidad
+
+  # Parámetros para el procesamiento de OHLCV
+  ohlcv_processing:
+    volume_sma_period: 20
+
+  # Parámetros para los indicadores técnicos
+  indicators:
+    sma_short_period: 20
+    sma_long_period: 50
+    ema_short_period: 12
+    ema_long_period: 26
+    rsi_period: 14
+    rsi_scaling_mode: "0_1" # "0_1" o "-1_1"
+    atr_period: 14
+    macd_fast_period: 12
+    macd_slow_period: 26
+    macd_signal_period: 9
+    bollinger_period: 20
+    bollinger_std_dev: 2
+    cci_period: 20
+    stochastic_k_period: 14 # k en pandas_ta
+    stochastic_d_period: 3  # d en pandas_ta
+    stochastic_slowing_period: 3 # smooth_k en pandas_ta
+
+  # Lista de características de mercado finales a incluir en las secuencias (el orden importa)
+  # Estos nombres deben coincidir con las columnas generadas después de la ingeniería y normalización.
+  final_market_feature_columns:
+    - 'log_ret_C_O_norm'
+    - 'log_ret_H_O_norm'
+    - 'log_ret_L_O_norm'
+    - 'log_ret_C_C_prev_norm'
+    - 'log_ret_Vol_SMAVol_norm'
+    - 'SMA_short_norm'          # Ej. (SMA_short - Close) / ATR
+    - 'SMA_long_norm'           # Ej. (SMA_long - Close) / ATR
+    - 'EMA_short_norm'          # Ej. (EMA_short - Close) / ATR
+    - 'EMA_long_norm'           # Ej. (EMA_long - Close) / ATR
+    - 'RSI_scaled'              # Ej. RSI / 100
+    - 'ATR_norm'                # Ej. ATR / Close
+    - 'MACD_line_norm'          # Ej. MACD_line / ATR o Z-score
+    - 'MACD_signal_norm'        # Ej. MACD_signal / ATR o Z-score
+    - 'MACD_hist_norm'          # Ej. MACD_hist / ATR o Z-score
+    - 'BB_dist_upper_norm'      # Ej. (BB_upper - Close) / ATR
+
+# =====================================================================
+# Configuración del Entorno de Trading
+# =====================================================================
+environment:
+  # --- Configuración General del Entorno ---
+  env_id: "FuturesTradingEnv-v0" # Identificador para registrar en Gymnasium
+  initial_equity: 10000.0       # Equity inicial para cada episodio (USDT)
+  max_episode_steps_use_dataset_length: true # Si true, max_steps = len(dataset) - L
+  allow_random_episode_start: true # Para el entrenamiento, empezar en puntos aleatorios del dataset
+
+  # --- Configuración de Trading y Cartera ---
+  leverage: 10.0
+  position_size_pct_equity: 0.05 # 5% del equity actual para el tamaño nocional
+  taker_fee_rate: 0.0004         # Comisión de Taker (0.04%)
+  slippage_atr_multiplier: 0.1   # Multiplicador de ATR(14) para el slippage (por lado)
+  min_order_size_btc: 0.001      # Mínimo tamaño de orden en BTC (o la unidad base)
+
+  # --- Lógica de Acción del Agente ---
+  action_threshold: 0.15    # Umbral para interpretar la señal continua del agente
+
+  # --- Lógica de Finalización de Episodio y Liquidación ---
+  equity_drawdown_threshold_episode_end: -0.20 # -20% drawdown del equity inicial del episodio
+  liquidation_safety_factor: 0.8 # (1 / leverage) * safety_factor = % de movimiento para liquidación
+
+  # --- Características de Observación (Portfolio) ---
+  # Parámetros para la normalización de las características de la cartera, si se hace dentro del entorno
+  portfolio_features_normalization:
+    max_steps_in_position: 288 # ej. L * 3 (para normalizar 'steps_in_current_position')
+
+  # --- Carga de Datos de Mercado (del Módulo 2) ---
+  processed_data_directory: "data/processed/"
+  processed_data_file_identifier: "_L96_market_features.npz" # Parte del nombre del archivo
+
+# =====================================================================
+# Configuración del Agente RL
+# =====================================================================
+agent:
+  # --- Configuración del Algoritmo SAC (para Stable Baselines3) ---
+  algorithm: "SAC"
+  learning_rate: 0.0003
+  buffer_size: 100000
+  learning_starts: 10000      # Pasos para llenar el buffer antes de entrenar
+  batch_size: 256
+  tau: 0.005                  # Coeficiente de actualización suave para redes objetivo
+  gamma: 0.99                 # Factor de descuento
+  train_freq: 1               # Frecuencia de entrenamiento (en pasos de entorno, ej., (1, "step"))
+  gradient_steps: 1           # Pasos de gradiente por actualización
+  ent_coef: "auto"            # Aprendizaje automático del coeficiente de entropía alpha
+  use_sde: false              # State-Dependent Exploration (SAC ya es estocástico)
+
+  # --- Configuración de la Arquitectura de Red Personalizada (para policy_kwargs en SB3) ---
+  policy_kwargs:
+    features_extractor_class: "CustomTransformerFeatureExtractor" # Nombre de tu clase extractor
+    features_extractor_kwargs:
+      market_features_key: "market_features"
+      portfolio_features_key: "portfolio_features"
+      # N_features_mercado = 20, N_features_cartera = 8 => N_features_entrada_transformer = 28
+      features_in_transformer: 28 # 20 (mercado) + 8 (cartera)
+      d_model: 128
+      n_heads: 4
+      n_encoder_layers: 3
+      dim_feedforward: 512 # d_model * 4
+      dropout_rate: 0.1
+
+    # Arquitectura de las redes MLP del actor (pi) y crítico (qf) DESPUÉS del extractor
+    net_arch:
+      pi: [256, 256] # Capas ocultas para el actor
+      qf: [256, 256] # Capas ocultas para los críticos
+
+  # --- Configuración de Entrenamiento ---
+  total_training_timesteps: 1000000
+  log_interval_episodes: 10 # Loguear cada N episodios
+  save_path_prefix: "models/sac_transformer_trading_agent"
+  save_frequency_steps: 50000
+  use_gpu: true  # Activar para usar GPU (CUDA/MPS) si está disponible

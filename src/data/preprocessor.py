@@ -9,24 +9,22 @@ from src.data.feature_engineering import FeatureEngineer
 logger = logging.getLogger(__name__)
 
 class DataPreprocessor:
-    def __init__(self, general_config_manager: ConfigManager, module_specific_config: dict):
-        self.gcfg = general_config_manager
-        self.mcfg = module_specific_config  # Config específica del módulo de preprocesamiento
+    def __init__(self, config_manager: ConfigManager):
+        self.config_manager = config_manager
+        self.preprocessing_config = config_manager.get_preprocessing_config()
 
-        self.raw_data_path = self.gcfg.get_config_value('data_paths.raw')
-        self.processed_data_path = self.gcfg.get_config_value('data_paths.processed')
+        self.raw_data_path = self.config_manager.get_config_value('data_paths.raw')
+        self.processed_data_path = self.config_manager.get_config_value('data_paths.processed')
         os.makedirs(self.processed_data_path, exist_ok=True)
 
-        self.L = self.mcfg['sequence_length_L']
-        self.norm_window = self.L * self.mcfg['normalization_window_multiplier_for_L']
+        self.L = self.preprocessing_config['sequence_length_L']
+        self.norm_window = self.L * self.preprocessing_config['normalization_window_multiplier_for_L']
         
         self.feature_engineer = FeatureEngineer(
-            indicators_config=self.mcfg['indicators'],
-            ohlcv_config=self.mcfg['ohlcv_processing']
+            indicators_config=self.preprocessing_config['indicators'],
+            ohlcv_config=self.preprocessing_config['ohlcv_processing']
         )
-        self.final_feature_columns = self.mcfg['final_market_feature_columns']
-        if len(self.final_feature_columns) != 20:  # 5 OHLCV + 15 Indicadores
-            logger.warning(f"El número de columnas finales ({len(self.final_feature_columns)}) no coincide con el esperado (20). Verifica 'final_market_feature_columns' en la config.")
+        self.final_feature_columns = self.preprocessing_config['final_market_feature_columns']
 
     def _load_and_prepare_base_df(self, raw_data_filename: str) -> pd.DataFrame:
         """
@@ -43,12 +41,12 @@ class DataPreprocessor:
         
         # Comprobar si debemos usar formato Parquet si el archivo existe
         parquet_path = f"{os.path.splitext(filepath)[0]}.parquet"
-        use_float32 = self.mcfg.get('use_float32', False)
+        use_float32 = self.preprocessing_config.get('use_float32', False)
         dtype_config = {col: 'float32' for col in ['Open', 'High', 'Low', 'Close', 'Volume']} if use_float32 else None
         
         try:
             # Intentar cargar desde Parquet si existe (más eficiente)
-            if os.path.exists(parquet_path) and self.mcfg.get('use_parquet_storage', False):
+            if os.path.exists(parquet_path) and self.preprocessing_config.get('use_parquet_storage', False):
                 logger.info(f"Cargando datos desde Parquet: {parquet_path}")
                 df = pd.read_parquet(parquet_path)
                 logger.info(f"Datos cargados desde Parquet con éxito: {df.shape}")
@@ -93,7 +91,7 @@ class DataPreprocessor:
 
                 # --- 4. Imputación Limitada con Forward Fill (ffill) ---
                 # Obtener el límite de ffill desde la configuración del módulo
-                ffill_limit = self.mcfg.get('raw_data_settings', {}).get('ffill_limit_for_nans', 0)  # Por defecto 0 (sin ffill)
+                ffill_limit = self.preprocessing_config.get('raw_data_settings', {}).get('ffill_limit_for_nans', 0)  # Por defecto 0 (sin ffill)
 
                 if ffill_limit > 0:
                     for col in cols_to_numeric:
@@ -150,7 +148,7 @@ class DataPreprocessor:
         df_norm = df_with_features.copy(deep=False)
 
         # Convertir tipos a float32 para reducir uso de memoria
-        use_float32 = self.mcfg.get('use_float32', False)
+        use_float32 = self.preprocessing_config.get('use_float32', False)
         if use_float32:
             for col in df_norm.select_dtypes(include=['float64']).columns:
                 df_norm[col] = df_norm[col].astype(np.float32)
@@ -192,7 +190,7 @@ class DataPreprocessor:
             df_norm[f'{col}_norm'] = (df_norm[col] - close) / atr
 
         # RSI - Escalado con verificación de opciones
-        if self.mcfg['indicators']['rsi_scaling_mode'] == "0_1":
+        if self.preprocessing_config['indicators']['rsi_scaling_mode'] == "0_1":
             df_norm['RSI_scaled'] = df_norm['RSI'] / 100.0
         else:  # "-1_1"
             df_norm['RSI_scaled'] = (df_norm['RSI'] - 50.0) / 50.0
@@ -256,7 +254,7 @@ class DataPreprocessor:
         n_features = data_values.shape[1]
         
         # Preasignar array para mejor rendimiento, usando float32 si está configurado
-        dtype = np.float32 if self.mcfg.get('use_float32', False) else np.float64
+        dtype = np.float32 if self.preprocessing_config.get('use_float32', False) else np.float64
         X_sequences = np.zeros((num_samples, self.L, n_features), dtype=dtype)
         
         # Para cada posición en la secuencia, copiar los datos de manera eficiente
@@ -330,7 +328,7 @@ class DataPreprocessor:
             logger.info(f"También se guardaron series de Close y ATR sin normalizar para cálculos precisos de slippage y liquidación")
             
             # Guardar también en formato Parquet para datasets muy grandes
-            if self.mcfg.get('use_parquet_storage', False) and len(df_cleaned) > 100000:
+            if self.preprocessing_config.get('use_parquet_storage', False) and len(df_cleaned) > 100000:
                 import pyarrow as pa
                 import pyarrow.parquet as pq
                 

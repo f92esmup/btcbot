@@ -16,6 +16,7 @@ print(f"Directorio raíz añadido: {os.path.dirname(os.path.dirname(os.path.absp
 
 # Importa el entorno
 from src.environments import TradingEnvironment
+from src.utils.config import ConfigManager
 
 # Configurar logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -240,23 +241,23 @@ def plot_results(returns, lengths, equity_curves, perf_stats=None):
     plt.savefig('random_agent_results.png')
     plt.show()
 
-def run_benchmark(env_config_path='src/environments/environment_config.yaml', episodes=3, iterations=2):
+def run_benchmark(episodes=3, iterations=2):
     """
     Ejecuta un benchmark comparando diferentes configuraciones del entorno.
     
     Args:
-        env_config_path: Ruta al archivo de configuración
         episodes: Número de episodios por prueba
         iterations: Número de iteraciones para promediar resultados
     """
+    config_path = "src/config.yaml"
     logger.info("\n=== INICIANDO BENCHMARK DE RENDIMIENTO ===\n")
     
     # Resultados para almacenar estadísticas
     benchmark_results = {}
     
-    # Crear entorno con la configuración estándar para referencia
-    logger.info(f"Creando entorno con configuración: {env_config_path}")
-    env = TradingEnvironment(config_path=env_config_path)
+    # Crear entorno con la configuración centralizada
+    logger.info(f"Creando entorno con configuración: {config_path}")
+    env = TradingEnvironment(config_path=config_path)
     logger.info(f"Entorno creado: {env}")
     
     # Ejecutar benchmark de referencia
@@ -308,9 +309,10 @@ if __name__ == "__main__":
             # Ejecutar benchmark comparativo
             run_benchmark(episodes=args.episodes)
         else:
-            # Crea el entorno para test estándar
-            print("Creando entorno TradingEnvironment...")
-            env = TradingEnvironment(render_mode='human' if args.render else None)
+            # Crea el entorno para test estándar con la configuración centralizada
+            config_path = "src/config.yaml"
+            print("Creando entorno TradingEnvironment con la configuración centralizada...")
+            env = TradingEnvironment(config_path=config_path, render_mode='human' if args.render else None)
             print(f"Entorno creado exitosamente: {env}")
             
             # Prueba con agente aleatorio
