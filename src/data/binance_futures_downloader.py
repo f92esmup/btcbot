@@ -13,12 +13,18 @@ logger = logging.getLogger(__name__) # Configurar el logger a nivel de script o 
 class BinanceFuturesDownloader:
     def __init__(self, config_manager): # ConfigManager debería ser inyectado
         self.config_manager = config_manager
-        self.api_key = self.config_manager.get_env_variable('BINANCE_API_KEY_FUTURES')
-        self.api_secret = self.config_manager.get_env_variable('BINANCE_API_SECRET_FUTURES')
+        
+        # Obtener credenciales exclusivamente de Secret Manager
+        try:
+            self.api_key = self.config_manager.get_env_variable('BINANCE_API_KEY_FUTURES')
+            self.api_secret = self.config_manager.get_env_variable('BINANCE_API_SECRET_FUTURES')
+        except Exception as e:
+            logger.error(f"Error al obtener credenciales de Binance de Secret Manager: {e}")
+            raise ValueError(f"Error al obtener credenciales de Binance de Secret Manager: {e}")
         
         if not self.api_key or not self.api_secret:
-            logger.error("API Key o Secret de Binance Futuros no configuradas en .env o Secret Manager")
-            raise ValueError("API Key o Secret de Binance Futuros no configuradas.")
+            logger.error("API Key o Secret de Binance Futuros no configuradas en Google Secret Manager")
+            raise ValueError("API Key o Secret de Binance Futuros no configuradas en Google Secret Manager.")
 
         try:
             self.client = Client(self.api_key, self.api_secret)
@@ -43,12 +49,17 @@ class BinanceFuturesDownloader:
         
         logger.info(f"Usando Google Cloud Storage para almacenar datos. Bucket: {self.gcs_bucket_name}")
         try:
+            # Intentar usar Application Default Credentials (ADC)
             self.storage_client = storage.Client(project=self.gcp_project_id)
             self.bucket = self.storage_client.bucket(self.gcs_bucket_name)
+            
+            # Solo verificamos si el bucket existe, pero no intentamos crearlo
             if not self.bucket.exists():
-                logger.warning(f"El bucket {self.gcs_bucket_name} no existe. Se intentará crear.")
-                self.bucket = self.storage_client.create_bucket(self.gcs_bucket_name)
-                logger.info(f"Bucket {self.gcs_bucket_name} creado con éxito.")
+                logger.error(f"El bucket {self.gcs_bucket_name} no existe. Por favor, crea el bucket desde la consola de Google Cloud primero.")
+                raise ValueError(f"El bucket {self.gcs_bucket_name} no existe.")
+                
+            logger.info(f"Bucket {self.gcs_bucket_name} encontrado correctamente.")
+            
         except Exception as e:
             logger.error(f"Error al conectar con Google Cloud Storage: {e}")
             raise ConnectionError(f"Error al conectar con Google Cloud Storage: {e}")

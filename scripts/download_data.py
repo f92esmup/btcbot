@@ -33,6 +33,7 @@ def main():
     # Verificar configuración de Google Cloud (obligatoria)
     gcp_project_id = config_manager.get_env_variable('GCP_PROJECT_ID')
     gcs_bucket_name = config_manager.get_env_variable('GCS_BUCKET_NAME')
+    gcp_region = config_manager.get_env_variable('GCP_REGION', 'europe-southwest1')  # Default a Madrid si no se especifica
     
     if not gcp_project_id or not gcs_bucket_name:
         logger.error("Configuración de Google Cloud incompleta. Ambos GCP_PROJECT_ID y GCS_BUCKET_NAME son obligatorios.")
@@ -40,20 +41,12 @@ def main():
         sys.exit(1)  # Salir con error
         
     logger.info(f"Usando Google Cloud Storage para almacenamiento. Proyecto: {gcp_project_id}, Bucket: {gcs_bucket_name}")
+    logger.info(f"Región configurada: {gcp_region}")
+    logger.info("Los secretos (credenciales de Binance) se obtendrán exclusivamente de Google Cloud Secret Manager")
+    logger.info("NOTA: El bucket debe ya existir en Google Cloud Storage. El script no intentará crearlo.")
     
-    # Verificar credenciales de Google Cloud
-    credentials_path = config_manager.get_env_variable('GOOGLE_APPLICATION_CREDENTIALS')
-    if not credentials_path:
-        logger.error("No se ha configurado GOOGLE_APPLICATION_CREDENTIALS en el archivo .env")
-        logger.error("Es obligatorio especificar la ruta al archivo de credenciales de servicio de Google Cloud")
-        sys.exit(1)  # Salir con error
-        
-    if not os.path.exists(credentials_path):
-        logger.error(f"No se encontró el archivo de credenciales de Google Cloud en: {credentials_path}")
-        logger.error("Verifique que la ruta especificada en GOOGLE_APPLICATION_CREDENTIALS sea correcta")
-        sys.exit(1)  # Salir con error
-        
-    logger.info(f"Credenciales de Google Cloud encontradas en: {credentials_path}")
+    # No necesitamos verificar las credenciales locales, ya que estamos usando ADC
+    # y los secretos se obtienen directamente de Secret Manager
 
     try:
         downloader = BinanceFuturesDownloader(config_manager)
