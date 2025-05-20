@@ -5,7 +5,7 @@ import pandas as pd
 import time 
 import asyncio
 
-from binance.client import AsyncClient # Importante: Usar AsyncClient para asyncio
+from binance.async_client import AsyncClient # Importante: Usar AsyncClient para asyncio
 from binance.exceptions import BinanceAPIException, BinanceOrderException, BinanceRequestException
 
 from src.utils.config import ConfigManager
