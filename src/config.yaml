@@ -7,6 +7,7 @@ data_paths:
   # Rutas para Google Cloud Storage (obligatorias)
   gcs_raw: "raw"
   gcs_processed: "processed"
+  gcs_models: "models"  # Directorio para guardar modelos en GCS
 
 # =====================================================================
 # Configuración de la API de Binance
@@ -154,6 +155,6 @@ agent:
   # --- Configuración de Entrenamiento ---
   total_training_timesteps: 1000000
   log_interval_episodes: 10 # Loguear cada N episodios
-  save_path_prefix: "models/sac_transformer_trading_agent"
+  gcs_models_path_prefix: "models/sac_transformer_trading_agent"  # Prefijo para guardado en GCS
   save_frequency_steps: 50000
   use_gpu: true  # Activar para usar GPU (CUDA/MPS) si está disponible

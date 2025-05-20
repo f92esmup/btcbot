@@ -17,6 +17,10 @@ sys.path.insert(0, project_root)
 # Importaciones locales
 from src.agent.rl_agent_manager import RLAgentManager
 from src.utils.config import ConfigManager
+from dotenv import load_dotenv
+
+# Cargar variables de entorno
+load_dotenv()
 
 # Configurar logging
 logging.basicConfig(
@@ -53,7 +57,7 @@ def parse_arguments():
         "--load-model",
         type=str,
         default=None,
-        help="Ruta a un modelo guardado para continuar el entrenamiento"
+        help="Ruta en GCS al modelo guardado para continuar el entrenamiento (formato: path/to/model.zip)"
     )
     
     parser.add_argument(

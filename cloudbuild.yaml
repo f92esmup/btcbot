@@ -17,41 +17,41 @@
 #
 # Ejemplo de comando para ejecutar:
 # docker run -e GCP_PROJECT_ID="bitcoin-460320" -e GCS_BUCKET_NAME="bitcoin-460320_data" \
-#   europe-southwest1-docker.pkg.dev/bitcoin-460320/bitcoin-460320-repo/btcbot:cpu-latest \
+#   europe-southwest1-docker.pkg.dev/bitcoin-460320/bitcoin-460320-repo/btcbot-cpu:latest \
 #   python scripts/test_environment.py
 
 steps:
 # Construir la imagen con soporte GPU
 - name: 'gcr.io/cloud-builders/docker'
   args: ['build', 
-         '-t', '${_ARTIFACT_REGISTRY}/${_PROJECT_ID}/${_REPOSITORY_NAME}/btcbot:gpu-${_VERSION}', 
-         '-t', '${_ARTIFACT_REGISTRY}/${_PROJECT_ID}/${_REPOSITORY_NAME}/btcbot:gpu-latest',
+         '-t', '${_ARTIFACT_REGISTRY}/${_PROJECT_ID}/${_REPOSITORY_NAME}/btcbot-gpu:${_VERSION}', 
+         '-t', '${_ARTIFACT_REGISTRY}/${_PROJECT_ID}/${_REPOSITORY_NAME}/btcbot-gpu:latest',
          '-f', 'Dockerfile.gpu', 
          '.']
 
 # Construir la imagen versión CPU
 - name: 'gcr.io/cloud-builders/docker'
   args: ['build', 
-         '-t', '${_ARTIFACT_REGISTRY}/${_PROJECT_ID}/${_REPOSITORY_NAME}/btcbot:cpu-${_VERSION}', 
-         '-t', '${_ARTIFACT_REGISTRY}/${_PROJECT_ID}/${_REPOSITORY_NAME}/btcbot:cpu-latest',
+         '-t', '${_ARTIFACT_REGISTRY}/${_PROJECT_ID}/${_REPOSITORY_NAME}/btcbot-cpu:${_VERSION}', 
+         '-t', '${_ARTIFACT_REGISTRY}/${_PROJECT_ID}/${_REPOSITORY_NAME}/btcbot-cpu:latest',
          '-f', 'Dockerfile.cpu', 
          '.']
 
 # Publicar imagen GPU en Artifact Registry
 - name: 'gcr.io/cloud-builders/docker'
-  args: ['push', '${_ARTIFACT_REGISTRY}/${_PROJECT_ID}/${_REPOSITORY_NAME}/btcbot:gpu-${_VERSION}']
+  args: ['push', '${_ARTIFACT_REGISTRY}/${_PROJECT_ID}/${_REPOSITORY_NAME}/btcbot-gpu:${_VERSION}']
 
 # Publicar imagen GPU latest en Artifact Registry
 - name: 'gcr.io/cloud-builders/docker'
-  args: ['push', '${_ARTIFACT_REGISTRY}/${_PROJECT_ID}/${_REPOSITORY_NAME}/btcbot:gpu-latest']
+  args: ['push', '${_ARTIFACT_REGISTRY}/${_PROJECT_ID}/${_REPOSITORY_NAME}/btcbot-gpu:latest']
 
 # Publicar imagen CPU en Artifact Registry
 - name: 'gcr.io/cloud-builders/docker'
-  args: ['push', '${_ARTIFACT_REGISTRY}/${_PROJECT_ID}/${_REPOSITORY_NAME}/btcbot:cpu-${_VERSION}']
+  args: ['push', '${_ARTIFACT_REGISTRY}/${_PROJECT_ID}/${_REPOSITORY_NAME}/btcbot-cpu:${_VERSION}']
 
 # Publicar imagen CPU latest en Artifact Registry
 - name: 'gcr.io/cloud-builders/docker'
-  args: ['push', '${_ARTIFACT_REGISTRY}/${_PROJECT_ID}/${_REPOSITORY_NAME}/btcbot:cpu-latest']
+  args: ['push', '${_ARTIFACT_REGISTRY}/${_PROJECT_ID}/${_REPOSITORY_NAME}/btcbot-cpu:latest']
 
 logsBucket: 'gs://bitcoin-460320_cloudbuild' # Reemplaza con el nombre de tu bucket
 

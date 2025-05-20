@@ -22,6 +22,10 @@ sys.path.insert(0, project_root)
 from src.agent.rl_agent_manager import RLAgentManager
 from src.environments.trading_env import TradingEnvironment
 from src.utils.config import ConfigManager
+from dotenv import load_dotenv
+
+# Cargar variables de entorno
+load_dotenv()
 
 # Configurar logging
 logging.basicConfig(
@@ -50,8 +54,9 @@ def parse_arguments():
     parser.add_argument(
         "--model-path",
         type=str,
-        required=True,
-        help="Ruta al modelo entrenado para evaluar"
+        required=False,
+        default="bitcoin-460320_data/models/sac_transformer_trading_agent/sac_transformer_trading_agent_final_1000_steps.zip", # No se usa el sufijo gs//
+        help="Ruta en GCS al modelo entrenado para evaluar (formato: path/to/model.zip)"
     )
     
     parser.add_argument(
@@ -212,6 +217,12 @@ def main():
     config_manager = ConfigManager(config_path=args.config)
     agent_config = config_manager.get_agent_config()
     
+    # Verificar que GCS_BUCKET_NAME esté configurado
+    gcs_bucket_name = config_manager.get_env_variable("GCS_BUCKET_NAME")
+    if not gcs_bucket_name:
+        logger.error("Error: GCS_BUCKET_NAME no está configurado en las variables de entorno.")
+        sys.exit(1)
+    
     # Actualizar la configuración si se solicita no usar GPU
     if args.no_gpu:
         agent_config["use_gpu"] = False
@@ -225,7 +236,8 @@ def main():
         agent_manager.config["use_gpu"] = False
         agent_manager.device = "cpu"
     
-    # Cargar el modelo entrenado
+    # Cargar el modelo entrenado desde GCS
+    logger.info(f"Cargando modelo desde GCS: {args.model_path}")
     agent_manager.setup_agent(
         load_model=True,
         model_path=args.model_path

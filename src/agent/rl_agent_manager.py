@@ -11,6 +11,8 @@ from typing import Dict, Union, Optional, Any, Tuple
 import logging
 from pathlib import Path
 import torch
+import tempfile
+import time
 
 # Importaciones de Stable Baselines3
 from stable_baselines3 import SAC
@@ -22,6 +24,7 @@ from stable_baselines3.common.logger import configure
 from src.agent.custom_transformer_extractor import CustomTransformerFeatureExtractor
 from src.environments.trading_env import TradingEnvironment
 from src.utils.config import ConfigManager
+from src.utils.gcs_utils import upload_model_to_gcs, download_model_from_gcs
 
 # Configurar logging
 logging.basicConfig(
@@ -54,12 +57,15 @@ class RLAgentManager:
         self.env = None
         self.eval_env = None
         
+        # Obtener nombre del bucket de GCS
+        self.gcs_bucket_name = self.config_manager.get_env_variable("GCS_BUCKET_NAME")
+        if not self.gcs_bucket_name:
+            raise ValueError("Error: GCS_BUCKET_NAME no está configurado en las variables de entorno. Es obligatorio para el almacenamiento de modelos.")
+        
+        logger.info(f"Bucket de GCS configurado: {self.gcs_bucket_name}")
+        
         # Detectar y configurar el dispositivo (GPU o CPU)
         self.device = self._setup_device()
-        
-        # Crear directorios para guardar modelos si no existen
-        save_path_prefix = self.config.get("save_path_prefix", "models/sac_transformer_trading_agent")
-        os.makedirs(os.path.dirname(save_path_prefix), exist_ok=True)
         
     def _setup_device(self) -> str:
         """
@@ -128,7 +134,7 @@ class RLAgentManager:
         Args:
             env: Entorno de gymnasium (opcional, si ya está creado)
             load_model: Si se debe cargar un modelo existente
-            model_path: Ruta al modelo guardado (si load_model es True)
+            model_path: Ruta al modelo guardado en GCS (si load_model es True)
             
         Returns:
             Instancia del modelo SAC configurado
@@ -145,13 +151,14 @@ class RLAgentManager:
         # Si se debe cargar un modelo existente
         if load_model:
             if model_path is None:
+                # Si no se especifica ruta, intentar usar la configurada
                 model_path = self.config.get("model_path_to_load")
                 
             if model_path is None:
                 raise ValueError("Se solicitó cargar un modelo pero no se especificó la ruta")
                 
-            logger.info(f"Cargando modelo desde: {model_path}")
-            self.model = SAC.load(model_path, env=self.env)
+            logger.info(f"Cargando modelo desde GCS: {model_path}")
+            self.model = self.load_model(model_path)
             return self.model
             
         # --- Configuración de hiperparámetros del algoritmo SAC ---
@@ -214,25 +221,95 @@ class RLAgentManager:
         # Configurar callbacks por defecto si no se proporcionan
         if callbacks is None:
             save_freq = self.config.get("save_frequency_steps", 50000)
-            save_path = self.config.get("save_path_prefix", "models/sac_transformer_trading_agent")
             
-            # Callback para guardar el modelo periódicamente
-            checkpoint_callback = CheckpointCallback(
+            # Crear un directorio temporal para guardar los checkpoints localmente antes de subirlos a GCS
+            temp_save_dir = tempfile.mkdtemp(prefix="model_checkpoints_")
+            logger.info(f"Creando directorio temporal para checkpoints: {temp_save_dir}")
+            
+            # Callback personalizado para guardar checkpoints y subirlos a GCS
+            class GCSCheckpointCallback(CheckpointCallback):
+                def __init__(self, save_freq, save_path, gcs_bucket, gcs_path_prefix, *args, **kwargs):
+                    super().__init__(save_freq=save_freq, save_path=save_path, *args, **kwargs)
+                    self.gcs_bucket = gcs_bucket
+                    self.gcs_path_prefix = gcs_path_prefix
+                
+                def _on_step(self):
+                    if self.n_calls % self.save_freq == 0:
+                        # Primero guardamos localmente (implementación de la clase padre)
+                        super()._on_step()
+                        
+                        # Luego subimos a GCS el archivo más reciente guardado
+                        if hasattr(self, "last_save_path") and self.last_save_path:
+                            # Construir la ruta en GCS
+                            checkpoint_filename = os.path.basename(self.last_save_path)
+                            gcs_model_path = f"{self.gcs_bucket}/{self.gcs_path_prefix}/{checkpoint_filename}"
+                            
+                            # Subir a GCS
+                            try:
+                                gcs_url = upload_model_to_gcs(self.last_save_path, gcs_model_path)
+                                logger.info(f"Checkpoint subido a GCS: {gcs_url}")
+                            except Exception as e:
+                                logger.error(f"Error al subir checkpoint a GCS: {str(e)}")
+                    
+                    return True
+            
+            # Clase personalizada para guardar el mejor modelo en GCS
+            class GCSEvalCallback(EvalCallback):
+                def __init__(self, eval_env, gcs_bucket, gcs_path_prefix, *args, **kwargs):
+                    # Crear un directorio temporal para guardar el mejor modelo
+                    temp_best_dir = os.path.join(temp_save_dir, "best_model")
+                    os.makedirs(temp_best_dir, exist_ok=True)
+                    
+                    super().__init__(eval_env, best_model_save_path=temp_best_dir, *args, **kwargs)
+                    self.gcs_bucket = gcs_bucket
+                    self.gcs_path_prefix = gcs_path_prefix
+                
+                def _on_step(self):
+                    # Primero ejecutamos la lógica de evaluación de la clase padre
+                    result = super()._on_step()
+                    
+                    # Si se guardó un nuevo mejor modelo, lo subimos a GCS
+                    if self.best_model_save_path is not None and self.best_mean_reward > 0:
+                        # Construir la ruta al mejor modelo (coincide con lo que hace la clase base)
+                        best_model_path = os.path.join(self.best_model_save_path, "best_model")
+                        
+                        # Verificar si el archivo existe antes de intentar subirlo
+                        if os.path.exists(f"{best_model_path}.zip"):
+                            # Construir la ruta en GCS
+                            gcs_model_path = f"{self.gcs_bucket}/{self.gcs_path_prefix}/best_model/best_model.zip"
+                            
+                            # Subir a GCS
+                            try:
+                                gcs_url = upload_model_to_gcs(f"{best_model_path}.zip", gcs_model_path)
+                                logger.info(f"Mejor modelo subido a GCS: {gcs_url}")
+                            except Exception as e:
+                                logger.error(f"Error al subir mejor modelo a GCS: {str(e)}")
+                    
+                    return result
+            
+            # Obtener prefijo de ruta para modelos en GCS
+            gcs_path_prefix = self.config.get("gcs_models_path_prefix", "models/sac_transformer_trading_agent")
+            
+            # Instanciar los callbacks personalizados
+            checkpoint_callback = GCSCheckpointCallback(
                 save_freq=save_freq,
-                save_path=os.path.dirname(save_path),
-                name_prefix=os.path.basename(save_path),
+                save_path=temp_save_dir,
+                name_prefix="checkpoint",
                 save_replay_buffer=True,
-                save_vecnormalize=True
+                save_vecnormalize=True,
+                gcs_bucket=self.gcs_bucket_name,
+                gcs_path_prefix=gcs_path_prefix
             )
             
-            # Callback para evaluación
-            eval_callback = EvalCallback(
+            # Callback para evaluación y guardado del mejor modelo
+            eval_callback = GCSEvalCallback(
                 self.eval_env,
-                best_model_save_path=os.path.dirname(save_path) + "/best_model",
                 log_path="./logs/eval/",
                 eval_freq=save_freq,
                 n_eval_episodes=10,
-                deterministic=True
+                deterministic=True,
+                gcs_bucket=self.gcs_bucket_name,
+                gcs_path_prefix=gcs_path_prefix
             )
             
             callbacks = [checkpoint_callback, eval_callback]
@@ -247,10 +324,23 @@ class RLAgentManager:
         logger.info(f"Iniciando entrenamiento por {total_timesteps} pasos")
         self.model.learn(total_timesteps=total_timesteps, callback=callbacks)
         
-        # Guardar el modelo final
-        final_save_path = f"{self.config.get('save_path_prefix')}_final_{total_timesteps}_steps.zip"
-        self.model.save(final_save_path)
-        logger.info(f"Entrenamiento completado. Modelo guardado en {final_save_path}")
+        # Guardar el modelo final localmente primero
+        temp_final_model = tempfile.mktemp(suffix=".zip")
+        self.model.save(temp_final_model)
+        
+        # Subir modelo final a GCS
+        gcs_path_prefix = self.config.get("gcs_models_path_prefix", "models/sac_transformer_trading_agent")
+        final_model_name = f"sac_transformer_trading_agent_final_{total_timesteps}_steps.zip"
+        gcs_final_path = f"{self.gcs_bucket_name}/{gcs_path_prefix}/{final_model_name}"
+        
+        try:
+            gcs_url = upload_model_to_gcs(temp_final_model, gcs_final_path)
+            logger.info(f"Entrenamiento completado. Modelo final guardado en GCS: {gcs_url}")
+            # Eliminar el archivo temporal
+            os.remove(temp_final_model)
+        except Exception as e:
+            logger.error(f"Error al subir modelo final a GCS: {str(e)}")
+            logger.info(f"Modelo final guardado localmente en: {temp_final_model}")
         
         return self.model
     
@@ -273,41 +363,75 @@ class RLAgentManager:
         action, _states = self.model.predict(observation, deterministic=deterministic)
         return action
     
-    def save_model(self, path: Optional[str] = None) -> str:
+    def save_model(self, gcs_path: Optional[str] = None) -> str:
         """
-        Guarda el modelo en la ruta especificada.
+        Guarda el modelo en Google Cloud Storage.
         
         Args:
-            path: Ruta donde guardar el modelo (opcional)
+            gcs_path: Ruta en GCS donde guardar el modelo (opcional, sin gs://)
+                     Formato: "path/to/model.zip" (se añade el bucket automáticamente)
             
         Returns:
-            La ruta donde se guardó el modelo
+            La URL completa del modelo en GCS (gs://bucket/path/to/model.zip)
         """
         if self.model is None:
             raise ValueError("No hay modelo para guardar. Llame a setup_agent primero.")
             
-        if path is None:
+        # Guardar primero en un archivo temporal
+        temp_model_path = tempfile.mktemp(suffix=".zip")
+        self.model.save(temp_model_path)
+        logger.info(f"Modelo guardado temporalmente en: {temp_model_path}")
+        
+        # Determinar la ruta en GCS
+        if gcs_path is None:
             # Generar un nombre basado en la configuración
-            path = f"{self.config.get('save_path_prefix', 'models/sac_transformer_trading_agent')}.zip"
+            gcs_path_prefix = self.config.get("gcs_models_path_prefix", "models/sac_transformer_trading_agent")
+            gcs_path = f"{gcs_path_prefix}/model_{int(time.time())}.zip"
             
-        self.model.save(path)
-        logger.info(f"Modelo guardado en: {path}")
-        return path
+        # Ruta completa en GCS incluyendo el bucket
+        full_gcs_path = f"{self.gcs_bucket_name}/{gcs_path}"
+        
+        # Subir a GCS
+        try:
+            gcs_url = upload_model_to_gcs(temp_model_path, full_gcs_path)
+            # Eliminar el archivo temporal
+            os.remove(temp_model_path)
+            logger.info(f"Modelo subido exitosamente a GCS: {gcs_url}")
+            return gcs_url
+        except Exception as e:
+            logger.error(f"Error al subir modelo a GCS: {str(e)}")
+            logger.info(f"El modelo permanece guardado localmente en: {temp_model_path}")
+            raise
     
-    def load_model(self, path: str) -> SAC:
+    def load_model(self, gcs_path: str) -> SAC:
         """
-        Carga un modelo guardado.
+        Carga un modelo guardado desde Google Cloud Storage.
         
         Args:
-            path: Ruta al modelo guardado
+            gcs_path: Ruta al modelo en GCS (sin gs://)
+                     Formato: "path/to/model.zip" o "bucket_name/path/to/model.zip"
             
         Returns:
             El modelo cargado
         """
-        if not os.path.exists(path):
-            raise FileNotFoundError(f"No se encontró el archivo del modelo en: {path}")
+        # Si la ruta no incluye el bucket, añadirlo
+        if not '/' in gcs_path or not gcs_path.startswith(self.gcs_bucket_name):
+            full_gcs_path = f"{self.gcs_bucket_name}/{gcs_path}"
+        else:
+            full_gcs_path = gcs_path
+        
+        # Descargar desde GCS
+        try:
+            local_model_path = download_model_from_gcs(full_gcs_path)
+        except Exception as e:
+            logger.error(f"Error al descargar modelo desde GCS: {str(e)}")
+            raise FileNotFoundError(f"No se pudo descargar el modelo desde GCS: {str(e)}")
         
         # Cargar el modelo especificando el dispositivo
-        self.model = SAC.load(path, env=self.env, device=self.device)
-        logger.info(f"Modelo cargado desde: {path} en dispositivo: {self.device}")
+        self.model = SAC.load(local_model_path, env=self.env, device=self.device)
+        logger.info(f"Modelo cargado desde GCS: gs://{full_gcs_path} en dispositivo: {self.device}")
+        
+        # Eliminar el archivo local después de cargarlo
+        os.remove(local_model_path)
+        
         return self.model
