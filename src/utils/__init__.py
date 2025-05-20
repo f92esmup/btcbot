@@ -2,4 +2,5 @@
 Inicializador del paquete utils
 """
 
-from src.utils.inference_utils import InferenceOptimizer
+# No importar InferenceOptimizer aquí para evitar importaciones circulares
+# Las clases y funciones se importarán directamente cuando se necesiten

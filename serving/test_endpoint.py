@@ -15,7 +15,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger("EndpointTest")
 
-def create_sample_data(sequence_length: int = 96, portfolio_features_size: int = 4) -> Dict[str, List]:
+def create_sample_data(sequence_length: int = 96, portfolio_features_size: int = 8) -> Dict[str, List]:
     """
     Crea datos de ejemplo para enviar al endpoint.
     
@@ -33,7 +33,7 @@ def create_sample_data(sequence_length: int = 96, portfolio_features_size: int =
     market_features = np.random.randn(sequence_length, num_market_features).astype(np.float32)
     
     # Generar datos aleatorios para las características del portafolio
-    # Normalmente: [equity_usd, position_size_btc, avg_entry_price, unrealized_pnl_pct]
+    # El modelo espera 8 características según el error
     portfolio_features = np.random.randn(portfolio_features_size).astype(np.float32)
     
     # Convertir a listas para serialización JSON
@@ -136,7 +136,7 @@ if __name__ == "__main__":
                         help="URL del endpoint local (solo para modo local)")
     parser.add_argument("--project-id", help="ID del proyecto de Google Cloud (solo para modo vertex)")
     parser.add_argument("--endpoint-id", help="ID del endpoint en Vertex AI (solo para modo vertex)")
-    parser.add_argument("--location", default="us-central1",
+    parser.add_argument("--location", default="europe-southwest1",
                         help="Región donde está desplegado el endpoint (solo para modo vertex)")
     
     args = parser.parse_args()

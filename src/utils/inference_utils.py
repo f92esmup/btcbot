@@ -14,9 +14,7 @@ from pathlib import Path
 import tempfile
 from google.cloud import storage
 
-# Importaciones locales
-from src.agent.rl_agent_manager import RLAgentManager
-from src.utils.config import ConfigManager
+# Importaciones de Stable Baselines
 from stable_baselines3 import SAC
 
 logger = logging.getLogger("inference_utils")
@@ -27,7 +25,7 @@ class InferenceOptimizer:
     """
     
     @staticmethod
-    def load_model_for_inference(model_path: str, config_path: str = "src/config.yaml") -> RLAgentManager:
+    def load_model_for_inference(model_path: str, config_path: str = "src/config.yaml"):
         """
         Carga el modelo entrenado desde GCS de forma optimizada para inferencia.
         
@@ -38,6 +36,9 @@ class InferenceOptimizer:
         Returns:
             RLAgentManager con el modelo cargado para inferencia
         """
+        # Importar RLAgentManager aquí para evitar importaciones circulares
+        from src.agent.rl_agent_manager import RLAgentManager
+        
         # Inicializar el administrador del agente
         agent_manager = RLAgentManager(config_path=config_path)
         
@@ -93,7 +94,7 @@ class InferenceOptimizer:
         return env
     
     @staticmethod
-    def load_model_from_gcs(agent_manager: RLAgentManager, env: gym.Env, model_path: str) -> None:
+    def load_model_from_gcs(agent_manager, env: gym.Env, model_path: str):
         """
         Carga un modelo directamente desde GCS.
         
