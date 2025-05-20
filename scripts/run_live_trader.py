@@ -12,6 +12,7 @@ import datetime
 from typing import Dict, Any, Optional, List, Tuple
 import requests
 import signal
+import argparse
 
 # Asegurar que src esté en el PYTHONPATH para importaciones
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -26,6 +27,27 @@ from src.live.portfolio_feature_builder import PortfolioFeatureBuilder
 # Configurar logger principal
 logger = setup_logger("LiveTrader")
 
+def parse_arguments():
+    parser = argparse.ArgumentParser(description="BTCBot Live Trader")
+    parser.add_argument(
+        "--config_path",
+        type=str,
+        default="src/config.yaml",
+        help="Ruta al archivo de configuración centralizada"
+    )
+    parser.add_argument(
+        "--use_local_server",
+        action="store_true",
+        help="Usar el servidor de inferencia local en vez de Vertex AI"
+    )
+    parser.add_argument(
+        "--local_predict_url",
+        type=str,
+        default="http://localhost:8080/predict",
+        help="URL del endpoint local de inferencia (por defecto: http://localhost:8080/predict)"
+    )
+    return parser.parse_args()
+
 class LiveTrader:
     """
     Orquestador principal para el trading en vivo.
@@ -38,8 +60,8 @@ class LiveTrader:
     5. Ejecutar decisiones de trading basadas en las predicciones
     6. Manejar la lógica de posiciones y la gestión de errores
     """
-    def __init__(self):
-        self.config_manager = ConfigManager()
+    def __init__(self, args=None):
+        self.config_manager = ConfigManager(args.config_path if args else None)
         self.notification_queue = asyncio.Queue()
         self.shutdown_event = asyncio.Event()
         
@@ -57,11 +79,16 @@ class LiveTrader:
         # Obtener lookback para datos de mercado
         self.lookback_candles = self.live_trading_config.get('market_data_lookback_candles', 250)
         
-        # Configurar endpoint de Vertex AI
-        self.vertex_ai_predict_url = self.live_trading_config.get('vertex_ai_predict_url', "")
-        if not self.vertex_ai_predict_url or self.vertex_ai_predict_url == "REEMPLAZAR_CON_URL_ENDPOINT_VERTEX_AI":
-            logger.error("URL de endpoint de Vertex AI no configurada correctamente en config.yaml")
-            raise ValueError("URL de endpoint de Vertex AI no configurada. Actualice 'vertex_ai_predict_url' en config.yaml")
+        # Configurar endpoint para predicciones
+        # Puede ser un endpoint de Vertex AI o un servidor local
+        if args and args.use_local_server:
+            self.vertex_ai_predict_url = args.local_predict_url
+            logger.info(f"Usando endpoint local: {self.vertex_ai_predict_url}")
+        else:
+            self.vertex_ai_predict_url = self.live_trading_config.get('vertex_ai_predict_url', "")
+            if not self.vertex_ai_predict_url or self.vertex_ai_predict_url == "REEMPLAZAR_CON_URL_ENDPOINT_VERTEX_AI":
+                logger.error("URL de endpoint no configurada correctamente en config.yaml")
+                raise ValueError("URL de endpoint no configurada. Actualice 'vertex_ai_predict_url' en config.yaml o use --use_local_server")
         
         # Inicialización de gestores
         self.websocket_manager = LiveWebsocketManager(self.config_manager, self.notification_queue)
@@ -235,7 +262,7 @@ class LiveTrader:
                                 market_features: np.ndarray, 
                                 portfolio_features: np.ndarray) -> Optional[float]:
         """
-        Obtiene predicción del modelo desde Vertex AI.
+        Obtiene predicción del modelo desde Vertex AI o servidor local.
         
         Args:
             market_features: Características de mercado para el modelo
@@ -254,31 +281,42 @@ class LiveTrader:
             portfolio_features_list = portfolio_features.tolist()
             
             # Preparar payload para el endpoint en formato JSON
-            payload = {
-                "instances": [
-                    {
-                        "market_features": market_features_list,
-                        "portfolio_features": portfolio_features_list
-                    }
-                ]
-            }
+            # Para servidor local, usamos formato directo
+            # Para Vertex AI, usamos formato con "instances"
+            is_local_endpoint = "localhost" in self.vertex_ai_predict_url or "127.0.0.1" in self.vertex_ai_predict_url
+            
+            if is_local_endpoint:
+                payload = {
+                    "market_features": market_features_list,
+                    "portfolio_features": portfolio_features_list
+                }
+            else:
+                # Formato para Vertex AI
+                payload = {
+                    "instances": [
+                        {
+                            "market_features": market_features_list,
+                            "portfolio_features": portfolio_features_list
+                        }
+                    ]
+                }
             
             # Comprobar tamaño del payload (logging)
             payload_size_kb = sys.getsizeof(json.dumps(payload)) / 1024
             logger.debug(f"Tamaño del payload: {payload_size_kb:.2f} KB")
             
-            # Configurar encabezados para la API de Vertex AI
-            headers = {
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {os.environ.get('GOOGLE_APPLICATION_CREDENTIALS')}"
-            }
+            # Configurar encabezados según el tipo de endpoint
+            headers = {"Content-Type": "application/json"}
+            
+            # Añadir autenticación solo si no es local
+            if not is_local_endpoint and os.environ.get('GOOGLE_APPLICATION_CREDENTIALS'):
+                headers["Authorization"] = f"Bearer {os.environ.get('GOOGLE_APPLICATION_CREDENTIALS')}"
             
             # Realizar la solicitud HTTP
             logger.debug(f"Enviando solicitud a endpoint: {self.vertex_ai_predict_url}")
             start_time = time.time()
             
-            # Usar requests en lugar de aiohttp para simplicidad con credenciales ADC
-            # En un entorno de producción real, podría ser mejor usar aiohttp con autenticación adecuada
+            # Usar requests en lugar de aiohttp para simplicidad
             response = requests.post(
                 self.vertex_ai_predict_url,
                 json=payload,
@@ -289,19 +327,31 @@ class LiveTrader:
             logger.debug(f"Respuesta recibida en {elapsed_time:.2f}s, status: {response.status_code}")
             
             if response.status_code != 200:
-                logger.error(f"Error llamando al endpoint de Vertex AI: HTTP {response.status_code}, {response.text}")
+                logger.error(f"Error llamando al endpoint: HTTP {response.status_code}, {response.text}")
                 return None
             
             # Parsear la respuesta y extraer el valor de acción
             response_data = response.json()
-            if 'predictions' not in response_data or not response_data['predictions']:
-                logger.error(f"Formato de respuesta inválido: {response_data}")
-                return None
+            
+            # La respuesta depende del tipo de servidor
+            if is_local_endpoint:
+                # Para servidor local, el formato es directo
+                if 'action_value' in response_data:
+                    action_value = float(response_data['action_value'])
+                elif 'action' in response_data and isinstance(response_data['action'], list):
+                    action_value = float(response_data['action'][0])
+                else:
+                    logger.error(f"Formato de respuesta local inválido: {response_data}")
+                    return None
+            else:
+                # Para Vertex AI, el formato incluye 'predictions'
+                if 'predictions' not in response_data or not response_data['predictions']:
+                    logger.error(f"Formato de respuesta Vertex AI inválido: {response_data}")
+                    return None
+                    
+                # La estructura esperada es ['predictions'][0][0]
+                action_value = float(response_data['predictions'][0][0])
                 
-            # La estructura esperada es ['predictions'][0][0]
-            # El primer [0] es para tomar la primera predicción del batch
-            # El segundo [0] es porque el modelo devuelve un array con un solo valor
-            action_value = float(response_data['predictions'][0][0])
             logger.info(f"Predicción recibida: {action_value:.4f}")
             
             return action_value
@@ -536,7 +586,8 @@ class LiveTrader:
 async def main():
     """Función principal para iniciar el LiveTrader."""
     logger.info("Iniciando BTCBot en modo trading en vivo...")
-    trader = LiveTrader()
+    args = parse_arguments()
+    trader = LiveTrader(args)
     await trader.start()
 
 if __name__ == "__main__":

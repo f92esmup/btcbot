@@ -171,7 +171,7 @@ live_trading:
   # ID "crudo" del endpoint de Vertex AI (solo el número identificador del endpoint)
   # EJEMPLO: vertex_ai_endpoint_raw_id: "1234567890123456789"
   vertex_ai_endpoint_raw_id: "REEMPLAZAR_CON_ID_ENDPOINT_VERTEX_AI"
-
+  
   # Número de velas a descargar para el preprocesamiento en cada ciclo de decisión
   # Debe ser suficiente para las ventanas de normalización e indicadores.
   # Ej: Si L=96 y normalization_window_multiplier_for_L=2, la ventana de normalización es 192.

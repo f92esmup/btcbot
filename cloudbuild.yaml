@@ -53,7 +53,7 @@ steps:
 - name: 'gcr.io/cloud-builders/docker'
   args: ['push', '${_ARTIFACT_REGISTRY}/${_PROJECT_ID}/${_REPOSITORY_NAME}/btcbot-cpu:latest']
 
-logsBucket: 'gs://bitcoin-460320_cloudbuild' # Reemplaza con el nombre de tu bucket
+logsBucket: 'gs://lofty-complex-460416-r6_cloudbuild' # Reemplaza con el nombre de tu bucket
 
 substitutions:
   # Valores configurados para tu proyecto y repositorio

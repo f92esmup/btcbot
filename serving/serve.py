@@ -1,4 +1,5 @@
 import os
+import sys
 import json
 import numpy as np
 import logging
@@ -6,6 +7,9 @@ import argparse
 from flask import Flask, request, jsonify
 import gunicorn.app.base
 from typing import Dict, Any
+
+# Añadir directorio raíz al PYTHONPATH para importaciones
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # Importaciones locales
 from src.agent.rl_agent_manager import RLAgentManager
@@ -29,14 +33,14 @@ def parse_arguments():
     """
     parser = argparse.ArgumentParser(description="Servidor de inferencia para el modelo RL de trading")
     parser.add_argument(
-        "--model_path", 
-        type=str, 
-        required=True,
+        "--model_path",
+        type=str,
+        default="lofty-complex-460416-r6/models/sac_transformer_trading_agent/sac_transformer_trading_agent_final_1000_steps.zip",
         help="Ruta completa en GCS donde se encuentra el modelo entrenado (gs://bucket/path/to/model)"
     )
     parser.add_argument(
-        "--config_path", 
-        type=str, 
+        "--config_path",
+        type=str,
         default="src/config.yaml",
         help="Ruta al archivo de configuración (predeterminado: src/config.yaml)"
     )
