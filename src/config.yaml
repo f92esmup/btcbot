@@ -158,3 +158,40 @@ agent:
   gcs_models_path_prefix: "models/sac_transformer_trading_agent"  # Prefijo para guardado en GCS
   save_frequency_steps: 50000
   use_gpu: true  # Activar para usar GPU (CUDA/MPS) si está disponible
+
+# =====================================================================
+# Configuración de Trading en Vivo
+# =====================================================================
+live_trading:
+  # URL completa del endpoint de predicción en Vertex AI
+  # Formato: https://{region}-aiplatform.googleapis.com/v1/projects/{project_id}/locations/{region}/endpoints/{endpoint_id}:predict
+  # EJEMPLO: vertex_ai_predict_url: "https://europe-southwest1-aiplatform.googleapis.com/v1/projects/bitcoin-460320/locations/europe-southwest1/endpoints/1234567890123456789:predict"
+  vertex_ai_predict_url: "REEMPLAZAR_CON_URL_ENDPOINT_VERTEX_AI"
+  
+  # ID "crudo" del endpoint de Vertex AI (solo el número identificador del endpoint)
+  # EJEMPLO: vertex_ai_endpoint_raw_id: "1234567890123456789"
+  vertex_ai_endpoint_raw_id: "REEMPLAZAR_CON_ID_ENDPOINT_VERTEX_AI"
+
+  # Número de velas a descargar para el preprocesamiento en cada ciclo de decisión
+  # Debe ser suficiente para las ventanas de normalización e indicadores.
+  # Ej: Si L=96 y normalization_window_multiplier_for_L=2, la ventana de normalización es 192.
+  # Necesitarás al menos 192 velas + (periodos de indicadores más largos) para que la última vela tenga features normalizadas válidas.
+  market_data_lookback_candles: 250 # Ajustar según sea necesario
+
+  # Segundos a esperar entre reintentos de conexión del WebSocket si falla
+  websocket_retry_delay_seconds: 10
+  # Segundos a esperar antes de reintentar el ciclo principal si ocurre un error inesperado
+  websocket_unexpected_error_delay_seconds: 30
+
+  # Configuración para la disponibilidad de la última kline en la API REST
+  # A veces, después de que el WebSocket notifica el cierre, la API REST puede tardar un instante en tenerla.
+  kline_availability_retry_delay_seconds: 5  # Segundos de espera entre reintentos
+  kline_availability_max_retries: 12         # Máximo número de reintentos (ej. 12 * 5s = 1 minuto)
+
+  # Pequeña pausa opcional en segundos después de cerrar una posición antes de evaluar abrir una nueva.
+  post_close_delay_seconds: 1
+
+  # Configuración para el logging en CSV a GCS
+  gcs_log_path_template: "live_trading_logs/{symbol}_{interval}/{date}.csv" # {symbol}, {interval}, {date} serán reemplazados
+  log_buffer_size_records: 50    # Número de registros a acumular antes de subir a GCS
+  gcs_log_upload_interval_seconds: 3600 # Intervalo máximo en segundos para subir logs (ej. 1 hora)

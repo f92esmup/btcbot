@@ -76,7 +76,12 @@ class ConfigManager:
             Valor de la variable o secreto
         """
         # Valores considerados secretos (claves de API, etc.) - SOLO obtenerse de Secret Manager
-        secretos = ["BINANCE_API_KEY_FUTURES", "BINANCE_API_SECRET_FUTURES"]
+        secretos = [
+            "BINANCE_API_KEY_FUTURES", 
+            "BINANCE_API_SECRET_FUTURES",
+            "TESTNET_BINANCE_API_KEY_FUTURES",    # Nombre del secreto para la API Key de Testnet
+            "TESTNET_BINANCE_API_SECRET_FUTURES"  # Nombre del secreto para la API Secret de Testnet
+        ]
         
         # Si es un valor secreto, solo buscarlo en Secret Manager
         if var_name in secretos:
