@@ -58,6 +58,7 @@ class LiveBinanceAPIManager:
             msg = f"API Key o Secret no pudieron ser recuperados de Secret Manager para el modo {self.trading_mode} (valores None o vacíos)."
             logger.critical(msg)
             raise ValueError(msg)
+            
         logger.info(f"Credenciales para {self.trading_mode} cargadas en memoria (no se mostrarán).")
 
 

@@ -31,6 +31,10 @@ class LiveWebsocketManager:
         else: # REAL
             self.websocket_url = f"wss://fstream.binance.com/ws/{self.symbol}@kline_{self.interval}"
         
+        # Para control de cierre
+        self.is_running = False
+        self.connection_task = None
+        
         logger.info(f"LiveWebsocketManager inicializado para {self.symbol}@{self.interval} en endpoint {self.trading_mode}: {self.websocket_url}")
 
     async def _process_message(self, message_str: str):
@@ -55,8 +59,9 @@ class LiveWebsocketManager:
             logger.error(f"Error procesando mensaje de WebSocket: {e}", exc_info=True)
 
     async def run(self):
+        self.is_running = True
         logger.info(f"Iniciando conexión WebSocket a {self.websocket_url}")
-        while True: # Bucle externo para reconexión
+        while self.is_running: # Bucle externo para reconexión
             try:
                 async with websockets.connect(self.websocket_url) as ws_client:
                     logger.info(f"Conectado exitosamente al WebSocket: {self.websocket_url}")
@@ -91,3 +96,23 @@ class LiveWebsocketManager:
                 pass # Simplemente procederá al delay de reconexión de abajo
 
             await asyncio.sleep(self.retry_delay) # Esperar antes de reintentar la conexión en el bucle externo
+
+    async def close(self):
+        """Cierra limpiamente la conexión websocket."""
+        logger.info("Cerrando conexión WebSocket...")
+        self.is_running = False
+        
+        # Cancelar la tarea de conexión si existe
+        if self.connection_task and not self.connection_task.done():
+            self.connection_task.cancel()
+            try:
+                # Dar un tiempo máximo de 5 segundos para cierre limpio
+                await asyncio.wait_for(asyncio.shield(self.connection_task), timeout=5.0)
+            except asyncio.TimeoutError:
+                logger.warning("Tiempo de espera agotado al cerrar WebSocket, forzando cierre.")
+            except asyncio.CancelledError:
+                logger.debug("Tarea de WebSocket cancelada correctamente.")
+            except Exception as e:
+                logger.error(f"Error al cerrar WebSocket: {e}")
+        
+        logger.info("WebSocket cerrado correctamente.")

@@ -114,7 +114,8 @@ class LiveTrader:
             # Registrar manejador de señal para finalización ordenada
             for sig in (signal.SIGINT, signal.SIGTERM):
                 asyncio.get_running_loop().add_signal_handler(
-                    sig, lambda: asyncio.create_task(self.shutdown()))
+                    sig, lambda s=sig: asyncio.create_task(
+                        self.handle_signal(s)))
             
             # Inicializar cliente de API
             await self.api_manager.initialize_client()
@@ -129,12 +130,17 @@ class LiveTrader:
             # Crear y ejecutar tareas
             websocket_task = asyncio.create_task(
                 self.websocket_manager.run(), name="websocket_manager")
+            # Almacenar la tarea en el gestor de websocket para poder cerrarla después
+            self.websocket_manager.connection_task = websocket_task
+            
             trader_task = asyncio.create_task(
                 self.trading_loop(), name="trading_loop")
+            shutdown_task = asyncio.create_task(
+                self.shutdown_event.wait(), name="shutdown_waiter")
             
             # Esperar a que alguna de las tareas termine, o hasta que se solicite shutdown
             await asyncio.wait(
-                [websocket_task, trader_task, self.shutdown_event.wait()],
+                [websocket_task, trader_task, shutdown_task],
                 return_when=asyncio.FIRST_COMPLETED
             )
             
@@ -160,6 +166,10 @@ class LiveTrader:
         # Forzar una última subida de logs pendientes
         await self.upload_trading_logs()
         
+        # Asegurarse de que el websocket se cierre correctamente
+        if hasattr(self, 'websocket_manager'):
+            await self.websocket_manager.close()
+            
         logger.info("LiveTrader finalizado correctamente.")
 
     async def trading_loop(self):
@@ -582,6 +592,11 @@ class LiveTrader:
                 
         except Exception as e:
             logger.error(f"Error en upload_trading_logs: {e}", exc_info=True)
+
+    async def handle_signal(self, sig):
+        """Maneja señales del sistema como SIGINT y SIGTERM."""
+        logger.info(f"Recibida señal {sig.name}. Iniciando apagado ordenado...")
+        await self.shutdown()
 
 async def main():
     """Función principal para iniciar el LiveTrader."""
