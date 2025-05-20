@@ -9,16 +9,10 @@ if project_root not in sys.path:
 
 from src.utils.config import ConfigManager
 from src.data.binance_futures_downloader import BinanceFuturesDownloader
+from src.utils.logging_utils import setup_logger
 
-# Configuración básica del logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.StreamHandler(sys.stdout) # Para ver logs en consola
-    ]
-)
-logger = logging.getLogger(__name__)
+# Configurar logging
+logger = setup_logger("DataDownloader")
 
 def main():
     logger.info("Iniciando script de descarga de datos históricos.")

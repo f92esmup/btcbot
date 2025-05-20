@@ -9,13 +9,10 @@ from typing import Dict, Any
 # Importaciones locales
 from src.agent.rl_agent_manager import RLAgentManager
 from src.environments.trading_env import TradingEnvironment
+from src.utils.logging_utils import setup_logger
 
 # Configurar logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger("Server")
+logger = setup_logger("Server")
 
 # Inicializar Flask app
 app = Flask(__name__)

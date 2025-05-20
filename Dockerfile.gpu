@@ -45,6 +45,8 @@ ENV TF_FORCE_GPU_ALLOW_GROWTH=true
 ENV GCP_PROJECT_ID="bitcoin-460320"
 ENV GCS_BUCKET_NAME="bitcoin-460320_data"
 ENV GCP_REGION="europe-southwest1"
+ENV USE_CLOUD_LOGGING="true"
+ENV ENVIRONMENT="production"
 
 # No se configura GOOGLE_APPLICATION_CREDENTIALS para permitir ADC
 # La autenticación se realizará mediante Workload Identity o

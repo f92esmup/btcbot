@@ -17,17 +17,14 @@ sys.path.insert(0, project_root)
 # Importaciones locales
 from src.agent.rl_agent_manager import RLAgentManager
 from src.utils.config import ConfigManager
+from src.utils.logging_utils import setup_logger
 from dotenv import load_dotenv
 
 # Cargar variables de entorno
 load_dotenv()
 
 # Configurar logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger("TrainRLAgent")
+logger = setup_logger("TrainRLAgent")
 
 
 def parse_arguments():

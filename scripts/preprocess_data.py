@@ -10,15 +10,10 @@ if project_root not in sys.path:
 
 from src.utils.config import ConfigManager
 from src.data.preprocessor import DataPreprocessor
+from src.utils.logging_utils import setup_logger
 
-def setup_logging():
-    """Configura el sistema de logging."""
-    logging.basicConfig(
-        level=logging.INFO,  # Cambiar a logging.DEBUG para más detalle
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-        handlers=[logging.StreamHandler(sys.stdout)]
-    )
-    return logging.getLogger(__name__)
+# Configurar logging
+logger = setup_logger("DataPreprocessor")
 
 def parse_arguments():
     """Parsea los argumentos de línea de comandos."""
@@ -35,7 +30,7 @@ def parse_arguments():
 def main():
     """Función principal."""
     # Configurar logging
-    logger = setup_logging()
+    logger = setup_logger("DataPreprocessor")
     logger.info("Iniciando script de preprocesamiento de datos.")
     
     # Parsear argumentos

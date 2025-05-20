@@ -17,10 +17,10 @@ print(f"Directorio raíz añadido: {os.path.dirname(os.path.dirname(os.path.absp
 # Importa el entorno
 from src.environments import TradingEnvironment
 from src.utils.config import ConfigManager
+from src.utils.logging_utils import setup_logger
 
 # Configurar logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-logger = logging.getLogger('TestEnv')
+logger = setup_logger('TestEnv')
 
 class PerformanceMonitor:
     """
