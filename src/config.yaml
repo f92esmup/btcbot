@@ -99,32 +99,6 @@ environment:
   taker_fee_rate: 0.0004         # Comisión de Taker (0.04%)
   slippage_atr_multiplier: 0.1   # Multiplicador de ATR(14) para el slippage (por lado)
   min_order_size_btc: 0.001      # Mínimo tamaño de orden en BTC (o la unidad base)
-  action_threshold: 0.2          # Umbral para convertir el valor continuo de acción en una decisión (-1/0/1)
-
-# =====================================================================
-# Configuración de Trading en Vivo
-# =====================================================================
-live_trading:
-  # URL completa del endpoint de predicción en Vertex AI
-  # Formato: https://{region}[-aiplatform.googleapis.com/v1/projects/](https://-aiplatform.googleapis.com/v1/projects/){project_id}/locations/{region}/endpoints/{endpoint_id}:predict
-  vertex_ai_predict_url: "https://europe-southwest1-aiplatform.googleapis.com/v1/projects/TU_GCP_PROJECT_ID/locations/europe-southwest1/endpoints/TU_ENDPOINT_ID:predict" # REEMPLAZAR ESTOS VALORES
-      
-  # ID "crudo" del endpoint de Vertex AI (solo el número, para usar con la SDK de aiplatform)
-  vertex_ai_endpoint_raw_id: "TU_ENDPOINT_ID" # REEMPLAZAR ESTE VALOR
-
-  # Número de velas a descargar para el preprocesamiento en cada ciclo
-  market_data_lookback_candles: 250 
-
-  # Segundos a esperar entre reintentos de conexión del WebSocket
-  websocket_retry_delay_seconds: 10
-  websocket_unexpected_error_delay_seconds: 30
-
-  # Segundos a esperar entre reintentos para obtener la última vela cerrada si no está disponible inmediatamente
-  kline_availability_retry_delay_seconds: 5
-  kline_availability_max_retries: 12 # ej. 12 * 5s = 1 minuto de reintentos
-
-  # Pequeña pausa en segundos después de cerrar una posición antes de abrir una nueva (si aplica)
-  post_close_delay_seconds: 1
 
   # --- Lógica de Acción del Agente ---
   action_threshold: 0.15    # Umbral para interpretar la señal continua del agente

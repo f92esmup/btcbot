@@ -2,14 +2,16 @@ import os
 import json
 import numpy as np
 import logging
+import argparse
 from flask import Flask, request, jsonify
 import gunicorn.app.base
 from typing import Dict, Any
 
 # Importaciones locales
 from src.agent.rl_agent_manager import RLAgentManager
-from src.environments.trading_env import TradingEnvironment
 from src.utils.logging_utils import setup_logger
+from src.utils.config import ConfigManager
+from src.utils.inference_utils import InferenceOptimizer
 
 # Configurar logging
 logger = setup_logger("Server")
@@ -21,28 +23,43 @@ app = Flask(__name__)
 agent_manager = None
 config_path = "src/config.yaml"
 
-def load_model():
+def parse_arguments():
     """
-    Carga el modelo entrenado desde GCS al iniciar el servidor.
-    Utiliza la variable de entorno MODEL_PATH para determinar qué modelo cargar.
+    Parsea los argumentos de línea de comandos.
+    """
+    parser = argparse.ArgumentParser(description="Servidor de inferencia para el modelo RL de trading")
+    parser.add_argument(
+        "--model_path", 
+        type=str, 
+        required=True,
+        help="Ruta completa en GCS donde se encuentra el modelo entrenado (gs://bucket/path/to/model)"
+    )
+    parser.add_argument(
+        "--config_path", 
+        type=str, 
+        default="src/config.yaml",
+        help="Ruta al archivo de configuración (predeterminado: src/config.yaml)"
+    )
+    return parser.parse_args()
+
+def load_model(model_path, config_path):
+    """
+    Carga el modelo entrenado desde GCS al iniciar el servidor,
+    utilizando optimizaciones para inferencia.
+    
+    Args:
+        model_path (str): Ruta completa en GCS donde se encuentra el modelo
+        config_path (str): Ruta al archivo de configuración
     """
     global agent_manager
     
-    # Obtener ruta del modelo desde variables de entorno
-    model_path = os.environ.get('MODEL_PATH')
     if not model_path:
-        raise ValueError("La variable de entorno MODEL_PATH no está configurada. Debe especificar la ruta GCS del modelo.")
+        raise ValueError("Se debe proporcionar la ruta del modelo (--model_path)")
     
     logger.info(f"Cargando modelo desde: {model_path}")
     
-    # Inicializar el administrador del agente
-    agent_manager = RLAgentManager(config_path=config_path)
-    
-    # Crear un entorno de trading para poder cargar el modelo
-    env = agent_manager.setup_environment()
-    
-    # Cargar el modelo
-    agent_manager.setup_agent(env=env, load_model=True, model_path=model_path)
+    # Cargar el modelo optimizado para inferencia
+    agent_manager = InferenceOptimizer.load_model_for_inference(model_path, config_path)
     
     logger.info("Modelo cargado exitosamente")
     return agent_manager
@@ -130,23 +147,20 @@ class StandaloneApplication(gunicorn.app.base.BaseApplication):
         return self.application
 
 if __name__ == "__main__":
-    # Cargar el modelo al iniciar
-    load_model()
+    # Parsear argumentos de línea de comandos
+    args = parse_arguments()
     
-    # Configuración para producción con Gunicorn
-    if os.environ.get('ENVIRONMENT') == 'production':
-        # Configuración de Gunicorn
-        options = {
-            'bind': '0.0.0.0:8080',
-            'workers': 1,  # Para modelos ML complejos, a menudo se usa solo 1 worker
-            'timeout': 120,  # Timeout en segundos
-            'preload_app': True,  # Precarga la aplicación para que el modelo se cargue una sola vez
-        }
-        
-        # Iniciar Gunicorn
-        logger.info("Iniciando servidor Gunicorn en modo producción")
-        StandaloneApplication(app, options).run()
-    else:
-        # Para desarrollo, usar el servidor de Flask
-        logger.info("Iniciando servidor Flask en modo desarrollo")
-        app.run(host='0.0.0.0', port=8080, debug=False)
+    # Cargar el modelo al iniciar
+    load_model(model_path=args.model_path, config_path=args.config_path)
+    
+    # Siempre usar Gunicorn para producción y consistencia
+    options = {
+        'bind': '0.0.0.0:8080',
+        'workers': 1,  # Para modelos ML complejos, a menudo se usa solo 1 worker
+        'timeout': 120,  # Timeout en segundos
+        'preload_app': True,  # Precarga la aplicación para que el modelo se cargue una sola vez
+    }
+    
+    # Iniciar Gunicorn
+    logger.info("Iniciando servidor Gunicorn")
+    StandaloneApplication(app, options).run()
