@@ -30,8 +30,8 @@ RUN pip install --no-cache-dir google-cloud-storage google-cloud-secret-manager 
 # Copia del código fuente del proyecto
 COPY . .
 
-# Copia el archivo .env-example como referencia
-COPY .env-example /app/.env-example
+# Copia el archivo .env.example como referencia
+# COPY .env.example /app/.env-example
 
 # Creación de directorios necesarios
 RUN mkdir -p logs/training logs/eval models/best_model
