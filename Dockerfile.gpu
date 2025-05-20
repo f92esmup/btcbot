@@ -47,6 +47,9 @@ ENV GCS_BUCKET_NAME="lofty-complex-460416-r6"
 ENV GCP_REGION="europe-southwest1"
 ENV USE_CLOUD_LOGGING="true"
 
+# IMPORTANTE: Exponer el puerto 8080 que Vertex AI utilizará
+EXPOSE 8080
+
 # No se configura GOOGLE_APPLICATION_CREDENTIALS para permitir ADC
 # La autenticación se realizará mediante Workload Identity o
 # configurando credenciales en tiempo de ejecución
