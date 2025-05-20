@@ -150,6 +150,12 @@ class ConfigManager:
         """Obtiene la configuración del agente RL"""
         return self.get_config_value('agent', {})
 
+    def get_live_trading_config(self) -> Dict[str, Any]:
+        """
+        Devuelve la configuración específica para el modo de trading en vivo.
+        """
+        return self.get_config_value('live_trading', {})
+
     def get_full_config(self) -> Dict[str, Any]:
         """Obtiene la configuración completa"""
         return self.config
@@ -168,3 +174,4 @@ if __name__ == '__main__': # Para pruebas rápidas
     print(f"Preprocessing Sequence Length: {manager.get_preprocessing_config().get('sequence_length_L')}")
     print(f"Environment Initial Equity: {manager.get_environment_config().get('initial_equity')}")
     print(f"Agent Learning Rate: {manager.get_agent_config().get('learning_rate')}")
+    print(f"Live Trading Config: {manager.get_live_trading_config()}")
