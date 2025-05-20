@@ -63,3 +63,4 @@ build/
 # Otros
 .coverage
 htmlcov/
+results/

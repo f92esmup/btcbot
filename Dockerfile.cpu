@@ -45,3 +45,4 @@ ENV GCP_REGION="europe-southwest1"
 # No se configura GOOGLE_APPLICATION_CREDENTIALS para permitir ADC
 # La autenticación se realizará mediante Workload Identity o
 # configurando credenciales en tiempo de ejecución
+ENTRYPOINT ["python"]

@@ -13,11 +13,13 @@ cycler==0.12.1
 dateparser==1.2.1
 Farama-Notifications==0.0.4
 filelock==3.18.0
+flask==3.0.2
 fonttools==4.58.0
 frozenlist==1.6.0
 fsspec==2025.3.2
 google-api-core==2.15.0
 google-auth==2.40.1
+google-cloud-aiplatform==1.36.0
 google-cloud-core==2.4.1
 google-cloud-firestore==2.12.0
 google-cloud-resource-manager==1.10.4
@@ -30,6 +32,7 @@ googleapis-common-protos==1.60.0
 grpc-google-iam-v1==0.12.6
 grpcio==1.58.0
 grpcio-status==1.58.0
+gunicorn==21.2.0
 gymnasium==1.0.0
 idna==3.10
 Jinja2==3.1.6
