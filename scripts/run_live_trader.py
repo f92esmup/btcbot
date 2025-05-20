@@ -283,8 +283,21 @@ class LiveTrader:
         """
         try:
             # Validar dimensiones de características
-            if market_features.shape[0] != portfolio_features.shape[0]:
-                raise ValueError(f"Dimensiones incompatibles: market {market_features.shape}, portfolio {portfolio_features.shape}")
+            # market_features debe ser 2D (L, num_market_features)
+            # portfolio_features debe ser 1D (num_portfolio_features)
+            expected_market_shape = (self.feature_processor.sequence_length_L, 15)  # Ajusta 15 según tus características de mercado
+            expected_portfolio_shape = (8,)  # Ajusta 8 según tus características de cartera
+            
+            logger.debug(f"Forma recibida de market_features: {market_features.shape}, esperada: {expected_market_shape}")
+            logger.debug(f"Forma recibida de portfolio_features: {portfolio_features.shape}, esperada: {expected_portfolio_shape}")
+            
+            if market_features.ndim != 2:
+                raise ValueError(f"Market features debe ser 2D pero tiene dimensiones: {market_features.shape}")
+            if portfolio_features.ndim != 1:
+                raise ValueError(f"Portfolio features debe ser 1D pero tiene dimensiones: {portfolio_features.shape}")
+            
+            # Registrar también los valores para detectar problemas de normalización
+            logger.debug(f"Valores de portfolio_features: {portfolio_features}")
             
             # Convertir a listas para el formato JSON
             market_features_list = market_features.tolist()

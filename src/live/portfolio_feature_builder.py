@@ -59,7 +59,8 @@ class PortfolioFeatureBuilder:
             position_amount = float(position_data.get('positionAmt', '0'))
             entry_price = float(position_data.get('entryPrice', '0'))
             unrealized_pnl = float(position_data.get('unRealizedProfit', '0'))
-            current_leverage = int(position_data.get('leverage', str(self.leverage)))
+            # Primero convertir a float y luego a int para manejar valores como '10.0'
+            current_leverage = int(float(position_data.get('leverage', str(self.leverage))))
             
             # Información de la cuenta
             total_wallet_balance = float(account_data.get('totalWalletBalance', '0'))
@@ -167,14 +168,15 @@ class PortfolioFeatureBuilder:
             
             logger.debug(f"Portfolio features generadas: {portfolio_features}")
             
-            # 6. Replicar el vector para cada paso temporal (L veces)
-            # Por consistencia con el formato esperado por los extractores en la capa Transformer
-            portfolio_features_sequence = np.tile(portfolio_features, (self.sequence_length_L, 1))
-            return portfolio_features_sequence
+            # NOTA: Devolvemos directamente el array 1D (8,) y no lo replicamos
+            # El CustomTransformerFeatureExtractor se encarga de expandir estas características internamente
+            # mediante portfolio_features.unsqueeze(1).expand(-1, self.seq_length, -1)
+            logger.debug(f"Portfolio features generadas (forma 1D): {portfolio_features.shape}")
+            return portfolio_features
             
         except Exception as e:
             logger.error(f"Error construyendo características de cartera: {e}", exc_info=True)
-            # Devolver un vector por defecto con valores en 0
-            default_features = np.zeros((self.sequence_length_L, 8), dtype=np.float32)
-            default_features[:, -2] = 1.0  # Margin de liquidación en 1.0 (sin riesgo)
+            # Devolver un vector por defecto con valores en 0 (array 1D)
+            default_features = np.zeros(8, dtype=np.float32)
+            default_features[6] = 1.0  # Margin de liquidación en 1.0 (sin riesgo)
             return default_features

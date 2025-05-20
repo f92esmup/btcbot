@@ -118,6 +118,10 @@ def predict():
         portfolio_features = np.array(data['portfolio_features'], dtype=np.float32)
         observation['portfolio_features'] = portfolio_features
         
+        # Log para diagnóstico de formas
+        logger.info(f"Servidor recibió market_features con forma: {market_features.shape}")
+        logger.info(f"Servidor recibió portfolio_features con forma: {portfolio_features.shape}")
+        
         # Obtener la predicción del modelo
         action = agent_manager.predict_action(observation, deterministic=True)
         

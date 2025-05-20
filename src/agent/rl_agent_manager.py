@@ -359,6 +359,12 @@ class RLAgentManager:
         """
         if self.model is None:
             raise ValueError("El modelo no ha sido configurado. Llame a setup_agent primero.")
+        
+        # Diagnóstico de formas de entrada
+        market_features = observation['market_features']
+        portfolio_features = observation['portfolio_features']
+        logger.info(f"RLAgentManager.predict_action - market_features forma: {market_features.shape}")
+        logger.info(f"RLAgentManager.predict_action - portfolio_features forma: {portfolio_features.shape}")
             
         action, _states = self.model.predict(observation, deterministic=deterministic)
         return action
