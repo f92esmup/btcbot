@@ -1,10 +1,20 @@
 # Trading Bot con Reinforcement Learning para Futuros de Criptomonedas
 
+> **⚠️ ADVERTENCIA IMPORTANTE ⚠️**
+> 
+> Este bot utiliza órdenes a MERCADO que se ejecutan inmediatamente al mejor precio disponible, lo que puede resultar en slippage significativo en mercados volátiles o con baja liquidez. 
+> 
+> Además, existe una discrepancia importante entre entrenamiento y operación en vivo: en entrenamiento se considera el "tiempo en posición" como característica, pero en modo real esta característica se establece como un valor constante (0.0). Esto puede causar que el rendimiento en vivo difiera considerablemente del backtesting.
+> 
+> **Utilice este software bajo su propia responsabilidad. Los resultados del backtesting no garantizan resultados similares en trading en vivo.**
+
 ## Descripción
 
 Este proyecto implementa un agente de trading basado en Reinforcement Learning para operar en el mercado de futuros de criptomonedas. Utiliza el algoritmo SAC (Soft Actor-Critic) con una arquitectura de red neuronal basada en Transformers para procesar datos históricos del mercado y tomar decisiones de trading.
 
-**Estado Actual del Proyecto**: Esta es una versión de desarrollo para entrenamiento local funcional. **No está lista para trading en vivo**.
+**Características Clave**: El bot combina análisis técnico avanzado con RL para tomar decisiones de trading basadas en características del mercado y del estado de la cartera. Utiliza un extractor de características personalizado basado en Transformers para capturar patrones temporales en datos OHLCV.
+
+**Estado Actual del Proyecto**: El sistema está funcional tanto para entrenamiento como para operación en vivo a través de Binance Futures.
 
 ## Características Principales
 
@@ -12,6 +22,8 @@ Este proyecto implementa un agente de trading basado en Reinforcement Learning p
 - Preprocesamiento y cálculo de características técnicas de trading usando pandas-ta
 - Simulación de un entorno de trading de futuros BTCUSDT con Gymnasium
 - Agente de RL (Soft Actor-Critic) con extractor de características basado en Transformers
+- Modelo de trading desplegable en Google Vertex AI para inferencia en tiempo real
+- Modo de operación en vivo conectado a Binance Futures (real y testnet)
 - Visualización de resultados y métricas de rendimiento
 
 ## Estructura del Proyecto
@@ -22,27 +34,69 @@ btcbot/
 ├── models/                    # Modelos guardados
 ├── results/                   # Resultados de evaluación
 ├── scripts/                   # Scripts ejecutables
+│   ├── download_data.py       # Descarga datos históricos de Binance
+│   ├── preprocess_data.py     # Preprocesa datos y extrae características
+│   ├── train_rl_agent.py      # Entrena el agente de RL
+│   ├── evaluate_rl_agent.py   # Evalúa el rendimiento del agente
+│   ├── run_live_trader.py     # Ejecuta el bot de trading en vivo
+│   └── test_binance_api.py    # Prueba la conexión con la API de Binance
+├── serving/                   # Servidor para despliegue en Vertex AI
 └── src/                       # Código fuente
     ├── config.yaml            # Configuración centralizada
     ├── agent/                 # Implementación del agente RL
     ├── data/                  # Código para adquisición y preprocesamiento
     ├── environments/          # Entorno de simulación
+    ├── live/                  # Módulos para trading en vivo
     └── utils/                 # Utilidades generales
 ```
 
-## Almacenamiento en la Nube (Obligatorio)
+## Arquitectura del Sistema
 
-El proyecto ahora funciona exclusivamente con almacenamiento en la nube:
+### Flujo de Datos y Operación
 
-- **Google Cloud Storage (GCS)**: Almacenamiento tanto para datos brutos como procesados
-- **Google Cloud Secret Manager**: Gestión segura de credenciales de la API de Binance
+1. **Adquisición y Preprocesamiento de Datos**:
+   - Descarga de datos históricos OHLCV desde Binance Futures
+   - Cálculo de características técnicas (indicadores) y normalización
+   - Almacenamiento en Google Cloud Storage
 
-> **Nota importante**: Ya no se utiliza almacenamiento local para datos. Todos los datos se cargan y guardan directamente desde/hacia Google Cloud Storage.
+2. **Entrenamiento del Modelo**:
+   - Entorno de simulación basado en Gymnasium
+   - Entrenamiento del agente SAC con arquitectura Transformer
+   - Guardado de modelos y checkpoints en Google Cloud Storage
+
+3. **Despliegue del Modelo**:
+   - Servidor de inferencia (local o en Vertex AI)
+   - API de predicciones que recibe características de mercado y cartera
+
+4. **Trading en Vivo**:
+   - Websocket para detección de cierre de velas
+   - Preprocesamiento en tiempo real de datos de mercado
+   - Construcción de características de cartera basadas en posición actual
+   - Solicitud de predicciones al modelo desplegado
+   - Ejecución de órdenes en Binance Futures
+
+### Componentes Clave
+
+- **PortfolioFeatureBuilder**: Construye características normalizadas del estado de la cartera
+- **LiveDataProcessor**: Procesa datos OHLCV en tiempo real para extraer características
+- **LiveWebsocketManager**: Detecta nuevas velas cerradas en tiempo real
+- **LiveBinanceAPIManager**: Gestiona conexión con Binance para operaciones
+- **LiveTrader**: Orquesta el flujo completo de trading en vivo
+
+## Requisitos para la Nube (Obligatorio)
+
+El proyecto funciona exclusivamente con servicios en la nube:
+
+- **Google Cloud Storage (GCS)**: Almacenamiento para datos brutos, procesados y modelos
+- **Google Cloud Secret Manager**: Gestión segura de credenciales de Binance
+- **Google Vertex AI**: Despliegue del modelo para inferencia en tiempo real
 
 ## Requisitos Previos
 
 - Python 3.9+
 - Git
+- Cuenta en Google Cloud Platform con facturación activada
+- Cuenta en Binance Futures (real o testnet)
 
 ## Instalación
 
@@ -71,12 +125,13 @@ El proyecto ahora funciona exclusivamente con almacenamiento en la nube:
    # Configuración de Google Cloud (OBLIGATORIO)
    GCP_PROJECT_ID="tu-proyecto-id"
    GCS_BUCKET_NAME="tu-bucket-nombre"
-   
-   # Configuración regional de Google Cloud
    GCP_REGION="tu-region-preferida"
+   
+   # Configuración de modo de trading (opcional, por defecto es TESTNET)
+   LIVE_TRADING_MODE="TESTNET"  # Cambiar a "REAL" para trading real
    ```
    
-   > **Nota**: Las credenciales de Binance deben estar almacenadas en Google Cloud Secret Manager como `BINANCE_API_KEY_FUTURES` y `BINANCE_API_SECRET_FUTURES`. La autenticación con GCP se realiza mediante Application Default Credentials (ejecuta `gcloud auth application-default login`).
+   > **Nota**: Las credenciales de Binance deben estar almacenadas en Google Cloud Secret Manager como `BINANCE_API_KEY_FUTURES` y `BINANCE_API_SECRET_FUTURES`.
 
 5. **Configurar Google Cloud**:
 
@@ -88,110 +143,179 @@ El proyecto ahora funciona exclusivamente con almacenamiento en la nube:
    gcloud auth application-default login
    
    # Habilitar APIs necesarias
-   gcloud services enable secretmanager.googleapis.com storage.googleapis.com
+   gcloud services enable secretmanager.googleapis.com storage.googleapis.com aiplatform.googleapis.com
    
    # Crear bucket de GCS (si no existe)
    gsutil mb -p tu-proyecto-id -l tu-region gs://tu-bucket-nombre
+   
+   # Almacenar credenciales de Binance en Secret Manager
+   echo -n "tu-api-key" | gcloud secrets create BINANCE_API_KEY_FUTURES --data-file=-
+   echo -n "tu-api-secret" | gcloud secrets create BINANCE_API_SECRET_FUTURES --data-file=-
    ```
 
-## Uso
+## Flujo de Trabajo Completo
 
-### 1. Descarga de Datos
+### 1. Descarga de Datos Históricos
 
-```
+Este paso descarga datos OHLCV de Binance Futures y los guarda en Google Cloud Storage:
+
+```bash
 python scripts/download_data.py
 ```
 
-Este script descargará datos históricos de BTCUSDT de Binance Futures y los guardará directamente en Google Cloud Storage.
+El script descargará datos para el símbolo y período definido en `config.yaml`. Por defecto es BTCUSDT con velas de 1 hora.
 
 ### 2. Preprocesamiento de Datos
 
-```
+Este paso calcula indicadores técnicos, normaliza características y crea secuencias:
+
+```bash
 python scripts/preprocess_data.py
 ```
 
-Procesa los datos descargados para calcular características técnicas y los guarda en Google Cloud Storage.
-
 Para procesar un archivo específico:
-```
+```bash
 python scripts/preprocess_data.py --file BTCUSDT_FUTURES_1h_20200101_20250516.csv
 ```
 
-### 3. Prueba del Entorno
+Los datos procesados se guardan como arrays NumPy en GCS para su posterior uso en entrenamiento.
 
-```
-python scripts/test_environment.py
-```
+### 3. Entrenamiento del Modelo
 
-Verifica que el entorno de trading funcione correctamente, simulando un agente aleatorio.
+Entrenar el agente de RL con el algoritmo SAC y la arquitectura de Transformers:
 
-### 4. Entrenamiento del Agente
-
-Para un entrenamiento de prueba rápido:
-```
+```bash
+# Entrenamiento rápido (prueba)
 python scripts/train_rl_agent.py --config src/config.yaml --timesteps 1000
-```
 
-Para un entrenamiento más extenso:
-```
+# Entrenamiento completo
 python scripts/train_rl_agent.py --config src/config.yaml --timesteps 1000000
 ```
 
-### 5. Evaluación del Agente
+Los modelos entrenados se guardan automáticamente en GCS, y también se guardan checkpoints durante el entrenamiento.
 
+### 4. Evaluación del Modelo
+
+Evalúa el rendimiento del modelo entrenado en datos no vistos:
+
+```bash
+python scripts/evaluate_rl_agent.py --config src/config.yaml --model-path models/sac_transformer_trading_agent_final_1000000_steps.zip --episodes 10
 ```
-python scripts/evaluate_rl_agent.py --config src/config.yaml --model-path models/sac_transformer_trading_agent_final_1000_steps.zip --episodes 1
+
+Esto generará gráficos y estadísticas de rendimiento del agente en el directorio `results/`.
+
+### 5. Despliegue del Modelo (Opcional)
+
+#### 5.1 Servidor Local (para pruebas)
+
+```bash
+cd serving
+python serve.py --model_path tu-bucket-nombre/models/sac_transformer_trading_agent/sac_transformer_trading_agent_final_1000000_steps.zip
 ```
 
-## Archivos de Configuración
+#### 5.2 Despliegue en Vertex AI
 
-- `src/config.yaml`: Configuración centralizada para todo el proyecto
-  - Incluye configuración de rutas, API de Binance, preprocesamiento, entorno y agente RL
-  - Toda la configuración se gestiona desde este único archivo
+a) Construir la imagen del contenedor:
+```bash
+gcloud builds submit --config cloudbuild.yaml .
+```
 
-## Almacenamiento de Datos y Credenciales
+b) Desplegar en Vertex AI:
+```bash
+gcloud ai endpoints create --region=tu-region --display-name=btcbot-endpoint
+gcloud ai models upload --container-image-uri=gcr.io/tu-proyecto/btcbot-serving:latest --region=tu-region --display-name=btcbot-model
+gcloud ai endpoints deploy-model tu-id-endpoint --model=tu-id-modelo --region=tu-region
+```
 
-- **Datos**: Google Cloud Storage (GCS) [Obligatorio]
-  - Bucket: Definido en `.env` como `GCS_BUCKET_NAME`
-  - Rutas configuradas en `src/config.yaml`
-  - Todo el procesamiento de datos se realiza directamente en la nube, sin almacenamiento local
+### 6. Trading en Vivo
 
-- **Credenciales API**: Google Cloud Secret Manager [Obligatorio]
-  - Las credenciales de Binance se almacenan como secretos
-  - Proyecto GCP: Definido en `.env` como `GCP_PROJECT_ID`
-  - Secretos requeridos: `BINANCE_API_KEY_FUTURES` y `BINANCE_API_SECRET_FUTURES`
+Modificar `src/config.yaml` para establecer la URL del endpoint de predicción (local o Vertex AI) y luego ejecutar:
 
-## Tecnologías Clave
+```bash
+# Para usar Vertex AI
+python scripts/run_live_trader.py --config src/config.yaml
 
-- PyTorch: Framework de aprendizaje profundo
-- Stable Baselines3: Implementaciones de algoritmos de RL
-- Gymnasium: Framework para entornos de RL
-- Pandas & NumPy: Procesamiento de datos
-- Matplotlib: Visualización
-- python-binance: API para conexión con Binance
+# Para usar servidor local
+python scripts/run_live_trader.py --config src/config.yaml --use_local_server
+```
 
-## Documentación Adicional
+El bot comenzará a escuchar el cierre de nuevas velas, procesar datos en tiempo real y tomar decisiones de trading.
 
-Para información más detallada sobre cada componente, consulta los archivos en el directorio `docs/`:
+## Configuración del Sistema
 
-- [Adquisición de Datos](docs/adquisición_datos.md)
-- [Preprocesamiento](docs/preprocesamiento.md)
-- [Entorno de Simulación](docs/entorno.md)
-- [Agente RL](docs/agente.md)
+### Configuración Centralizada
 
-## Limitaciones Conocidas
+El archivo `src/config.yaml` contiene toda la configuración del sistema organizada en las siguientes secciones:
 
-- Esta versión es solo para entrenamiento local, no está preparada para trading en vivo
-- No incluye optimización avanzada de hiperparámetros
-- La simulación no tiene en cuenta la profundidad del mercado ni el impacto de las operaciones
-- El rendimiento del modelo no está garantizado en mercados reales
+- **data_paths**: Rutas de GCS para datos brutos y procesados
+- **binance_api**: Configuración de la API de Binance
+- **data_acquisition_defaults**: Parámetros para descarga de datos (símbolo, intervalos)
+- **preprocessing**: Configuración de indicadores técnicos y normalización
+- **environment**: Parámetros para el entorno de simulación
+- **agent**: Hiperparámetros del modelo SAC y arquitectura Transformer
+- **live_trading**: Configuración para el trading en vivo
 
-## Próximos Pasos
+### Administración de Credenciales y Datos
 
-- Implementar backtest más rigurosos
-- Añadir optimización automática de hiperparámetros
-- Desarrollar módulo para trading en vivo (paper trading)
-- Mejorar la arquitectura del modelo con atención a múltiples timeframes
+- **Datos**: Google Cloud Storage (GCS)
+  - Datos brutos: `gs://tu-bucket-nombre/raw/`
+  - Datos procesados: `gs://tu-bucket-nombre/processed/`
+  - Modelos: `gs://tu-bucket-nombre/models/sac_transformer_trading_agent/`
+
+- **Credenciales**: Google Cloud Secret Manager
+  - `BINANCE_API_KEY_FUTURES`: Clave de API de Binance Futures
+  - `BINANCE_API_SECRET_FUTURES`: Secreto de API de Binance Futures
+
+## Componentes Principales del Trading en Vivo
+
+### 1. Websocket Manager (`src/live/websocket_manager.py`)
+Establece conexión WebSocket con Binance para detectar cierres de velas en tiempo real.
+
+### 2. API Manager (`src/live/binance_api_manager.py`) 
+Gestiona la comunicación con la API de Binance para obtener datos de cuenta y ejecutar órdenes.
+
+### 3. Data Processor (`src/live/live_data_processor.py`)
+Procesa los datos OHLCV en tiempo real, calcula indicadores técnicos y normaliza características.
+
+### 4. Portfolio Feature Builder (`src/live/portfolio_feature_builder.py`)
+Construye un vector de características que representa el estado actual de la cartera:
+- Dirección de posición actual (-1, 0, 1)
+- Tamaño de la posición normalizado
+- PnL no realizado normalizado
+- Pasos en la posición actual
+- Precio de entrada vs precio actual
+- Saldo disponible normalizado
+- Margen de liquidación
+- PnL total normalizado
+
+### 5. Orquestador (`scripts/run_live_trader.py`)
+Coordina todos los componentes, procesa nuevas velas, solicita predicciones al modelo y ejecuta decisiones de trading.
+
+## Logging y Monitoreo
+
+El sistema incluye un completo sistema de logging que registra:
+
+- **Logs locales**: Archivos de texto detallados para depuración
+- **Logs en Google Cloud Storage**: Registros CSV para análisis posterior
+- **Logs en BigQuery** (opcional): Eventos de trading para análisis en tiempo real y dashboards
+
+## Tecnologías Utilizadas
+
+- **PyTorch**: Framework para redes neuronales y extractor de características Transformer
+- **Stable Baselines3**: Implementación del algoritmo SAC
+- **Gymnasium**: Framework para el entorno de simulación
+- **pandas-ta**: Biblioteca de indicadores técnicos para trading
+- **python-binance**: Cliente API oficial de Binance
+- **Google Cloud**: GCS, Secret Manager, BigQuery, Vertex AI
+- **Flask/Gunicorn**: Servidor de inferencia para despliegue del modelo
+- **Websockets**: Conexión en tiempo real con Binance
+
+## Limitaciones y Consideraciones
+
+- Los resultados en backtesting pueden diferir significativamente de los resultados en vivo
+- El bot opera mejor en mercados con tendencias claras y volatilidad moderada
+- Las estrategias basadas en RL pueden requerir reentrenamiento periódico
+- El rendimiento del servidor de inferencia puede afectar los tiempos de ejecución
 
 ## Licencia
 
