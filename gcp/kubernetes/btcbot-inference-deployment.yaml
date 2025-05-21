@@ -27,9 +27,13 @@ spec:
         - name: GCP_PROJECT_ID
           value: "lofty-complex-460416-r6"
         - name: GCS_BUCKET_NAME
-          value: "lofty-complex-460416-r6"
+          value: "lofty-complex-460416-r6_data"
+        - name: GCP_REGION
+          value: "europe-southwest1"
+        - name: MODEL_PATH
+          value: "gs://lofty-complex-460416-r6_data/models/sac_transformer_trading_agent/sac_transformer_trading_agent_final_1000_steps.zip"
         command: ["python"]
-        args: ["serving/serve.py", "--model_path", "gs://lofty-complex-460416-r6/models/sac_transformer_trading_agent/sac_transformer_trading_agent_final_1000_steps.zip"]
+        args: ["serving/serve.py", "--model_path", "$(MODEL_PATH)"]
         resources:
           requests:
             cpu: "500m"
