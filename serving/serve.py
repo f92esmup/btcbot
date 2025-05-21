@@ -65,6 +65,12 @@ def load_model(model_path, config_path):
     # Cargar el modelo optimizado para inferencia
     agent_manager = InferenceOptimizer.load_model_for_inference(model_path, config_path)
     
+    # Log detallado de carga exitosa
+    if model_path.startswith('gs://'):
+        logger.info(f"Modelo cargado exitosamente desde Google Cloud Storage: {model_path}")
+    else:
+        logger.info(f"Modelo cargado exitosamente desde: {model_path}")
+        
     logger.info("Modelo cargado exitosamente")
     return agent_manager
 
