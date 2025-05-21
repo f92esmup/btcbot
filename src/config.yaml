@@ -176,7 +176,11 @@ live_trading:
   # Debe ser suficiente para las ventanas de normalización e indicadores.
   # Ej: Si L=96 y normalization_window_multiplier_for_L=2, la ventana de normalización es 192.
   # Necesitarás al menos 192 velas + (periodos de indicadores más largos) para que la última vela tenga features normalizadas válidas.
-  market_data_lookback_candles: 250 # Ajustar según sea necesario
+  market_data_lookback_candles: 1000 # Ajustar según sea necesario
+  
+  # Configuración para BigQuery (logging directo de eventos de trading)
+  bigquery_dataset_id: "btcbot_logs"        # Dataset de BigQuery para logs de trading
+  bigquery_table_name: "live_trading_events" # Nombre de la tabla para eventos de trading
 
   # Segundos a esperar entre reintentos de conexión del WebSocket si falla
   websocket_retry_delay_seconds: 10
@@ -191,7 +195,7 @@ live_trading:
   # Pequeña pausa opcional en segundos después de cerrar una posición antes de evaluar abrir una nueva.
   post_close_delay_seconds: 1
 
-  # Configuración para el logging en CSV a GCS
+  # Configuración para el logging en CSV a GCS (legacy, se mantiene por compatibilidad)
   gcs_log_path_template: "live_trading_logs/{symbol}_{interval}/{date}.csv" # {symbol}, {interval}, {date} serán reemplazados
   log_buffer_size_records: 50    # Número de registros a acumular antes de subir a GCS
   gcs_log_upload_interval_seconds: 3600 # Intervalo máximo en segundos para subir logs (ej. 1 hora)

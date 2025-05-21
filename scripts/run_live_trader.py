@@ -13,6 +13,7 @@ from typing import Dict, Any, Optional, List, Tuple
 import requests
 import signal
 import argparse
+from google.cloud import bigquery  # Add BigQuery import
 
 # Asegurar que src esté en el PYTHONPATH para importaciones
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -96,7 +97,25 @@ class LiveTrader:
         self.feature_processor = LiveFeatureProcessor(self.config_manager)
         self.portfolio_builder = PortfolioFeatureBuilder(self.config_manager)
         
-        # Variable para almacenar el registro de trading para el CSV
+        # NUEVO: Inicializar cliente de BigQuery y configuración
+        try:
+            self.gcp_project_id = self.config_manager.get_env_variable('GCP_PROJECT_ID')
+            self.bigquery_client = bigquery.Client(project=self.gcp_project_id)
+            # Define los IDs del dataset y tabla usando configuración o valores por defecto
+            self.bigquery_dataset_id = self.live_trading_config.get('bigquery_dataset_id', 'btcbot_logs')
+            self.bigquery_table_name = self.live_trading_config.get('bigquery_table_name', 'live_trading_events')
+            self.bigquery_table_id = f"{self.gcp_project_id}.{self.bigquery_dataset_id}.{self.bigquery_table_name}"
+            logger.info(f"Logging de trading configurado para BigQuery table: {self.bigquery_table_id}")
+            
+            # Determinar el modo de trading (TESTNET/REAL) para los logs
+            self.trading_mode = "TESTNET" if self.config_manager.get_env_variable('USE_TESTNET', 'true').lower() == 'true' else "REAL"
+            logger.info(f"Modo de trading configurado: {self.trading_mode}")
+        except Exception as e_bq_init:
+            logger.error(f"Error inicializando cliente de BigQuery o IDs: {e_bq_init}. El logging a BigQuery no funcionará.")
+            self.bigquery_client = None
+            self.bigquery_table_id = None
+        
+        # Variable para almacenar el registro de trading para el CSV (ya no se usará activamente)
         self.trading_log = []
         self.last_log_upload_time = time.time()
         self.log_buffer_size = self.live_trading_config.get('log_buffer_size_records', 50)
@@ -218,6 +237,9 @@ class LiveTrader:
         Args:
             kline_data: Datos de la vela cerrada desde el WebSocket
         """
+        # Diccionario para el log de BigQuery
+        log_entry_data_for_bq = {}
+        
         try:
             # 1. Obtener datos históricos de mercado
             klines_df = await self.api_manager.get_historical_klines(
@@ -226,20 +248,26 @@ class LiveTrader:
             
             if klines_df is None or klines_df.empty:
                 logger.error("No se pudieron obtener klines históricas. Saltando ciclo de decisión.")
+                log_entry_data_for_bq["error_message_bq"] = "No se pudieron obtener klines históricas"
                 return
                 
             # 2. Procesar datos para extraer características de mercado
             market_features_df = self.feature_processor.process_klines_data(klines_df)
             if market_features_df.empty:
                 logger.error("Error procesando características de mercado. Saltando ciclo de decisión.")
+                log_entry_data_for_bq["error_message_bq"] = "Error procesando características de mercado"
                 return
                 
-            # 3. Obtener datos de cuenta y posición
-            account_info = await self.api_manager.get_account_info()
-            position_info = await self.api_manager.get_position_risk(self.symbol)
+            # 3. Obtener datos de cuenta y posición (guardar para el log)
+            account_info_start_cycle = await self.api_manager.get_account_info()
+            position_info_live_start_cycle = await self.api_manager.get_position_risk(self.symbol)
+            
+            account_info = account_info_start_cycle
+            position_info = position_info_live_start_cycle
             
             if not account_info or not position_info:
                 logger.error("No se pudo obtener información de cuenta o posición. Saltando ciclo de decisión.")
+                log_entry_data_for_bq["error_message_bq"] = "No se pudo obtener información de cuenta o posición"
                 return
                 
             # 4. Construir características de cartera
@@ -252,21 +280,78 @@ class LiveTrader:
             market_features_sequence = self.feature_processor.get_latest_feature_sequence(market_features_df)
             if market_features_sequence is None:
                 logger.error("No se pudo extraer secuencia de características de mercado. Saltando ciclo de decisión.")
+                log_entry_data_for_bq["error_message_bq"] = "No se pudo extraer secuencia de características de mercado"
                 return
                 
             # 6. Llamar al endpoint para obtener predicción
             action_value = await self.get_model_prediction(market_features_sequence, portfolio_features)
             if action_value is None:
                 logger.error("No se pudo obtener predicción del modelo. Saltando ciclo de decisión.")
+                log_entry_data_for_bq["error_message_bq"] = "No se pudo obtener predicción del modelo"
                 return
+                
+            # Determinar la posición actual
+            current_position = 0  # Neutral (sin posición)
+            position_amount = float(position_info.get('positionAmt', '0'))
+            if abs(position_amount) > 1e-8:  # Si hay posición significativa
+                current_position = 1 if position_amount > 0 else -1  # 1: Long, -1: Short
+                
+            # Determinar la acción basada en el valor de acción y el umbral
+            target_position = 0  # Por defecto neutral
+            if action_value >= self.action_threshold:
+                target_position = 1  # Long
+            elif action_value <= -self.action_threshold:
+                target_position = -1  # Short
+            
+            # Registrar variables para el log de BigQuery
+            cycle_vars = {
+                'kline_data': kline_data,
+                'action_value': action_value,
+                'position_info': position_info,
+                'account_info': account_info,
+                'current_price': current_price,
+                'current_position': current_position,
+                'target_position': target_position,
+                'position_info_live_start_cycle': position_info_live_start_cycle,
+                'account_info_start_cycle': account_info_start_cycle
+            }
                 
             # 7. Ejecutar decisión de trading basada en la predicción
             await self.execute_trading_decision(
                 action_value, position_info, account_info, current_price, klines_df
             )
             
+            # Obtener el equity final para el log
+            final_account_info = await self.api_manager.get_account_info()
+            if final_account_info:
+                last_equity = float(final_account_info.get('totalWalletBalance', 0.0))
+                cycle_vars['current_equity_after_action_bq'] = last_equity
+            
         except Exception as e:
             logger.error(f"Error en process_new_candle: {e}", exc_info=True)
+            log_entry_data_for_bq["error_message_bq"] = f"Error en process_new_candle: {str(e)[:200]}"
+        
+        finally:
+            # Siempre intentar enviar logs a BigQuery, incluso si hubo errores
+            if self.bigquery_client and self.bigquery_table_id:
+                try:
+                    # Preparar el log completo para BigQuery
+                    self._prepare_log_entry_for_bq(log_entry_data_for_bq, cycle_vars if 'cycle_vars' in locals() else {})
+                    
+                    # Importar aquí para evitar dependencias circulares
+                    from src.utils.gcs_utils import stream_row_to_bigquery
+                    
+                    # Enviar a BigQuery usando asyncio.to_thread para no bloquear
+                    await asyncio.to_thread(
+                        stream_row_to_bigquery,
+                        self.bigquery_client,
+                        self.bigquery_table_id,
+                        log_entry_data_for_bq
+                    )
+                    
+                    logger.debug("Log enviado a BigQuery correctamente")
+                except Exception as e_bq:
+                    logger.error(f"Error enviando log a BigQuery: {e_bq}", exc_info=True)
 
     async def get_model_prediction(self, 
                                 market_features: np.ndarray, 
@@ -399,6 +484,11 @@ class LiveTrader:
             current_price: Precio actual
             klines_df: DataFrame con datos históricos de velas
         """
+        # Variables para el ciclo que se usarán en logs de BigQuery
+        close_order = None
+        open_order = None
+        order_qty = 0.0
+        
         try:
             # 1. Extraer datos actuales de posición y cuenta
             position_amount = float(position_info.get('positionAmt', '0'))
@@ -420,7 +510,7 @@ class LiveTrader:
             elif action_value <= -self.action_threshold:
                 target_position = -1  # Short
                 
-            # 4. Registrar la situación actual para el log
+            # 4. Registrar la situación actual para el log (mantener para retrocompatibilidad)
             self.record_trading_info(
                 action_value, current_position, target_position, 
                 position_amount, current_price, entry_price, 
@@ -482,6 +572,21 @@ class LiveTrader:
                     logger.info(f"Nueva posición {order_side} abierta exitosamente: {open_order}")
                 else:
                     logger.error(f"Error al abrir nueva posición {order_side}.")
+            
+            # Actualizar variables del ciclo en process_new_candle
+            # (Buscamos cycle_vars en el stack frame de process_new_candle)
+            import inspect
+            frame = inspect.currentframe()
+            while frame:
+                if 'cycle_vars' in frame.f_locals:
+                    # Encontramos cycle_vars, actualizar con la info de órdenes
+                    frame.f_locals['cycle_vars'].update({
+                        'close_order': close_order,
+                        'open_order': open_order,
+                        'order_qty': order_qty
+                    })
+                    break
+                frame = frame.f_back
             
         except Exception as e:
             logger.error(f"Error ejecutando decisión de trading: {e}", exc_info=True)
@@ -560,9 +665,13 @@ class LiveTrader:
             logger.error(f"Error registrando información de trading: {e}", exc_info=True)
 
     async def upload_trading_logs(self):
-        """Sube registros de trading acumulados a Google Cloud Storage."""
+        """
+        Método legacy para subir registros a Google Cloud Storage.
+        Se mantiene por compatibilidad pero ahora los logs se envían directamente
+        a BigQuery en cada ciclo.
+        """
         if not self.trading_log:
-            logger.debug("No hay logs de trading para subir.")
+            logger.debug("No hay logs legacy de trading para subir.")
             return
         
         try:
@@ -596,12 +705,12 @@ class LiveTrader:
             )
             
             if success:
-                logger.info(f"Logs de trading ({len(self.trading_log)} registros) subidos a gs://{self.config_manager.get_env_variable('GCS_BUCKET_NAME')}/{log_path}")
+                logger.info(f"Logs legacy de trading ({len(self.trading_log)} registros) subidos a gs://{self.config_manager.get_env_variable('GCS_BUCKET_NAME')}/{log_path}")
                 # Limpiar buffer de logs
                 self.trading_log = []
                 self.last_log_upload_time = time.time()
             else:
-                logger.error(f"Error al subir logs de trading a GCS.")
+                logger.error(f"Error al subir logs legacy de trading a GCS.")
                 
         except Exception as e:
             logger.error(f"Error en upload_trading_logs: {e}", exc_info=True)
@@ -610,6 +719,133 @@ class LiveTrader:
         """Maneja señales del sistema como SIGINT y SIGTERM."""
         logger.info(f"Recibida señal {sig.name}. Iniciando apagado ordenado...")
         await self.shutdown()
+        
+    def _prepare_log_entry_for_bq(self, log_entry: Dict[str, Any], cycle_vars: Dict[str, Any]):
+        """
+        Ayudante para poblar el diccionario de log con variables del ciclo actual para BigQuery.
+        
+        Args:
+            log_entry: Diccionario donde se almacenarán los datos para BigQuery
+            cycle_vars: Diccionario con las variables del ciclo actual
+        """
+        # Datos básicos y timestamp
+        log_entry["timestamp_decision_utc"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        log_entry["trading_mode"] = self.trading_mode
+        log_entry["symbol"] = self.symbol
+        log_entry["interval"] = self.interval
+        
+        # Datos de la vela
+        kline_data = cycle_vars.get('kline_data', {})
+        if kline_data:
+            log_entry["kline_open_time_utc"] = pd.to_datetime(kline_data.get('t'), unit='ms', utc=True).isoformat() if kline_data.get('t') else None
+            log_entry["kline_close_time_utc"] = pd.to_datetime(kline_data.get('T'), unit='ms', utc=True).isoformat() if kline_data.get('T') else None
+            log_entry["kline_o"] = float(kline_data.get('o', 0.0))
+            log_entry["kline_h"] = float(kline_data.get('h', 0.0))
+            log_entry["kline_l"] = float(kline_data.get('l', 0.0))
+            log_entry["kline_c"] = float(kline_data.get('c', 0.0))
+            log_entry["kline_v"] = float(kline_data.get('v', 0.0))
+        
+        # Datos del modelo y acción
+        log_entry["model_action_value"] = float(cycle_vars.get('action_value', 0.0))
+        log_entry["action_threshold"] = float(self.action_threshold)
+        
+        # Datos de posición y cuenta
+        position_info = cycle_vars.get('position_info', {})
+        account_info = cycle_vars.get('account_info', {})
+        
+        # Procesar posición actual
+        pos_amt = float(position_info.get('positionAmt', '0.0'))
+        current_pos_side = 0
+        if pos_amt > 1e-8:
+            current_pos_side = 1  # Long
+        elif pos_amt < -1e-8:
+            current_pos_side = -1  # Short
+            
+        log_entry["current_position_side_bq"] = current_pos_side
+        log_entry["pos_amt_before_action_bq"] = pos_amt
+        log_entry["entry_price_bq"] = float(position_info.get('entryPrice', '0.0'))
+        log_entry["unrealized_pnl_bq"] = float(position_info.get('unRealizedProfit', '0.0'))
+        
+        # Equity y PnL
+        current_price = cycle_vars.get('current_price', 0.0)
+        initial_equity = float(self.env_config.get('initial_equity', 10000.0))
+        current_equity = float(account_info.get('totalWalletBalance', initial_equity))
+        log_entry["current_equity_before_action_bq"] = current_equity
+        
+        # Calcular PNL porcentual
+        entry_price = float(position_info.get('entryPrice', '0.0'))
+        pnl_pct = 0.0
+        if abs(pos_amt) > 1e-8 and entry_price > 0 and current_price > 0:
+            if current_pos_side > 0:  # Long
+                pnl_pct = (current_price - entry_price) / entry_price * 100
+            elif current_pos_side < 0:  # Short
+                pnl_pct = (entry_price - current_price) / entry_price * 100
+        log_entry["pnl_percent_bq"] = pnl_pct
+        
+        # Datos de la señal y posición deseada
+        target_position = cycle_vars.get('target_position', 0)
+        log_entry["desired_signal_bq"] = int(target_position)
+        log_entry["position_change_bq"] = bool(current_pos_side != target_position)
+        log_entry["current_price_bq"] = float(current_price)
+        
+        # Datos de configuración
+        log_entry["leverage_bq"] = float(self.leverage)
+        
+        # Descripción de la acción tomada
+        action_desc = "HOLD"
+        if log_entry["position_change_bq"]:
+            if current_pos_side == 0 and target_position > 0:
+                action_desc = "OPEN_LONG"
+            elif current_pos_side == 0 and target_position < 0:
+                action_desc = "OPEN_SHORT"
+            elif current_pos_side > 0 and target_position == 0:
+                action_desc = "CLOSE_LONG"
+            elif current_pos_side < 0 and target_position == 0:
+                action_desc = "CLOSE_SHORT"
+            elif current_pos_side > 0 and target_position < 0:
+                action_desc = "CLOSE_LONG_OPEN_SHORT"
+            elif current_pos_side < 0 and target_position > 0:
+                action_desc = "CLOSE_SHORT_OPEN_LONG"
+        log_entry["action_taken_desc_bq"] = action_desc
+        
+        # Datos de órdenes
+        close_order = cycle_vars.get('close_order', {})
+        open_order = cycle_vars.get('open_order', {})
+        log_entry["order_id_close_bq"] = close_order.get('orderId') if close_order else None
+        log_entry["order_status_close_bq"] = close_order.get('status') if close_order else None
+        log_entry["order_id_open_bq"] = open_order.get('orderId') if open_order else None
+        log_entry["order_status_open_bq"] = open_order.get('status') if open_order else None
+        log_entry["order_qty_open_bq"] = float(cycle_vars.get('order_qty', 0.0))
+        
+        # Datos finales (serán actualizados después de ejecutar las órdenes)
+        if "current_equity_after_action_bq" not in log_entry:
+            log_entry["current_equity_after_action_bq"] = None
+        if "error_message_bq" not in log_entry:
+            log_entry["error_message_bq"] = None
+            
+        # Garantizar que todos los campos necesarios existan
+        keys_to_ensure = [
+            "kline_open_time_utc", "kline_close_time_utc", 
+            "kline_o", "kline_h", "kline_l", "kline_c", "kline_v",
+            "model_action_value", "action_threshold", 
+            "current_position_side_bq", "desired_signal_bq",
+            "position_change_bq", "pos_amt_before_action_bq", 
+            "entry_price_bq", "current_price_bq",
+            "unrealized_pnl_bq", "pnl_percent_bq", 
+            "current_equity_before_action_bq", "leverage_bq",
+            "action_taken_desc_bq", "order_id_close_bq", 
+            "order_status_close_bq", "order_id_open_bq",
+            "order_status_open_bq", "order_qty_open_bq", 
+            "current_equity_after_action_bq", "error_message_bq"
+        ]
+        
+        for key in keys_to_ensure:
+            if key not in log_entry:
+                log_entry[key] = None
+                
+        logger.info(f"Registro para BigQuery preparado: {log_entry['timestamp_decision_utc']}, acción={log_entry.get('model_action_value', 'N/A')}")
+        
+        return log_entry
 
 async def main():
     """Función principal para iniciar el LiveTrader."""
