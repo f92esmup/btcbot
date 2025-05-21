@@ -82,3 +82,15 @@ La configuración centralizada se encuentra en `src/config.yaml`. Este archivo c
 ## Licencia
 
 [Incluir información de licencia]
+
+
+
+
+YO UTILIZO:
+BIGQUERY
+STORAGE
+SECRETS
+GKE
+LOOCKER STUDIO
+CLOUD BUILD
+ARTIFACT REGESTRY
