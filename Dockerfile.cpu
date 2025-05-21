@@ -41,11 +41,6 @@ ENV PYTHONPATH=/app
 ENV GCP_PROJECT_ID="lofty-complex-460416-r6"
 ENV GCS_BUCKET_NAME="lofty-complex-460416-r6"
 ENV GCP_REGION="europe-southwest1"
-# Control de Cloud Logging: 'auto', 'enabled' o 'disabled'
-# 'auto': Intentará usar Cloud Logging si hay permisos, fallback a logging básico
-# 'enabled': Forzar uso de Cloud Logging (fallará si no hay permisos)
-# 'disabled': Deshabilitar completamente Cloud Logging
-ENV CLOUD_LOGGING_MODE="auto"
 # Para la cuenta REAL de Binance Futures
 ENV SECRET_NAME_BINANCE_API_KEY_FUTURES="BINANCE_API_KEY_FUTURES"
 ENV SECRET_NAME_BINANCE_API_SECRET_FUTURES="BINANCE_API_SECRET_FUTURES"

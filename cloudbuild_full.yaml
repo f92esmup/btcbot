@@ -1,0 +1,105 @@
+# cloudbuild_full.yaml - Pipeline completo para construir imagen Docker y desplegar a GKE
+# ---------------------------------------------------------------------------------
+# Este archivo configura un pipeline de CI/CD que:
+# 1. Construye la imagen Docker (CPU)
+# 2. Publica la imagen en Artifact Registry
+# 3. Aplica la configuración de Kubernetes (despliegue)
+
+steps:
+# Construir la imagen versión CPU
+- name: 'gcr.io/cloud-builders/docker'
+  id: 'build-cpu-image'
+  args: ['build', 
+         '-t', '${_ARTIFACT_REGISTRY}/${PROJECT_ID}/${_REPOSITORY_NAME}/btcbot-cpu:${_VERSION}', 
+         '-t', '${_ARTIFACT_REGISTRY}/${PROJECT_ID}/${_REPOSITORY_NAME}/btcbot-cpu:latest',
+         '-f', 'Dockerfile.cpu', 
+         '.']
+
+# Publicar imagen CPU en Artifact Registry
+- name: 'gcr.io/cloud-builders/docker'
+  id: 'push-cpu-image'
+  args: ['push', '${_ARTIFACT_REGISTRY}/${PROJECT_ID}/${_REPOSITORY_NAME}/btcbot-cpu:${_VERSION}']
+  waitFor: ['build-cpu-image']
+
+# Publicar imagen CPU latest en Artifact Registry
+- name: 'gcr.io/cloud-builders/docker'
+  id: 'push-cpu-image-latest'
+  args: ['push', '${_ARTIFACT_REGISTRY}/${PROJECT_ID}/${_REPOSITORY_NAME}/btcbot-cpu:latest']
+  waitFor: ['build-cpu-image']
+
+# Preparar el archivo de despliegue de Kubernetes (reemplazando variables)
+- name: 'bash'
+  id: 'prepare-k8s-deployment'
+  entrypoint: 'bash'
+  args:
+  - '-c'
+  - |
+    # Crear copia del template
+    cp btcbot-deployment.template.yaml btcbot-deployment.yaml
+    
+    # Sustituir variables
+    sed -i "s|\${_GCP_PROJECT_ID}|${PROJECT_ID}|g" btcbot-deployment.yaml
+    sed -i "s|\${_GCS_BUCKET_NAME}|${_GCS_BUCKET_NAME}|g" btcbot-deployment.yaml
+    sed -i "s|\${_GCP_REGION}|${_GCP_REGION}|g" btcbot-deployment.yaml
+    sed -i "s|\${_LIVE_TRADING_MODE}|${_LIVE_TRADING_MODE}|g" btcbot-deployment.yaml
+    
+    # Eliminar sección de variables
+    sed -i '/# --- SECCIÓN DE SUSTITUCIONES Y VALORES DE REFERENCIA ---/,/# ==============================================================================$/d' btcbot-deployment.yaml
+    
+    echo "Archivo de despliegue generado:"
+    cat btcbot-deployment.yaml
+  waitFor: ['push-cpu-image', 'push-cpu-image-latest']
+
+# Obtener credenciales del cluster GKE
+- name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+  id: 'get-credentials'
+  entrypoint: 'bash'
+  args:
+  - '-c'
+  - |
+    gcloud container clusters get-credentials ${_GKE_CLUSTER_NAME} --region ${_GCP_REGION} --project ${PROJECT_ID}
+  waitFor: ['prepare-k8s-deployment']
+
+# Desplegar a Kubernetes
+- name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+  id: 'apply-deployment'
+  entrypoint: 'bash'
+  args:
+  - '-c'
+  - |
+    kubectl apply -f btcbot-deployment.yaml
+  waitFor: ['get-credentials']
+
+# Verificar el estado del despliegue
+- name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+  id: 'check-deployment'
+  entrypoint: 'bash'
+  args:
+  - '-c'
+  - |
+    # Esperar y verificar que el despliegue se haya completado correctamente
+    echo "Esperando a que el despliegue se complete..."
+    kubectl rollout status deployment/btcbot-live-trader --timeout=300s
+    
+    echo "Verificando pods..."
+    kubectl get pods -l app=btcbot-trader
+  waitFor: ['apply-deployment']
+
+# Configuración del bucket para los logs
+logsBucket: 'gs://${PROJECT_ID}_cloudbuild'
+
+# Variables de sustitución
+substitutions:
+  _ARTIFACT_REGISTRY: 'europe-southwest1-docker.pkg.dev'  # URL del registry
+  _REPOSITORY_NAME: 'lofty-complex-460416-r6-repo'  # Nombre del repositorio en Artifact Registry
+  _GKE_CLUSTER_NAME: 'btcbot-cluster'  # Nombre del cluster GKE
+  _GCP_REGION: 'europe-southwest1'  # Región de GCP
+  _GCS_BUCKET_NAME: 'lofty-complex-460416-r6'  # Nombre del bucket GCS
+  _LIVE_TRADING_MODE: 'TESTNET'  # Modo de trading: 'TESTNET' o 'REAL'
+  _VERSION: '1.0.0'  # Versión de esta build
+
+# Configuración de tiempo y recursos
+timeout: 3600s  # 1 hora para completar todo el pipeline
+options:
+  machineType: 'E2_HIGHCPU_8'  # 8 CPUs virtuales
+  diskSizeGb: 100  # Tamaño del disco
