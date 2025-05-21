@@ -34,6 +34,12 @@ spec:
         # --- Variables de Configuración del Bot ---
         - name: LIVE_TRADING_MODE # "TESTNET" o "REAL"
           value: "TESTNET"
+          
+        # --- Variables de Configuración de Vertex AI ---
+        - name: VERTEX_AI_PREDICT_URL
+          value: "https://europe-southwest1-aiplatform.googleapis.com/v1/projects/lofty-complex-460416-r6/locations/europe-southwest1/endpoints/ENDPOINT_ID:predict"
+        - name: VERTEX_AI_ENDPOINT_RAW_ID
+          value: "ENDPOINT_ID"
 
         # --- Nombres de los Secretos en Google Cloud Secret Manager ---
         # Tu código usará estos NOMBRES para buscar los valores reales en Secret Manager

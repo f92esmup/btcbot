@@ -163,14 +163,9 @@ agent:
 # Configuración de Trading en Vivo
 # =====================================================================
 live_trading:
-  # URL completa del endpoint de predicción en Vertex AI
-  # Formato: https://{region}-aiplatform.googleapis.com/v1/projects/{project_id}/locations/{region}/endpoints/{endpoint_id}:predict
-  # EJEMPLO: vertex_ai_predict_url: "https://europe-southwest1-aiplatform.googleapis.com/v1/projects/bitcoin-460320/locations/europe-southwest1/endpoints/1234567890123456789:predict"
-  vertex_ai_predict_url: "REEMPLAZAR_CON_URL_ENDPOINT_VERTEX_AI"
-  
-  # ID "crudo" del endpoint de Vertex AI (solo el número identificador del endpoint)
-  # EJEMPLO: vertex_ai_endpoint_raw_id: "1234567890123456789"
-  vertex_ai_endpoint_raw_id: "REEMPLAZAR_CON_ID_ENDPOINT_VERTEX_AI"
+  # Las variables Vertex AI (vertex_ai_predict_url y vertex_ai_endpoint_raw_id) se han movido a variables de entorno
+  # VERTEX_AI_PREDICT_URL: URL completa del endpoint de predicción en Vertex AI
+  # VERTEX_AI_ENDPOINT_RAW_ID: ID "crudo" del endpoint de Vertex AI (solo el número identificador del endpoint)
   
   # Número de velas a descargar para el preprocesamiento en cada ciclo de decisión
   # Debe ser suficiente para las ventanas de normalización e indicadores.

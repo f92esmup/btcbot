@@ -134,20 +134,26 @@ if __name__ == "__main__":
                         help="Modo de prueba: local o vertex")
     parser.add_argument("--url", default="http://localhost:8080",
                         help="URL del endpoint local (solo para modo local)")
-    parser.add_argument("--project-id", help="ID del proyecto de Google Cloud (solo para modo vertex)")
-    parser.add_argument("--endpoint-id", help="ID del endpoint en Vertex AI (solo para modo vertex)")
+    parser.add_argument("--project-id", help="ID del proyecto de Google Cloud (solo para modo vertex). Si no se especifica, se usa la variable de entorno GCP_PROJECT_ID")
+    parser.add_argument("--endpoint-id", help="ID del endpoint en Vertex AI (solo para modo vertex). Si no se especifica, se usa la variable de entorno VERTEX_AI_ENDPOINT_RAW_ID")
     parser.add_argument("--location", default="europe-southwest1",
-                        help="Región donde está desplegado el endpoint (solo para modo vertex)")
+                        help="Región donde está desplegado el endpoint (solo para modo vertex). Si no se especifica, se usa la variable de entorno GCP_REGION")
     
     args = parser.parse_args()
     
     if args.mode == "local":
         test_local_endpoint(url=args.url)
     else:  # vertex
-        if not args.project_id or not args.endpoint_id:
-            parser.error("Para el modo vertex, se requieren --project-id y --endpoint-id")
+        # Usar variables de entorno si no se especifican argumentos
+        project_id = args.project_id or os.environ.get('GCP_PROJECT_ID')
+        endpoint_id = args.endpoint_id or os.environ.get('VERTEX_AI_ENDPOINT_RAW_ID')
+        location = args.location or os.environ.get('GCP_REGION', 'europe-southwest1')
+        
+        if not project_id or not endpoint_id:
+            parser.error("Para el modo vertex, se requieren los argumentos --project-id y --endpoint-id o las variables de entorno GCP_PROJECT_ID y VERTEX_AI_ENDPOINT_RAW_ID")
+            
         test_vertex_endpoint(
-            project_id=args.project_id,
-            endpoint_id=args.endpoint_id,
-            location=args.location
+            project_id=project_id,
+            endpoint_id=endpoint_id,
+            location=location
         )

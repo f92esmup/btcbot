@@ -86,10 +86,11 @@ class LiveTrader:
             self.vertex_ai_predict_url = args.local_predict_url
             logger.info(f"Usando endpoint local: {self.vertex_ai_predict_url}")
         else:
-            self.vertex_ai_predict_url = self.live_trading_config.get('vertex_ai_predict_url', "")
-            if not self.vertex_ai_predict_url or self.vertex_ai_predict_url == "REEMPLAZAR_CON_URL_ENDPOINT_VERTEX_AI":
-                logger.error("URL de endpoint no configurada correctamente en config.yaml")
-                raise ValueError("URL de endpoint no configurada. Actualice 'vertex_ai_predict_url' en config.yaml o use --use_local_server")
+            # Obtener URL del endpoint de la variable de entorno
+            self.vertex_ai_predict_url = os.environ.get('VERTEX_AI_PREDICT_URL', "")
+            if not self.vertex_ai_predict_url or self.vertex_ai_predict_url == "":
+                logger.error("URL de endpoint no configurada correctamente en la variable de entorno VERTEX_AI_PREDICT_URL")
+                raise ValueError("URL de endpoint no configurada. Configure la variable de entorno VERTEX_AI_PREDICT_URL o use --use_local_server")
         
         # Inicialización de gestores
         self.websocket_manager = LiveWebsocketManager(self.config_manager, self.notification_queue)
