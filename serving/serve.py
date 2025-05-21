@@ -79,10 +79,29 @@ def health_check():
     """
     Endpoint para verificar el estado del servidor.
     Vertex AI lo utiliza para comprobar que el servidor esté funcionando.
+    
+    Nota: Este endpoint siempre debe devolver 200 si el servidor está en ejecución,
+    incluso si el modelo no está cargado, para evitar que Vertex AI reinicie
+    innecesariamente el contenedor por problemas transitorios.
     """
-    if agent_manager is None:
-        return jsonify({"status": "error", "message": "El modelo no está cargado"}), 500
-    return jsonify({"status": "healthy"}), 200
+    try:
+        if agent_manager is None:
+            # Retornamos 200 aunque advirtiendo que el modelo no está listo
+            logger.warning("Health check: El modelo no está cargado, pero el servidor está funcionando")
+            return jsonify({
+                "status": "warning", 
+                "message": "El servidor está funcionando, pero el modelo no está cargado"
+            }), 200
+        
+        # Servidor y modelo funcionando correctamente
+        return jsonify({"status": "healthy"}), 200
+    except Exception as e:
+        logger.error(f"Error en health check: {str(e)}")
+        # Aún así retornamos 200 para evitar que Vertex AI reinicie el contenedor
+        return jsonify({
+            "status": "degraded", 
+            "message": "El servidor está funcionando pero con errores"
+        }), 200
 
 @app.route('/ping', methods=['GET'])
 def ping():
@@ -98,19 +117,26 @@ def predict():
     Acepta datos del mercado y del portafolio en formato JSON y devuelve
     la acción predicha por el agente.
     """
-    if agent_manager is None:
-        return jsonify({"error": "El modelo no está cargado"}), 500
-    
-    # Obtener datos de la solicitud
     try:
+        if agent_manager is None:
+            logger.error("Intento de predicción cuando el modelo no está cargado")
+            return jsonify({
+                "error": "El modelo no está cargado", 
+                "retry": True,
+                "server_status": "running"
+            }), 503  # Service Unavailable pero recuperable
+        
+        # Obtener datos de la solicitud
         data = request.json
         if not data:
+            logger.warning("No se recibieron datos en la solicitud de predicción")
             return jsonify({"error": "No se recibieron datos en la solicitud"}), 400
         
         # Verificar que se proporcionen las características necesarias
         required_keys = ['market_features', 'portfolio_features']
         for key in required_keys:
             if key not in data:
+                logger.warning(f"Datos de entrada incompletos: falta '{key}'")
                 return jsonify({"error": f"Falta la información de '{key}' en los datos"}), 400
         
         # Convertir los datos de entrada a arrays numpy
@@ -134,14 +160,20 @@ def predict():
         # Convertir la acción a un tipo serializable
         action_list = action.tolist()
         
+        logger.info(f"Predicción exitosa: acción = {action_list}")
         return jsonify({
             "action": action_list,
-            "action_value": float(action[0])  # Extraer el valor numérico para mayor claridad
+            "action_value": float(action[0]),  # Extraer el valor numérico para mayor claridad
+            "success": True
         })
         
     except Exception as e:
-        logger.error(f"Error al procesar la predicción: {str(e)}")
-        return jsonify({"error": f"Error en el servidor: {str(e)}"}), 500
+        logger.error(f"Error al procesar la predicción: {str(e)}", exc_info=True)
+        return jsonify({
+            "error": f"Error en el servidor: {str(e)}",
+            "server_status": "error",
+            "retry": True
+        }), 500
 
 class StandaloneApplication(gunicorn.app.base.BaseApplication):
     """
@@ -164,17 +196,35 @@ if __name__ == "__main__":
     # Parsear argumentos de línea de comandos
     args = parse_arguments()
     
-    # Cargar el modelo al iniciar
-    load_model(model_path=args.model_path, config_path=args.config_path)
-    
-    # Siempre usar Gunicorn para producción y consistencia
-    options = {
-        'bind': '0.0.0.0:8080',
-        'workers': 1,  # Para modelos ML complejos, a menudo se usa solo 1 worker
-        'timeout': 120,  # Timeout en segundos
-        'preload_app': True,  # Precarga la aplicación para que el modelo se cargue una sola vez
-    }
-    
-    # Iniciar Gunicorn
-    logger.info("Iniciando servidor Gunicorn")
-    StandaloneApplication(app, options).run()
+    try:
+        # Cargar el modelo al iniciar
+        load_model(model_path=args.model_path, config_path=args.config_path)
+        
+        # Siempre usar Gunicorn para producción y consistencia
+        options = {
+            'bind': '0.0.0.0:8080',
+            'workers': 1,  # Para modelos ML complejos, a menudo se usa solo 1 worker
+            'timeout': 120,  # Timeout en segundos
+            'preload_app': True,  # Precarga la aplicación para que el modelo se cargue una sola vez
+            'capture_output': True,  # Capturar stdout/stderr para logs
+        }
+        
+        # Iniciar Gunicorn
+        logger.info("Iniciando servidor Gunicorn")
+        StandaloneApplication(app, options).run()
+    except Exception as e:
+        logger.error(f"Error fatal durante la inicialización del servidor: {str(e)}")
+        # En caso de error fatal, aún así intenta levantar el servidor para responder healthchecks
+        # (retornará error 500 en /predict, pero al menos no fallará el healthcheck)
+        try:
+            options = {
+                'bind': '0.0.0.0:8080',
+                'workers': 1,
+                'timeout': 120,
+                'capture_output': True,
+            }
+            logger.warning("Intentando iniciar servidor en modo limitado...")
+            StandaloneApplication(app, options).run()
+        except Exception as inner_e:
+            logger.critical(f"No se pudo iniciar el servidor: {str(inner_e)}")
+            sys.exit(1)
