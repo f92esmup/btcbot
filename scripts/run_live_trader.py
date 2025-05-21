@@ -404,9 +404,9 @@ class LiveTrader:
             portfolio_features_list = portfolio_features.tolist()
             
             # Preparar payload para el endpoint en formato JSON
-            # Para servidor local, usamos formato directo
+            # Para servidor local o interno en Kubernetes, usamos formato directo
             # Para Vertex AI, usamos formato con "instances"
-            is_local_endpoint = "localhost" in self.vertex_ai_predict_url or "127.0.0.1" in self.vertex_ai_predict_url
+            is_local_endpoint = "localhost" in self.vertex_ai_predict_url or "127.0.0.1" in self.vertex_ai_predict_url or "btcbot-inference-service" in self.vertex_ai_predict_url
             
             if is_local_endpoint:
                 payload = {
@@ -458,7 +458,7 @@ class LiveTrader:
             
             # La respuesta depende del tipo de servidor
             if is_local_endpoint:
-                # Para servidor local, el formato es directo
+                # Para servidor local o interno en Kubernetes, el formato es directo
                 if 'action_value' in response_data:
                     action_value = float(response_data['action_value'])
                 elif 'action' in response_data and isinstance(response_data['action'], list):

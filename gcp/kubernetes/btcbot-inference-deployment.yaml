@@ -9,11 +9,11 @@ spec:
   replicas: 1
   selector:
     matchLabels:
-      app: btcbot-inference
+      app: btcbot-inference-server
   template:
     metadata:
       labels:
-        app: btcbot-inference
+        app: btcbot-inference-server
     spec:
       serviceAccountName: btcbot-inference-sa
       containers:

@@ -8,7 +8,7 @@ metadata:
 spec:
   type: ClusterIP
   selector:
-    app: btcbot-inference
+    app: btcbot-inference-server
   ports:
   - protocol: TCP
     port: 8080
