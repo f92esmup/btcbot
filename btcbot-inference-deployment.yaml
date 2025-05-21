@@ -1,0 +1,55 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: btcbot-inference-server
+  namespace: btcbot
+  labels:
+    app: btcbot-inference
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: btcbot-inference
+  template:
+    metadata:
+      labels:
+        app: btcbot-inference
+    spec:
+      serviceAccountName: btcbot-inference-sa
+      containers:
+      - name: inference-container
+        image: europe-southwest1-docker.pkg.dev/lofty-complex-460416-r6/lofty-complex-460416-r6-repo/btcbot-cpu:latest
+        ports:
+        - containerPort: 8080
+          name: http
+          protocol: TCP
+        env:
+        - name: GCP_PROJECT_ID
+          value: "lofty-complex-460416-r6"
+        - name: GCS_BUCKET_NAME
+          value: "lofty-complex-460416-r6"
+        command: ["python"]
+        args: ["serving/serve.py", "--model_path", "gs://lofty-complex-460416-r6/models/sac_transformer_trading_agent/sac_transformer_trading_agent_final_1000_steps.zip"]
+        resources:
+          requests:
+            cpu: "500m"
+            memory: "1Gi"
+          limits:
+            cpu: "1"
+            memory: "2Gi"
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 120
+          periodSeconds: 30
+          timeoutSeconds: 10
+          failureThreshold: 3
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 180
+          periodSeconds: 60
+          timeoutSeconds: 10
+          failureThreshold: 3

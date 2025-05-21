@@ -47,6 +47,17 @@ def parse_arguments():
         default="http://localhost:8080/predict",
         help="URL del endpoint local de inferencia (por defecto: http://localhost:8080/predict)"
     )
+    parser.add_argument(
+        "--use_internal_service",
+        action="store_true",
+        help="Usar el servidor de inferencia interno de Kubernetes en vez de Vertex AI"
+    )
+    parser.add_argument(
+        "--internal_service_url",
+        type=str,
+        default="http://btcbot-inference-service:8080/predict",
+        help="URL del endpoint de inferencia interno en Kubernetes (por defecto: http://btcbot-inference-service:8080/predict)"
+    )
     return parser.parse_args()
 
 class LiveTrader:
@@ -81,16 +92,19 @@ class LiveTrader:
         self.lookback_candles = self.live_trading_config.get('market_data_lookback_candles', 250)
         
         # Configurar endpoint para predicciones
-        # Puede ser un endpoint de Vertex AI o un servidor local
+        # Puede ser un endpoint de Vertex AI, un servidor local o un servicio interno en Kubernetes
         if args and args.use_local_server:
             self.vertex_ai_predict_url = args.local_predict_url
             logger.info(f"Usando endpoint local: {self.vertex_ai_predict_url}")
+        elif args and args.use_internal_service:
+            self.vertex_ai_predict_url = args.internal_service_url
+            logger.info(f"Usando endpoint interno de Kubernetes: {self.vertex_ai_predict_url}")
         else:
             # Obtener URL del endpoint de la variable de entorno
             self.vertex_ai_predict_url = os.environ.get('VERTEX_AI_PREDICT_URL', "")
             if not self.vertex_ai_predict_url or self.vertex_ai_predict_url == "":
                 logger.error("URL de endpoint no configurada correctamente en la variable de entorno VERTEX_AI_PREDICT_URL")
-                raise ValueError("URL de endpoint no configurada. Configure la variable de entorno VERTEX_AI_PREDICT_URL o use --use_local_server")
+                raise ValueError("URL de endpoint no configurada. Configure la variable de entorno VERTEX_AI_PREDICT_URL o use --use_local_server o --use_internal_service")
         
         # Inicialización de gestores
         self.websocket_manager = LiveWebsocketManager(self.config_manager, self.notification_queue)
