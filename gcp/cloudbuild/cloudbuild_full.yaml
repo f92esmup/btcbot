@@ -1,0 +1,341 @@
+# cloudbuild_full.yaml - Pipeline completo para construir imagen Docker y desplegar a GKE
+# ---------------------------------------------------------------------------------
+# Este archivo configura un pipeline de CI/CD que:
+# 1. Construye la imagen Docker (CPU)
+# 2. Publica la imagen en Artifact Registry
+# 3. Aplica la configuración de Kubernetes (servidor de inferencia y trader)
+
+steps:
+# Construir la imagen versión CPU
+- name: 'gcr.io/cloud-builders/docker'
+  id: 'build-cpu-image'
+  args: ['build', 
+         '-t', '${_ARTIFACT_REGISTRY}/${PROJECT_ID}/${_REPOSITORY_NAME}/btcbot-cpu:${_VERSION}', 
+         '-t', '${_ARTIFACT_REGISTRY}/${PROJECT_ID}/${_REPOSITORY_NAME}/btcbot-cpu:latest',
+         '-f', 'Dockerfile.cpu', 
+         '.']
+
+# Publicar imagen CPU en Artifact Registry
+- name: 'gcr.io/cloud-builders/docker'
+  id: 'push-cpu-image'
+  args: ['push', '${_ARTIFACT_REGISTRY}/${PROJECT_ID}/${_REPOSITORY_NAME}/btcbot-cpu:${_VERSION}']
+  waitFor: ['build-cpu-image']
+
+# Publicar imagen CPU latest en Artifact Registry
+- name: 'gcr.io/cloud-builders/docker'
+  id: 'push-cpu-image-latest'
+  args: ['push', '${_ARTIFACT_REGISTRY}/${PROJECT_ID}/${_REPOSITORY_NAME}/btcbot-cpu:latest']
+  waitFor: ['build-cpu-image']
+
+# Preparar el archivo de despliegue del trader (reemplazando variables)
+- name: 'bash'
+  id: 'prepare-trader-deployment'
+  entrypoint: 'bash'
+  args:
+  - '-c'
+  - |
+    # Crear copia del template
+    cp gcp/kubernetes/btcbot-deployment.template.yaml gcp/kubernetes/btcbot-deployment.yaml
+    
+    # Sustituir variables
+    sed -i "s|\${_GCP_PROJECT_ID}|${PROJECT_ID}|g" gcp/kubernetes/btcbot-deployment.yaml
+    sed -i "s|\${_GCS_BUCKET_NAME}|${_GCS_BUCKET_NAME}|g" gcp/kubernetes/btcbot-deployment.yaml
+    sed -i "s|\${_GCP_REGION}|${_GCP_REGION}|g" gcp/kubernetes/btcbot-deployment.yaml
+    sed -i "s|\${_LIVE_TRADING_MODE}|${_LIVE_TRADING_MODE}|g" gcp/kubernetes/btcbot-deployment.yaml
+    
+    # Eliminar sección de variables
+    sed -i '/# --- SECCIÓN DE SUSTITUCIONES Y VALORES DE REFERENCIA ---/,/# ==============================================================================$/d' gcp/kubernetes/btcbot-deployment.yaml
+    
+    echo "Archivo de despliegue del trader generado."
+  waitFor: ['push-cpu-image', 'push-cpu-image-latest']
+
+# Preparar el archivo de despliegue del servidor de inferencia
+- name: 'bash'
+  id: 'prepare-inference-deployment'
+  entrypoint: 'bash'
+  args:
+  - '-c'
+  - |
+    # Crear archivo de despliegue para el servidor de inferencia
+    cat > gcp/kubernetes/btcbot-inference-deployment.yaml << EOF
+    apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      name: btcbot-inference-server
+      namespace: ${_NAMESPACE}
+      labels:
+        app: btcbot-inference
+    spec:
+      replicas: 1
+      selector:
+        matchLabels:
+          app: btcbot-inference
+      template:
+        metadata:
+          labels:
+            app: btcbot-inference
+        spec:
+          serviceAccountName: btcbot-inference-sa
+          containers:
+          - name: inference-container
+            image: ${_ARTIFACT_REGISTRY}/${PROJECT_ID}/${_REPOSITORY_NAME}/btcbot-cpu:latest
+            ports:
+            - containerPort: 8080
+              name: http
+              protocol: TCP
+            env:
+            - name: GCP_PROJECT_ID
+              value: "${PROJECT_ID}"
+            - name: GCS_BUCKET_NAME
+              value: "${_GCS_BUCKET_NAME}"
+            command: ["python"]
+            args: ["serving/serve.py", "--model_path", "gs://${_GCS_BUCKET_NAME}/models/sac_transformer_trading_agent/sac_transformer_trading_agent_final_1000_steps.zip"]
+            resources:
+              requests:
+                cpu: "500m"
+                memory: "1Gi"
+              limits:
+                cpu: "1"
+                memory: "2Gi"
+            readinessProbe:
+              httpGet:
+                path: /health
+                port: 8080
+              initialDelaySeconds: 120
+              periodSeconds: 30
+              timeoutSeconds: 10
+              failureThreshold: 3
+            livenessProbe:
+              httpGet:
+                path: /health
+                port: 8080
+              initialDelaySeconds: 180
+              periodSeconds: 60
+              timeoutSeconds: 10
+              failureThreshold: 3
+    EOF
+    
+    # Crear archivo de servicio para el servidor de inferencia
+    cat > gcp/kubernetes/btcbot-inference-service.yaml << EOF
+    apiVersion: v1
+    kind: Service
+    metadata:
+      name: btcbot-inference-service
+      namespace: ${_NAMESPACE}
+      labels:
+        app: btcbot-inference
+    spec:
+      type: ClusterIP
+      selector:
+        app: btcbot-inference
+      ports:
+      - protocol: TCP
+        port: 8080
+        targetPort: 8080
+    EOF
+    
+    # Crear archivo de despliegue para el trader usando el servicio interno
+    cat > gcp/kubernetes/btcbot-live-trader-deployment.yaml << EOF
+    apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      name: btcbot-live-trader
+      namespace: ${_NAMESPACE}
+      labels:
+        app: btcbot
+    spec:
+      replicas: 1
+      selector:
+        matchLabels:
+          app: btcbot-trader
+      template:
+        metadata:
+          labels:
+            app: btcbot-trader
+        spec:
+          serviceAccountName: btcbot-inference-sa
+          containers:
+          - name: btcbot-runner
+            image: ${_ARTIFACT_REGISTRY}/${PROJECT_ID}/${_REPOSITORY_NAME}/btcbot-cpu:latest
+            command: ["python", "scripts/run_live_trader.py"]
+            args: ["--config_path", "src/config.yaml", "--use_local_server", "--local_predict_url", "http://btcbot-inference-service:8080/predict"]
+            env:
+            - name: GCP_PROJECT_ID
+              value: "${PROJECT_ID}"
+            - name: GCS_BUCKET_NAME
+              value: "${_GCS_BUCKET_NAME}"
+            - name: GCP_REGION
+              value: "${_GCP_REGION}"
+            - name: LIVE_TRADING_MODE
+              value: "${_LIVE_TRADING_MODE}"
+            - name: SECRET_NAME_BINANCE_API_KEY_FUTURES
+              value: "BINANCE_API_KEY_FUTURES"
+            - name: SECRET_NAME_BINANCE_API_SECRET_FUTURES
+              value: "BINANCE_API_SECRET_FUTURES"
+            - name: SECRET_NAME_TESTNET_BINANCE_API_KEY_FUTURES
+              value: "TESTNET_BINANCE_API_KEY_FUTURES"
+            - name: SECRET_NAME_TESTNET_BINANCE_API_SECRET_FUTURES
+              value: "TESTNET_BINANCE_API_SECRET_FUTURES"
+            resources:
+              requests:
+                cpu: "200m"
+                memory: "512Mi"
+              limits:
+                cpu: "500m"
+                memory: "1Gi"
+    EOF
+    
+    echo "Archivos de despliegue del servidor de inferencia generados."
+  waitFor: ['push-cpu-image', 'push-cpu-image-latest']
+
+# Obtener credenciales del cluster GKE
+- name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+  id: 'get-credentials'
+  entrypoint: 'bash'
+  args:
+  - '-c'
+  - |
+    gcloud container clusters get-credentials ${_GKE_CLUSTER_NAME} --region ${_GCP_REGION} --project ${PROJECT_ID}
+  waitFor: ['prepare-trader-deployment', 'prepare-inference-deployment']
+
+# Configurar Workload Identity y namespace
+- name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+  id: 'setup-workload-identity'
+  entrypoint: 'bash'
+  args:
+  - '-c'
+  - |
+    # Crear namespace si no existe
+    kubectl create namespace ${_NAMESPACE} --dry-run=client -o yaml | kubectl apply -f -
+    
+    # Crear KSA si no existe
+    kubectl create serviceaccount btcbot-inference-sa -n ${_NAMESPACE} --dry-run=client -o yaml | kubectl apply -f -
+    
+    # Verificar si la GSA existe, si no, crearla
+    if ! gcloud iam service-accounts describe btcbot-gcs-sa@${PROJECT_ID}.iam.gserviceaccount.com --project=${PROJECT_ID} &> /dev/null; then
+      echo "Creando IAM Service Account..."
+      gcloud iam service-accounts create btcbot-gcs-sa --project=${PROJECT_ID}
+      
+      # Otorgar permisos para acceder a GCS
+      gcloud projects add-iam-policy-binding ${PROJECT_ID} \
+        --member="serviceAccount:btcbot-gcs-sa@${PROJECT_ID}.iam.gserviceaccount.com" \
+        --role="roles/storage.objectViewer"
+    fi
+    
+    # Vincular KSA con GSA para Workload Identity
+    gcloud iam service-accounts add-iam-policy-binding btcbot-gcs-sa@${PROJECT_ID}.iam.gserviceaccount.com \
+      --role roles/iam.workloadIdentityUser \
+      --member "serviceAccount:${PROJECT_ID}.svc.id.goog[${_NAMESPACE}/btcbot-inference-sa]" \
+      --project=${PROJECT_ID}
+    
+    # Anotar la KSA
+    kubectl annotate serviceaccount btcbot-inference-sa \
+      iam.gke.io/gcp-service-account=btcbot-gcs-sa@${PROJECT_ID}.iam.gserviceaccount.com \
+      -n ${_NAMESPACE} --overwrite
+    
+    echo "Workload Identity configurado correctamente."
+  waitFor: ['get-credentials']
+
+# Desplegar servidor de inferencia
+- name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+  id: 'deploy-inference-server'
+  entrypoint: 'bash'
+  args:
+  - '-c'
+  - |
+    kubectl apply -f gcp/kubernetes/btcbot-inference-deployment.yaml
+    echo "Despliegue del servidor de inferencia iniciado."
+  waitFor: ['setup-workload-identity']
+
+# Desplegar servicio de inferencia
+- name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+  id: 'deploy-inference-service'
+  entrypoint: 'bash'
+  args:
+  - '-c'
+  - |
+    kubectl apply -f gcp/kubernetes/btcbot-inference-service.yaml
+    echo "Servicio interno del servidor de inferencia creado."
+  waitFor: ['deploy-inference-server']
+
+# Esperar a que el servidor de inferencia esté disponible
+- name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+  id: 'wait-for-inference-server'
+  entrypoint: 'bash'
+  args:
+  - '-c'
+  - |
+    # Esperar a que el deployment del servidor de inferencia se complete
+    echo "Esperando a que el servidor de inferencia esté listo..."
+    kubectl rollout status deployment/btcbot-inference-server -n ${_NAMESPACE} --timeout=300s
+    
+    # Verificar que el servicio esté disponible
+    echo "Verificando que el servicio interno esté disponible..."
+    kubectl get service btcbot-inference-service -n ${_NAMESPACE}
+    
+    # Esperar un tiempo adicional para asegurar que el modelo se cargue correctamente
+    echo "Esperando a que el modelo se cargue completamente (60s)..."
+    sleep 60
+  waitFor: ['deploy-inference-service']
+
+# Desplegar trader
+- name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+  id: 'deploy-trader'
+  entrypoint: 'bash'
+  args:
+  - '-c'
+  - |
+    kubectl apply -f gcp/kubernetes/btcbot-live-trader-deployment.yaml
+    echo "Despliegue del trader iniciado."
+  waitFor: ['wait-for-inference-server']
+
+# Verificar el estado de todo el despliegue
+- name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+  id: 'check-deployment'
+  entrypoint: 'bash'
+  args:
+  - '-c'
+  - |
+    # Esperar y verificar que el despliegue del trader se haya completado
+    echo "Esperando a que el despliegue del trader se complete..."
+    kubectl rollout status deployment/btcbot-live-trader -n ${_NAMESPACE} --timeout=300s
+    
+    echo "==============================================================="
+    echo "DESPLIEGUE COMPLETADO EXITOSAMENTE"
+    echo "==============================================================="
+    
+    echo "Servidor de inferencia:"
+    kubectl get pods -l app=btcbot-inference -n ${_NAMESPACE}
+    
+    echo "Trader:"
+    kubectl get pods -l app=btcbot-trader -n ${_NAMESPACE}
+    
+    echo "Servicios:"
+    kubectl get services -n ${_NAMESPACE}
+    
+    echo "Para verificar los logs del servidor de inferencia:"
+    echo "kubectl logs -f -l app=btcbot-inference -n ${_NAMESPACE}"
+    
+    echo "Para verificar los logs del trader:"
+    echo "kubectl logs -f -l app=btcbot-trader -n ${_NAMESPACE}"
+  waitFor: ['deploy-trader']
+
+# Configuración del bucket para los logs
+logsBucket: 'gs://${PROJECT_ID}_cloudbuild'
+
+# Variables de sustitución
+substitutions:
+  _ARTIFACT_REGISTRY: 'europe-southwest1-docker.pkg.dev'  # URL del registry
+  _REPOSITORY_NAME: 'lofty-complex-460416-r6-repo'  # Nombre del repositorio en Artifact Registry
+  _GKE_CLUSTER_NAME: 'btcbot-cluster'  # Nombre del cluster GKE
+  _GCP_REGION: 'europe-southwest1'  # Región de GCP
+  _GCS_BUCKET_NAME: 'lofty-complex-460416-r6'  # Nombre del bucket GCS
+  _LIVE_TRADING_MODE: 'TESTNET'  # Modo de trading: 'TESTNET' o 'REAL'
+  _VERSION: '1.0.0'  # Versión de esta build
+  _NAMESPACE: 'btcbot'  # Namespace de Kubernetes para la aplicación
+
+# Configuración de tiempo y recursos
+timeout: 3600s  # 1 hora para completar todo el pipeline
+options:
+  machineType: 'E2_HIGHCPU_8'  # 8 CPUs virtuales
+  diskSizeGb: 100  # Tamaño del disco
