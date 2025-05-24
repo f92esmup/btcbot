@@ -156,6 +156,32 @@ class ConfigManager:
         """
         return self.get_config_value('live_trading', {})
 
+    def get_testing_config(self) -> Dict[str, Any]:
+        """
+        Devuelve la configuración específica para testing y desarrollo.
+        """
+        return self.get_config_value('testing', {})
+
+    def get_websocket_url(self, trading_mode: str = None) -> str:
+        """
+        Obtiene la URL base del WebSocket según el modo de trading.
+        
+        Args:
+            trading_mode: 'TESTNET' o 'REAL'. Si no se especifica, usa LIVE_TRADING_MODE del entorno.
+            
+        Returns:
+            URL base del WebSocket de Binance
+        """
+        if trading_mode is None:
+            trading_mode = os.getenv('LIVE_TRADING_MODE', 'TESTNET').upper()
+        
+        websocket_urls = self.get_config_value('live_trading.websocket_urls', {})
+        
+        if trading_mode == 'TESTNET':
+            return websocket_urls.get('testnet', 'wss://stream.binancefuture.com/ws')
+        else:  # REAL
+            return websocket_urls.get('real', 'wss://fstream.binance.com/ws')
+
     def get_full_config(self) -> Dict[str, Any]:
         """Obtiene la configuración completa"""
         return self.config
@@ -175,3 +201,6 @@ if __name__ == '__main__': # Para pruebas rápidas
     print(f"Environment Initial Equity: {manager.get_environment_config().get('initial_equity')}")
     print(f"Agent Learning Rate: {manager.get_agent_config().get('learning_rate')}")
     print(f"Live Trading Config: {manager.get_live_trading_config()}")
+    print(f"Testing Config: {manager.get_testing_config()}")
+    print(f"WebSocket URL (TESTNET): {manager.get_websocket_url('TESTNET')}")
+    print(f"WebSocket URL (REAL): {manager.get_websocket_url('REAL')}")

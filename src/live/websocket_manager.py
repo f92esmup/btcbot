@@ -26,10 +26,9 @@ class LiveWebsocketManager:
         
         self.trading_mode = os.getenv('LIVE_TRADING_MODE', 'TESTNET').upper()
         
-        if self.trading_mode == 'TESTNET':
-            self.websocket_url = f"wss://stream.binancefuture.com/ws/{self.symbol}@kline_{self.interval}"
-        else: # REAL
-            self.websocket_url = f"wss://fstream.binance.com/ws/{self.symbol}@kline_{self.interval}"
+        # Usar configuración centralizada para URLs de WebSocket
+        base_ws_url = self.config_manager.get_websocket_url(self.trading_mode)
+        self.websocket_url = f"{base_ws_url}/{self.symbol}@kline_{self.interval}"
         
         # Para control de cierre
         self.is_running = False

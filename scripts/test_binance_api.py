@@ -24,9 +24,13 @@ class BinanceAPITester:
         logger.info("Inicializando BinanceAPITester...")
         self.config_manager = ConfigManager()
         self.api_manager = LiveBinanceAPIManager(self.config_manager)
-        self.test_symbol = "BTCUSDT"  # Símbolo a utilizar en las pruebas
-        self.test_interval = "15m"    # Intervalo para klines
-        self.test_lookback = 100      # Número de velas a solicitar
+        
+        # Usar configuración centralizada para testing
+        testing_config = self.config_manager.get_testing_config()
+        self.test_symbol = testing_config.get('default_test_symbol', "BTCUSDT")
+        self.test_interval = testing_config.get('default_test_interval', "15m")
+        self.test_lookback = testing_config.get('default_test_lookback_candles', 100)
+        
         self.tests_passed = 0
         self.tests_failed = 0
         self.tests_skipped = 0

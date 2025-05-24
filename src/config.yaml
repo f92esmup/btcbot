@@ -173,6 +173,11 @@ live_trading:
   # VERTEX_AI_PREDICT_URL: URL completa del endpoint de predicción en Vertex AI
   # VERTEX_AI_ENDPOINT_RAW_ID: ID "crudo" del endpoint de Vertex AI (solo el número identificador del endpoint)
   
+  # URLs de WebSocket para diferentes modos de trading
+  websocket_urls:
+    testnet: "wss://stream.binancefuture.com/ws"
+    real: "wss://fstream.binance.com/ws"
+  
   # Número de velas a descargar para el preprocesamiento en cada ciclo de decisión
   # Debe ser suficiente para las ventanas de normalización e indicadores.
   # Ej: Si L=96 y normalization_window_multiplier_for_L=2, la ventana de normalización es 192.
@@ -200,3 +205,20 @@ live_trading:
   gcs_log_path_template: "live_trading_logs/{symbol}_{interval}/{date}.csv" # {symbol}, {interval}, {date} serán reemplazados
   log_buffer_size_records: 50    # Número de registros a acumular antes de subir a GCS
   gcs_log_upload_interval_seconds: 3600 # Intervalo máximo en segundos para subir logs (ej. 1 hora)
+
+# =====================================================================
+# Configuración de Testing y Desarrollo
+# =====================================================================
+testing:
+  # Configuración para scripts de testing
+  default_test_symbol: "BTCUSDT"
+  default_test_interval: "15m"
+  default_test_lookback_candles: 100
+  
+  # Configuración para validación de integración
+  api_timeout_seconds: 30
+  max_test_retries: 3
+  
+  # Configuración para pruebas de datos
+  sample_data_size: 1000  # Número de registros para pruebas
+  test_date_range_days: 7  # Días de datos para testing
