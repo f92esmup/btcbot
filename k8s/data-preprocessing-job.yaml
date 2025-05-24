@@ -1,0 +1,37 @@
+# k8s/data-preprocessing-job.yaml
+# Job de Kubernetes para preprocesamiento de datos
+# Se ejecuta después del job de adquisición de datos
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: btcbot-data-preprocessing
+  labels:
+    app: btcbot
+    component: data-preprocessing
+spec:
+  template:
+    metadata:
+      labels:
+        app: btcbot
+        component: data-preprocessing
+    spec:
+      restartPolicy: OnFailure
+      containers:
+      - name: data-preprocessing-container
+        # Imagen será sustituida por Cloud Build durante CI/CD
+        image: "europe-south1-docker.pkg.dev/YOUR_GCP_PROJECT_ID/YOUR_ARTIFACT_REGISTRY_REPO/YOUR_CPU_IMAGE_NAME:latest"
+        command: ["python", "scripts/preprocess_data.py"]
+        envFrom:
+        - secretRef:
+            name: btcbot-env-vars # Secret con variables de entorno
+        resources:
+          requests:
+            cpu: "500m"
+            memory: "1Gi"
+          limits:
+            cpu: "1"
+            memory: "2Gi"
+      # Especificar service account si es necesario para acceso a GCS
+      # serviceAccountName: your-gke-service-account
+  # Configurar para que el job se elimine automáticamente después de 24 horas
+  ttlSecondsAfterFinished: 86400

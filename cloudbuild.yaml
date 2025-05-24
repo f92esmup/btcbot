@@ -16,11 +16,6 @@ substitutions:
   _K8S_SECRET_NAME: "btcbot-env-vars"
   _K8S_SERVICE_ACCOUNT: "default" # Or your specific KSA for the bot
 
-  # --- KFP / Vertex AI Pipelines Configuration ---
-  _KFP_PIPELINE_NAME: "btcbot-mlops-pipeline"
-  _VERTEX_PIPELINE_ROOT: "gs://${_GCS_BUCKET_NAME}/kfp_pipeline_root/btcbot" # GCS_BUCKET_NAME must be a build arg or global sub
-  _KFP_COMPILER_OUTPUT_DIR: "compiled_pipelines" # Directory for compiled JSON
-
   # --- Environment Variables for K8s Secret (pass these via --substitutions in `gcloud builds submit`) ---
   # These are examples; you'll need to pass the actual values when running the build.
   # It's more secure to manage these as secret build arguments or from a secure source.
@@ -137,33 +132,36 @@ steps:
   waitFor: ["create-namespace"]
 
 # ------------------------------------------------------------------------------------
-# Step 8: Compile KFP Pipeline
-# ------------------------------------------------------------------------------------
-- name: "python:3.9-slim" # Or your preferred python builder
-  id: "compile-kfp-pipeline"
-  entrypoint: "python"
-  args:
-  - "pipelines/compile_pipeline.py" # This script outputs trading_pipeline.json
-  # The compiled JSON will be in the workspace, default path in compile_pipeline.py
-  waitFor: [] # Can run in parallel with GKE setup after images are built
-
-# ------------------------------------------------------------------------------------
-# Step 9: Upload and Submit KFP Pipeline to Vertex AI
-# This is a simplified submission. For scheduled runs, use `gcloud beta ai pipelines recurrent-runs create`.
+# Step 8: Deploy/Update Kubernetes Jobs for ML Pipeline
+# Substitute image URIs in the job manifests
 # ------------------------------------------------------------------------------------
 - name: "gcr.io/google-cloud-sdk/gcloud"
-  id: "submit-kfp-pipeline"
+  id: "deploy-ml-jobs"
   entrypoint: "bash"
   args:
   - "-c"
   - |
-    gcloud ai platform pipelines jobs submit       --pipeline-path="pipelines/trading_pipeline.json"       --location="${_GCP_REGION}"       --project="${_GCP_PROJECT_ID}"       --display-name="${_KFP_PIPELINE_NAME}-run-$SHORT_SHA"       --pipeline-root="${_VERTEX_PIPELINE_ROOT}"       --parameter-string-inputs="gcp_project_id=${_GCP_PROJECT_ID},gcs_bucket_name=${_SECRET_GCS_BUCKET_NAME},gcp_region=${_GCP_REGION},bigquery_log_dataset_id=${_SECRET_BIGQUERY_LOG_DATASET_ID},use_testnet=${_SECRET_USE_TESTNET},log_level=${_SECRET_LOG_LEVEL},cpu_image_uri=${_ARTIFACT_REGISTRY_LOCATION}-docker.pkg.dev/${_GCP_PROJECT_ID}/${_ARTIFACT_REGISTRY_REPO}/${_CPU_IMAGE_NAME}:${SHORT_SHA},gpu_image_uri=${_ARTIFACT_REGISTRY_LOCATION}-docker.pkg.dev/${_GCP_PROJECT_ID}/${_ARTIFACT_REGISTRY_REPO}/${_GPU_IMAGE_NAME}:${SHORT_SHA}"       --service-account="YOUR_VERTEX_AI_PIPELINES_SERVICE_ACCOUNT@${_GCP_PROJECT_ID}.iam.gserviceaccount.com" # Replace with your Vertex AI pipeline runner SA
-    # Ensure this SA has permissions for GCS, BigQuery, Vertex AI, and to run GKE jobs (if applicable)
-    # and to access the k8s secrets or that pods run with an SA that can.
-  waitFor: ["compile-kfp-pipeline", "setup-gke-cluster"] # Depends on compiled pipeline and cluster
+    CPU_IMAGE_WITH_TAG="${_ARTIFACT_REGISTRY_LOCATION}-docker.pkg.dev/${_GCP_PROJECT_ID}/${_ARTIFACT_REGISTRY_REPO}/${_CPU_IMAGE_NAME}:${SHORT_SHA}"
+    GPU_IMAGE_WITH_TAG="${_ARTIFACT_REGISTRY_LOCATION}-docker.pkg.dev/${_GCP_PROJECT_ID}/${_ARTIFACT_REGISTRY_REPO}/${_GPU_IMAGE_NAME}:${SHORT_SHA}"
+    
+    # Substitute image URIs in job manifests
+    sed "s|YOUR_GCP_PROJECT_ID|${_GCP_PROJECT_ID}|g; s|YOUR_ARTIFACT_REGISTRY_REPO|${_ARTIFACT_REGISTRY_REPO}|g; s|YOUR_CPU_IMAGE_NAME:latest|${_CPU_IMAGE_NAME}:${SHORT_SHA}|g" k8s/data-acquisition-job.yaml > k8s/data-acquisition-job-processed.yaml
+    sed "s|YOUR_GCP_PROJECT_ID|${_GCP_PROJECT_ID}|g; s|YOUR_ARTIFACT_REGISTRY_REPO|${_ARTIFACT_REGISTRY_REPO}|g; s|YOUR_CPU_IMAGE_NAME:latest|${_CPU_IMAGE_NAME}:${SHORT_SHA}|g" k8s/data-preprocessing-job.yaml > k8s/data-preprocessing-job-processed.yaml
+    sed "s|YOUR_GCP_PROJECT_ID|${_GCP_PROJECT_ID}|g; s|YOUR_ARTIFACT_REGISTRY_REPO|${_ARTIFACT_REGISTRY_REPO}|g; s|YOUR_GPU_IMAGE_NAME:latest|${_GPU_IMAGE_NAME}:${SHORT_SHA}|g" k8s/model-training-job.yaml > k8s/model-training-job-processed.yaml
+    
+    # Apply/Update the ML pipeline jobs
+    kubectl apply -f k8s/data-acquisition-job-processed.yaml --namespace ${_K8S_NAMESPACE}
+    # Note: preprocessing and training jobs are applied on-demand by the orchestration script
+    
+    echo "✅ ML pipeline jobs configurados correctamente"
+  env:
+  - "CLOUDSDK_CORE_PROJECT=${_GCP_PROJECT_ID}"
+  - "CLOUDSDK_CONTAINER_CLUSTER=${_GKE_CLUSTER_NAME}"
+  - "CLOUDSDK_COMPUTE_REGION=${_GCP_REGION}"
+  waitFor: ["get-gke-credentials", "create-update-secret"] # Depends on GKE setup and secret
 
 # ------------------------------------------------------------------------------------
-# Step 10: Deploy/Update Live Trader on GKE
+# Step 9: Deploy/Update Live Trader on GKE
 # Substitute image URI in the deployment manifest
 # ------------------------------------------------------------------------------------
 - name: "gcr.io/google-cloud-sdk/gcloud"
@@ -182,7 +180,7 @@ steps:
   - "CLOUDSDK_CORE_PROJECT=${_GCP_PROJECT_ID}"
   - "CLOUDSDK_CONTAINER_CLUSTER=${_GKE_CLUSTER_NAME}"
   - "CLOUDSDK_COMPUTE_REGION=${_GCP_REGION}"
-  waitFor: ["get-gke-credentials", "create-update-secret"] # Depends on GKE setup and secret
+  waitFor: ["deploy-ml-jobs"] # Deploy live trader after ML jobs are configured
 
 # ------------------------------------------------------------------------------------
 # Specify images to be pushed by Cloud Build (if not using explicit push steps)
@@ -201,4 +199,3 @@ timeout: "7200s" # 2 hours
 # Optional: Define machine type for Cloud Build workers (e.g., for faster builds)
 # options:
 #  machineType: 'E2_HIGHCPU_8'
-```

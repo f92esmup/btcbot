@@ -1,0 +1,51 @@
+# k8s/model-training-job.yaml
+# Job de Kubernetes para entrenamiento del modelo
+# Se ejecuta después del job de preprocesamiento
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: btcbot-model-training
+  labels:
+    app: btcbot
+    component: model-training
+spec:
+  template:
+    metadata:
+      labels:
+        app: btcbot
+        component: model-training
+    spec:
+      restartPolicy: OnFailure
+      containers:
+      - name: model-training-container
+        # Imagen GPU será sustituida por Cloud Build durante CI/CD
+        image: "europe-south1-docker.pkg.dev/YOUR_GCP_PROJECT_ID/YOUR_ARTIFACT_REGISTRY_REPO/YOUR_GPU_IMAGE_NAME:latest"
+        command: ["python", "scripts/train_rl_agent.py"]
+        args: ["--config", "src/config.yaml", "--timesteps", "1000000"]
+        envFrom:
+        - secretRef:
+            name: btcbot-env-vars # Secret con variables de entorno
+        resources:
+          requests:
+            cpu: "2"
+            memory: "4Gi"
+            # Solicitar GPU para entrenamiento
+            nvidia.com/gpu: "1"
+          limits:
+            cpu: "4"
+            memory: "8Gi"
+            nvidia.com/gpu: "1"
+      # Especificar service account si es necesario para acceso a GCS
+      # serviceAccountName: your-gke-service-account
+      # Configurar tolerancia para nodos con GPU
+      tolerations:
+      - key: "nvidia.com/gpu"
+        operator: "Exists"
+        effect: "NoSchedule"
+      nodeSelector:
+        # Seleccionar nodos con GPU disponible
+        accelerator: "nvidia-tesla-t4"  # o el tipo de GPU que prefieras
+  # Job más largo para entrenamiento, se elimina después de 7 días
+  ttlSecondsAfterFinished: 604800
+  # Permitir hasta 3 reintentos en caso de fallo
+  backoffLimit: 3

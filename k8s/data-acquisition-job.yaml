@@ -1,0 +1,41 @@
+# k8s/data-acquisition-job.yaml
+# Job de Kubernetes para adquisición de datos semanal
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: btcbot-data-acquisition
+  labels:
+    app: btcbot
+    component: data-acquisition
+spec:
+  # Ejecutar cada domingo a las 2:00 AM UTC (semanal)
+  schedule: "0 2 * * 0"
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            app: btcbot
+            component: data-acquisition
+        spec:
+          restartPolicy: OnFailure
+          containers:
+          - name: data-acquisition-container
+            # Imagen será sustituida por Cloud Build durante CI/CD
+            image: "europe-south1-docker.pkg.dev/YOUR_GCP_PROJECT_ID/YOUR_ARTIFACT_REGISTRY_REPO/YOUR_CPU_IMAGE_NAME:latest"
+            command: ["python", "scripts/download_data.py"]
+            envFrom:
+            - secretRef:
+                name: btcbot-env-vars # Secret con variables de entorno
+            resources:
+              requests:
+                cpu: "200m"
+                memory: "256Mi"
+              limits:
+                cpu: "500m"
+                memory: "512Mi"
+          # Especificar service account si es necesario para acceso a GCS
+          # serviceAccountName: your-gke-service-account
+  # Mantener hasta 3 jobs completados y 1 fallido para historial
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 1
