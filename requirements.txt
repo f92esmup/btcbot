@@ -38,6 +38,7 @@ gunicorn==21.2.0
 gymnasium==1.0.0
 idna==3.10
 Jinja2==3.1.6
+kfp>=2.0.0 # Kubeflow Pipelines SDK for KFP v2, used by Vertex AI Pipelines
 kiwisolver==1.4.8
 Markdown==3.8
 MarkupSafe==3.0.2

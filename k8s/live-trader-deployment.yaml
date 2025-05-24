@@ -1,0 +1,65 @@
+# k8s/live-trader-deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: btcbot-live-trader
+  labels:
+    app: btcbot
+    component: live-trader
+spec:
+  replicas: 1 # Ensure only one instance of the live trader runs
+  selector:
+    matchLabels:
+      app: btcbot
+      component: live-trader
+  template:
+    metadata:
+      labels:
+        app: btcbot
+        component: live-trader
+    spec:
+      containers:
+      - name: live-trader-container
+        # Image URI will be substituted by Cloud Build during the CI/CD pipeline
+        # Example: europe-south1-docker.pkg.dev/YOUR_GCP_PROJECT_ID/btcbot-repo/btcbot-cpu:latest
+        image: "europe-south1-docker.pkg.dev/YOUR_GCP_PROJECT_ID/YOUR_ARTIFACT_REGISTRY_REPO/YOUR_CPU_IMAGE_NAME:latest"
+        command: ["python", "scripts/run_live_trader.py"]
+        args: ["--config", "src/config.yaml"] # Default config path
+        envFrom:
+        - secretRef:
+            name: btcbot-env-vars # Name of the K8s Secret holding env variables
+        resources:
+          requests:
+            cpu: "500m" # 0.5 vCPU
+            memory: "512Mi"
+          limits:
+            cpu: "1" # 1 vCPU
+            memory: "1Gi"
+        # Basic Liveness Probe: Checks if the Python process is running
+        # This is a simple way; a more robust method would be an internal health check if the script supported it.
+        livenessProbe:
+          exec:
+            command:
+            - pgrep
+            - -f
+            - "python scripts/run_live_trader.py"
+          initialDelaySeconds: 60 # Wait 1 minute before first probe
+          periodSeconds: 30 # Check every 30 seconds
+          timeoutSeconds: 5
+          failureThreshold: 3
+        # Basic Readiness Probe: Could be similar to liveness or just a delay
+        # For a script that starts and runs, readiness might be true after initial setup.
+        readinessProbe:
+          exec:
+            command:
+            - pgrep
+            - -f
+            - "python scripts/run_live_trader.py"
+          initialDelaySeconds: 30 # Wait 30 seconds
+          periodSeconds: 30
+          timeoutSeconds: 5
+          failureThreshold: 2
+      # Specify a service account if your GKE nodes/pods need specific GCP permissions
+      # serviceAccountName: your-gke-service-account
+      # Ensure the GKE nodes have access to Secret Manager if the app needs it directly.
+      # For Autopilot, this is typically handled via Workload Identity.

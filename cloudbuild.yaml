@@ -1,70 +1,204 @@
-# Cloud Build para construir imágenes Docker de btcbot (CPU y GPU)
-# --------------------------------------------------------------
-# CONFIGURACIÓN COMPLETA: Este archivo ya está configurado con los valores correctos
-# para tu proyecto bitcoin-460320 y repositorio bitcoin-460320-repo.
-#
-# Para ejecutar el build:
-# gcloud builds submit --config=cloudbuild.yaml
-#
-# También puedes configurar un trigger en:
-# https://console.cloud.google.com/cloud-build/triggers
-#
-# NOTA SOBRE VARIABLES DE ENTORNO:
-# Al ejecutar el contenedor, debes proporcionar las variables de entorno necesarias:
-#   - GCP_PROJECT_ID: ID de tu proyecto en GCP (bitcoin-460320)
-#   - GCS_BUCKET_NAME: Nombre del bucket de almacenamiento (bitcoin-460320_data)
-#   - GCP_REGION: Región de GCP (europe-southwest1)
-#
-# Ejemplo de comando para ejecutar:
-# docker run -e GCP_PROJECT_ID="bitcoin-460320" -e GCS_BUCKET_NAME="bitcoin-460320_data" \
-#   europe-southwest1-docker.pkg.dev/bitcoin-460320/bitcoin-460320-repo/btcbot-cpu:latest \
-#   python scripts/test_environment.py
+# cloudbuild.yaml
+substitutions:
+  # --- GCP Configuration ---
+  _GCP_PROJECT_ID: "${PROJECT_ID}" # Automatically populated by Cloud Build
+  _GCP_REGION: "europe-south1"
+  _ARTIFACT_REGISTRY_LOCATION: "europe-south1" # Usually same as region
+  _ARTIFACT_REGISTRY_REPO: "btcbot-images" # Your Artifact Registry repo name
+
+  # --- Image Configuration ---
+  _CPU_IMAGE_NAME: "btcbot-cpu"
+  _GPU_IMAGE_NAME: "btcbot-gpu"
+
+  # --- GKE Configuration ---
+  _GKE_CLUSTER_NAME: "btcbot-autopilot-cluster"
+  _K8S_NAMESPACE: "btcbot"
+  _K8S_SECRET_NAME: "btcbot-env-vars"
+  _K8S_SERVICE_ACCOUNT: "default" # Or your specific KSA for the bot
+
+  # --- KFP / Vertex AI Pipelines Configuration ---
+  _KFP_PIPELINE_NAME: "btcbot-mlops-pipeline"
+  _VERTEX_PIPELINE_ROOT: "gs://${_GCS_BUCKET_NAME}/kfp_pipeline_root/btcbot" # GCS_BUCKET_NAME must be a build arg or global sub
+  _KFP_COMPILER_OUTPUT_DIR: "compiled_pipelines" # Directory for compiled JSON
+
+  # --- Environment Variables for K8s Secret (pass these via --substitutions in `gcloud builds submit`) ---
+  # These are examples; you'll need to pass the actual values when running the build.
+  # It's more secure to manage these as secret build arguments or from a secure source.
+  _SECRET_GCS_BUCKET_NAME: "your-gcs-bucket-name" # Example: pass actual value during build
+  _SECRET_BIGQUERY_LOG_DATASET_ID: "your_bq_dataset_id" # Example
+  _SECRET_USE_TESTNET: "true" # Example
+  _SECRET_LOG_LEVEL: "INFO" # Example
 
 steps:
-# Construir la imagen con soporte GPU
-- name: 'gcr.io/cloud-builders/docker'
-  args: ['build', 
-         '-t', '${_ARTIFACT_REGISTRY}/${_PROJECT_ID}/${_REPOSITORY_NAME}/btcbot-gpu:${_VERSION}', 
-         '-t', '${_ARTIFACT_REGISTRY}/${_PROJECT_ID}/${_REPOSITORY_NAME}/btcbot-gpu:latest',
-         '-f', 'Dockerfile.gpu', 
-         '.']
+# ------------------------------------------------------------------------------------
+# Step 1: Build CPU Docker Image
+# ------------------------------------------------------------------------------------
+- name: "gcr.io/cloud-builders/docker"
+  id: "build-cpu-image"
+  args: [
+    "build",
+    "-t", "${_ARTIFACT_REGISTRY_LOCATION}-docker.pkg.dev/${_GCP_PROJECT_ID}/${_ARTIFACT_REGISTRY_REPO}/${_CPU_IMAGE_NAME}:${SHORT_SHA}",
+    "-t", "${_ARTIFACT_REGISTRY_LOCATION}-docker.pkg.dev/${_GCP_PROJECT_ID}/${_ARTIFACT_REGISTRY_REPO}/${_CPU_IMAGE_NAME}:latest",
+    "-f", "Dockerfile.cpu",
+    "."
+  ]
 
-# Construir la imagen versión CPU
-- name: 'gcr.io/cloud-builders/docker'
-  args: ['build', 
-         '-t', '${_ARTIFACT_REGISTRY}/${_PROJECT_ID}/${_REPOSITORY_NAME}/btcbot-cpu:${_VERSION}', 
-         '-t', '${_ARTIFACT_REGISTRY}/${_PROJECT_ID}/${_REPOSITORY_NAME}/btcbot-cpu:latest',
-         '-f', 'Dockerfile.cpu', 
-         '.']
+# ------------------------------------------------------------------------------------
+# Step 2: Build GPU Docker Image
+# ------------------------------------------------------------------------------------
+- name: "gcr.io/cloud-builders/docker"
+  id: "build-gpu-image"
+  args: [
+    "build",
+    "-t", "${_ARTIFACT_REGISTRY_LOCATION}-docker.pkg.dev/${_GCP_PROJECT_ID}/${_ARTIFACT_REGISTRY_REPO}/${_GPU_IMAGE_NAME}:${SHORT_SHA}",
+    "-t", "${_ARTIFACT_REGISTRY_LOCATION}-docker.pkg.dev/${_GCP_PROJECT_ID}/${_ARTIFACT_REGISTRY_REPO}/${_GPU_IMAGE_NAME}:latest",
+    "-f", "Dockerfile.gpu",
+    "."
+  ]
 
-# Publicar imagen GPU en Artifact Registry
-- name: 'gcr.io/cloud-builders/docker'
-  args: ['push', '${_ARTIFACT_REGISTRY}/${_PROJECT_ID}/${_REPOSITORY_NAME}/btcbot-gpu:${_VERSION}']
+# ------------------------------------------------------------------------------------
+# Step 3: Push Docker Images to Artifact Registry
+# ------------------------------------------------------------------------------------
+- name: "gcr.io/cloud-builders/docker"
+  id: "push-images"
+  args: ["push", "${_ARTIFACT_REGISTRY_LOCATION}-docker.pkg.dev/${_GCP_PROJECT_ID}/${_ARTIFACT_REGISTRY_REPO}/${_CPU_IMAGE_NAME}"]
+  waitFor: ["build-cpu-image"]
+- name: "gcr.io/cloud-builders/docker"
+  args: ["push", "${_ARTIFACT_REGISTRY_LOCATION}-docker.pkg.dev/${_GCP_PROJECT_ID}/${_ARTIFACT_REGISTRY_REPO}/${_GPU_IMAGE_NAME}"]
+  waitFor: ["build-gpu-image"]
 
-# Publicar imagen GPU latest en Artifact Registry
-- name: 'gcr.io/cloud-builders/docker'
-  args: ['push', '${_ARTIFACT_REGISTRY}/${_PROJECT_ID}/${_REPOSITORY_NAME}/btcbot-gpu:latest']
+# ------------------------------------------------------------------------------------
+# Step 4: Create/Update GKE Autopilot Cluster
+# ------------------------------------------------------------------------------------
+- name: "gcr.io/google-cloud-sdk/gcloud"
+  id: "setup-gke-cluster"
+  entrypoint: "bash"
+  args:
+  - "-c"
+  - |
+    gcloud container clusters describe ${_GKE_CLUSTER_NAME} --region ${_GCP_REGION} --project ${_GCP_PROJECT_ID} ||     gcloud container clusters create-auto ${_GKE_CLUSTER_NAME}       --region ${_GCP_REGION}       --project ${_GCP_PROJECT_ID}       --enable-shielded-nodes       --release-channel "regular"
+  waitFor: ["push-images"] # Ensure images are pushed before cluster might need them (though not directly)
 
-# Publicar imagen CPU en Artifact Registry
-- name: 'gcr.io/cloud-builders/docker'
-  args: ['push', '${_ARTIFACT_REGISTRY}/${_PROJECT_ID}/${_REPOSITORY_NAME}/btcbot-cpu:${_VERSION}']
+# ------------------------------------------------------------------------------------
+# Step 5: Get GKE Credentials
+# ------------------------------------------------------------------------------------
+- name: "gcr.io/google-cloud-sdk/gcloud"
+  id: "get-gke-credentials"
+  args:
+  - "container"
+  - "clusters"
+  - "get-credentials"
+  - "${_GKE_CLUSTER_NAME}"
+  - "--region"
+  - "${_GCP_REGION}"
+  - "--project"
+  - "${_GCP_PROJECT_ID}"
+  waitFor: ["setup-gke-cluster"]
 
-# Publicar imagen CPU latest en Artifact Registry
-- name: 'gcr.io/cloud-builders/docker'
-  args: ['push', '${_ARTIFACT_REGISTRY}/${_PROJECT_ID}/${_REPOSITORY_NAME}/btcbot-cpu:latest']
+# ------------------------------------------------------------------------------------
+# Step 6: Create Kubernetes Namespace (if not exists)
+# ------------------------------------------------------------------------------------
+- name: "gcr.io/cloud-builders/kubectl"
+  id: "create-namespace"
+  args:
+  - "create"
+  - "namespace"
+  - "${_K8S_NAMESPACE}"
+  - "--dry-run=client"
+  - "-o"
+  - "yaml"
+  - "|"
+  - "kubectl"
+  - "apply"
+  - "-f"
+  - "-"
+  env:
+  - "CLOUDSDK_CORE_PROJECT=${_GCP_PROJECT_ID}"
+  - "CLOUDSDK_CONTAINER_CLUSTER=${_GKE_CLUSTER_NAME}"
+  - "CLOUDSDK_COMPUTE_REGION=${_GCP_REGION}"
+  waitFor: ["get-gke-credentials"]
 
-logsBucket: 'gs://lofty-complex-460416-r6_cloudbuild' # Reemplaza con el nombre de tu bucket
+# ------------------------------------------------------------------------------------
+# Step 7: Create/Update Kubernetes Secret for Environment Variables
+# This method uses --from-literal for each env var.
+# Assumes substitutions like _SECRET_GCS_BUCKET_NAME are passed to `gcloud builds submit`.
+# ------------------------------------------------------------------------------------
+- name: "gcr.io/cloud-builders/kubectl"
+  id: "create-update-secret"
+  entrypoint: "bash"
+  args:
+  - "-c"
+  - |
+    kubectl create secret generic ${_K8S_SECRET_NAME} --namespace ${_K8S_NAMESPACE}       --from-literal=GCP_PROJECT_ID=${_GCP_PROJECT_ID}       --from-literal=GCS_BUCKET_NAME=${_SECRET_GCS_BUCKET_NAME}       --from-literal=GCP_REGION=${_GCP_REGION}       --from-literal=BIGQUERY_LOG_DATASET_ID=${_SECRET_BIGQUERY_LOG_DATASET_ID}       --from-literal=USE_TESTNET=${_SECRET_USE_TESTNET}       --from-literal=LOG_LEVEL=${_SECRET_LOG_LEVEL}       --from-literal=PYTHONUNBUFFERED="1"       --dry-run=client -o yaml | kubectl apply -f -
+  env:
+  - "CLOUDSDK_CORE_PROJECT=${_GCP_PROJECT_ID}"
+  - "CLOUDSDK_CONTAINER_CLUSTER=${_GKE_CLUSTER_NAME}"
+  - "CLOUDSDK_COMPUTE_REGION=${_GCP_REGION}"
+  waitFor: ["create-namespace"]
 
-substitutions:
-  # Valores configurados para tu proyecto y repositorio
-  # -------------------------------------------
-  _ARTIFACT_REGISTRY: 'europe-southwest1-docker.pkg.dev'  # URL del registry (región europe-southwest1)
-  _PROJECT_ID: 'lofty-complex-460416-r6'                           # Tu ID de proyecto en GCP 
-  _REPOSITORY_NAME: 'lofty-complex-460416-r6-repo'                 # Nombre del repositorio en Artifact Registry
-  _VERSION: '1.0.0'                                       # Versión de esta build
+# ------------------------------------------------------------------------------------
+# Step 8: Compile KFP Pipeline
+# ------------------------------------------------------------------------------------
+- name: "python:3.9-slim" # Or your preferred python builder
+  id: "compile-kfp-pipeline"
+  entrypoint: "python"
+  args:
+  - "pipelines/compile_pipeline.py" # This script outputs trading_pipeline.json
+  # The compiled JSON will be in the workspace, default path in compile_pipeline.py
+  waitFor: [] # Can run in parallel with GKE setup after images are built
 
-# Configuración de tiempo y recursos
-timeout: 10800s  # 3 horas para completar la construcción
-options:
-  machineType: 'E2_HIGHCPU_8'  # 8 CPUs virtuales, buena opción para construcciones de imágenes con ML
-  diskSizeGb: 100  # Aumentamos el tamaño del disco para evitar problemas de espacio
+# ------------------------------------------------------------------------------------
+# Step 9: Upload and Submit KFP Pipeline to Vertex AI
+# This is a simplified submission. For scheduled runs, use `gcloud beta ai pipelines recurrent-runs create`.
+# ------------------------------------------------------------------------------------
+- name: "gcr.io/google-cloud-sdk/gcloud"
+  id: "submit-kfp-pipeline"
+  entrypoint: "bash"
+  args:
+  - "-c"
+  - |
+    gcloud ai platform pipelines jobs submit       --pipeline-path="pipelines/trading_pipeline.json"       --location="${_GCP_REGION}"       --project="${_GCP_PROJECT_ID}"       --display-name="${_KFP_PIPELINE_NAME}-run-$SHORT_SHA"       --pipeline-root="${_VERTEX_PIPELINE_ROOT}"       --parameter-string-inputs="gcp_project_id=${_GCP_PROJECT_ID},gcs_bucket_name=${_SECRET_GCS_BUCKET_NAME},gcp_region=${_GCP_REGION},bigquery_log_dataset_id=${_SECRET_BIGQUERY_LOG_DATASET_ID},use_testnet=${_SECRET_USE_TESTNET},log_level=${_SECRET_LOG_LEVEL},cpu_image_uri=${_ARTIFACT_REGISTRY_LOCATION}-docker.pkg.dev/${_GCP_PROJECT_ID}/${_ARTIFACT_REGISTRY_REPO}/${_CPU_IMAGE_NAME}:${SHORT_SHA},gpu_image_uri=${_ARTIFACT_REGISTRY_LOCATION}-docker.pkg.dev/${_GCP_PROJECT_ID}/${_ARTIFACT_REGISTRY_REPO}/${_GPU_IMAGE_NAME}:${SHORT_SHA}"       --service-account="YOUR_VERTEX_AI_PIPELINES_SERVICE_ACCOUNT@${_GCP_PROJECT_ID}.iam.gserviceaccount.com" # Replace with your Vertex AI pipeline runner SA
+    # Ensure this SA has permissions for GCS, BigQuery, Vertex AI, and to run GKE jobs (if applicable)
+    # and to access the k8s secrets or that pods run with an SA that can.
+  waitFor: ["compile-kfp-pipeline", "setup-gke-cluster"] # Depends on compiled pipeline and cluster
+
+# ------------------------------------------------------------------------------------
+# Step 10: Deploy/Update Live Trader on GKE
+# Substitute image URI in the deployment manifest
+# ------------------------------------------------------------------------------------
+- name: "gcr.io/google-cloud-sdk/gcloud"
+  id: "deploy-live-trader"
+  entrypoint: "bash"
+  args:
+  - "-c"
+  - |
+    CPU_IMAGE_WITH_TAG="${_ARTIFACT_REGISTRY_LOCATION}-docker.pkg.dev/${_GCP_PROJECT_ID}/${_ARTIFACT_REGISTRY_REPO}/${_CPU_IMAGE_NAME}:${SHORT_SHA}"
+    # Substitute the image URI in the deployment YAML
+    # Using a temporary file for substitution
+    sed "s|image: ".*"|image: "${CPU_IMAGE_WITH_TAG}"|g" k8s/live-trader-deployment.yaml > k8s/live-trader-deployment-processed.yaml
+    
+    kubectl apply -f k8s/live-trader-deployment-processed.yaml --namespace ${_K8S_NAMESPACE}
+  env:
+  - "CLOUDSDK_CORE_PROJECT=${_GCP_PROJECT_ID}"
+  - "CLOUDSDK_CONTAINER_CLUSTER=${_GKE_CLUSTER_NAME}"
+  - "CLOUDSDK_COMPUTE_REGION=${_GCP_REGION}"
+  waitFor: ["get-gke-credentials", "create-update-secret"] # Depends on GKE setup and secret
+
+# ------------------------------------------------------------------------------------
+# Specify images to be pushed by Cloud Build (if not using explicit push steps)
+# This is an alternative to explicit 'docker push' steps if all images are built first.
+# However, explicit push steps (like Step 3) are clearer.
+# ------------------------------------------------------------------------------------
+images:
+- "${_ARTIFACT_REGISTRY_LOCATION}-docker.pkg.dev/${_GCP_PROJECT_ID}/${_ARTIFACT_REGISTRY_REPO}/${_CPU_IMAGE_NAME}:${SHORT_SHA}"
+- "${_ARTIFACT_REGISTRY_LOCATION}-docker.pkg.dev/${_GCP_PROJECT_ID}/${_ARTIFACT_REGISTRY_REPO}/${_CPU_IMAGE_NAME}:latest"
+- "${_ARTIFACT_REGISTRY_LOCATION}-docker.pkg.dev/${_GCP_PROJECT_ID}/${_ARTIFACT_REGISTRY_REPO}/${_GPU_IMAGE_NAME}:${SHORT_SHA}"
+- "${_ARTIFACT_REGISTRY_LOCATION}-docker.pkg.dev/${_GCP_PROJECT_ID}/${_ARTIFACT_REGISTRY_REPO}/${_GPU_IMAGE_NAME}:latest"
+
+# Optional: Define default timeout for the build
+timeout: "7200s" # 2 hours
+
+# Optional: Define machine type for Cloud Build workers (e.g., for faster builds)
+# options:
+#  machineType: 'E2_HIGHCPU_8'
+```

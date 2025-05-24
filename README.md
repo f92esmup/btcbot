@@ -30,8 +30,11 @@ Este proyecto implementa un agente de trading basado en Reinforcement Learning p
 
 ```
 btcbot/
+├── cloudbuild.yaml            # Definición de CI/CD para MLOps
+├── k8s/                       # Manifests de Kubernetes (Secrets, Deployments)
 ├── logs/                      # Logs de entrenamiento y evaluación
 ├── models/                    # Modelos guardados
+├── pipelines/                 # Definiciones de Kubeflow Pipelines (KFP)
 ├── results/                   # Resultados de evaluación
 ├── scripts/                   # Scripts ejecutables
 │   ├── download_data.py       # Descarga datos históricos de Binance
@@ -155,6 +158,8 @@ El proyecto funciona exclusivamente con servicios en la nube:
 
 ## Flujo de Trabajo Completo
 
+> **Nota sobre Automatización**: Muchos de los pasos descritos a continuación (descarga de datos, preprocesamiento, entrenamiento) pueden ser orquestados automáticamente ejecutando el pipeline de Cloud Build descrito en la sección "Automatización y Orquestación MLOps". Los comandos manuales siguen siendo útiles para desarrollo local, depuración y ejecuciones individuales fuera del pipeline automatizado.
+
 ### 1. Descarga de Datos Históricos
 
 Este paso descarga datos OHLCV de Binance Futures y los guarda en Google Cloud Storage:
@@ -238,6 +243,95 @@ python scripts/run_live_trader.py --config src/config.yaml
 
 El bot comenzará a escuchar el cierre de nuevas velas, procesar datos en tiempo real y tomar decisiones de trading utilizando el modelo cargado localmente.
 
+## Automatización y Orquestación MLOps con Cloud Build y GKE/Vertex AI
+
+Esta sección describe cómo el pipeline de MLOps automatiza la construcción, el despliegue y la ejecución de los componentes del sistema BTCBot, utilizando Google Cloud Build, Google Kubernetes Engine (GKE) en modo Autopilot y Vertex AI Pipelines.
+
+### Visión General
+
+El archivo `cloudbuild.yaml` en la raíz del repositorio define un pipeline de Integración Continua y Despliegue Continuo (CI/CD) que automatiza los siguientes procesos clave:
+1.  Construcción de imágenes Docker para la CPU y la GPU.
+2.  Configuración de la infraestructura necesaria en GKE (cluster, namespace, secrets).
+3.  Compilación del pipeline de Kubeflow (KFP) definido en Python.
+4.  Envío y ejecución del pipeline de KFP en Vertex AI Pipelines para el reentrenamiento del modelo.
+5.  Despliegue o actualización del bot de trading en vivo como un servicio continuo en GKE.
+
+Este enfoque permite una gestión MLOps más robusta, facilitando la reproducibilidad, la automatización de reentrenamientos y el despliegue continuo de nuevas versiones del bot.
+
+### Componentes de la Orquestación
+
+-   **`cloudbuild.yaml`**:
+    Es el corazón de la automatización CI/CD. Sus responsabilidades incluyen:
+    -   Construir las imágenes Docker (`Dockerfile.cpu` y `Dockerfile.gpu`) y etiquetarlas.
+    -   Pushear las imágenes a Google Artifact Registry.
+    -   Asegurar que el cluster de GKE Autopilot esté creado y configurado.
+    -   Crear el namespace de Kubernetes (`btcbot`) si no existe.
+    -   Crear o actualizar el Secret de Kubernetes (`btcbot-env-vars`) con variables de entorno no sensibles, utilizando sustituciones de Cloud Build.
+    -   Compilar el pipeline de KFP (`pipelines/trading_pipeline.py`) a su formato JSON.
+    -   Enviar el pipeline compilado a Vertex AI Pipelines para su ejecución.
+    -   Desplegar la última versión del bot de trading en vivo en GKE utilizando el manifiesto `k8s/live-trader-deployment.yaml`.
+
+-   **Imágenes Docker**:
+    -   `btcbot-cpu`: Imagen base utilizada para tareas que no requieren GPU, como la adquisición y preprocesamiento de datos, y la ejecución del bot de trading en vivo.
+    -   `btcbot-gpu`: Imagen que incluye dependencias de CUDA/GPU, utilizada para el paso de entrenamiento del modelo en el pipeline de KFP.
+    Ambas imágenes se almacenan en Artifact Registry.
+
+-   **GKE Autopilot Cluster**:
+    Cloud Build verifica o crea un cluster de GKE Autopilot llamado `btcbot-autopilot-cluster` en la región `europe-south1`. Este cluster gestiona la ejecución de los componentes del pipeline de KFP (como trabajos de Vertex AI) y el despliegue continuo del bot de trading en vivo.
+
+-   **Kubernetes Secrets (`btcbot-env-vars`)**:
+    El archivo `k8s/btcbot-env-secret.yaml.template` sirve como plantilla. Cloud Build crea un Secret en Kubernetes llamado `btcbot-env-vars` dentro del namespace `btcbot`. Este Secret almacena variables de entorno no sensibles (ej. `GCP_PROJECT_ID`, `GCS_BUCKET_NAME`, `BIGQUERY_LOG_DATASET_ID`, `USE_TESTNET`, `LOG_LEVEL`) que son necesarias para los scripts y aplicaciones. Los valores para estas variables se inyectan durante el proceso de Cloud Build mediante sustituciones.
+    **Importante**: Las credenciales sensibles como las claves API de Binance NO se almacenan aquí; estas deben seguir siendo gestionadas a través de Google Cloud Secret Manager y accedidas directamente por la aplicación cuando sea necesario.
+
+-   **Kubeflow Pipeline (`pipelines/trading_pipeline.py`)**:
+    Define un pipeline de Machine Learning de tres pasos utilizando el SDK de KFP:
+    1.  **Adquisición de Datos**: Ejecuta `scripts/download_data.py` en un contenedor CPU.
+    2.  **Preprocesamiento de Datos**: Ejecuta `scripts/preprocess_data.py` en un contenedor CPU.
+    3.  **Entrenamiento del Modelo**: Ejecuta `scripts/train_rl_agent.py` en un contenedor GPU, aprovechando el hardware acelerado para el entrenamiento.
+    Este pipeline se compila a un archivo JSON y se envía a Vertex AI Pipelines, lo que permite ejecuciones programadas o activadas manualmente para el reentrenamiento del modelo.
+
+-   **Deployment del Bot en Vivo (`k8s/live-trader-deployment.yaml`)**:
+    Este manifiesto de Kubernetes describe el despliegue del bot de trading en vivo. Cloud Build lo utiliza para desplegar `scripts/run_live_trader.py` como un servicio continuo en el cluster de GKE. El Deployment asegura que una instancia del bot esté siempre en ejecución, utilizando la imagen CPU más reciente y consumiendo las variables de entorno del Secret `btcbot-env-vars`.
+
+### Ejecución del Pipeline de Cloud Build
+
+Para ejecutar el pipeline completo de MLOps definido en `cloudbuild.yaml`, se utiliza el siguiente comando `gcloud`:
+
+```bash
+gcloud builds submit . --config cloudbuild.yaml --substitutions=\
+_GCS_BUCKET_NAME="tu-bucket-gcs-real",\
+_SECRET_GCS_BUCKET_NAME="tu-bucket-gcs-real",\
+_SECRET_BIGQUERY_LOG_DATASET_ID="tu_dataset_id_real",\
+_SECRET_USE_TESTNET="false",\
+_SECRET_LOG_LEVEL="INFO",\
+_ARTIFACT_REGISTRY_REPO="btcbot-images",\
+_GKE_CLUSTER_NAME="btcbot-autopilot-cluster",\
+_KFP_PIPELINE_NAME="btcbot-mlops-pipeline",\
+_VERTEX_AI_PIPELINES_RUNNER_SA="tu-sa-vertex-pipelines@tu-proyecto-id.iam.gserviceaccount.com"
+# Añadir más sustituciones según sea necesario, como _GCP_REGION si es diferente al default.
+# Asegúrate de que _GCS_BUCKET_NAME se usa para _VERTEX_PIPELINE_ROOT.
+```
+
+**Explicación de las Sustituciones**:
+-   `_GCS_BUCKET_NAME`: (Requerido por `_VERTEX_PIPELINE_ROOT`) El bucket de GCS donde Vertex AI Pipelines almacenará los artefactos del pipeline.
+-   `_SECRET_GCS_BUCKET_NAME`: (Requerido para el Secret `btcbot-env-vars`) El bucket de GCS que la aplicación usará.
+-   `_SECRET_BIGQUERY_LOG_DATASET_ID`: (Requerido para el Secret `btcbot-env-vars`) El ID del dataset de BigQuery para los logs.
+-   `_SECRET_USE_TESTNET`: (Requerido para el Secret `btcbot-env-vars`) Define si el bot opera en modo testnet (`true` o `false`).
+-   `_SECRET_LOG_LEVEL`: (Requerido para el Secret `btcbot-env-vars`) Nivel de logging para la aplicación (ej. `INFO`, `DEBUG`).
+-   `_ARTIFACT_REGISTRY_REPO`: Nombre del repositorio en Artifact Registry donde se almacenarán las imágenes Docker.
+-   `_GKE_CLUSTER_NAME`: Nombre del cluster de GKE Autopilot.
+-   `_KFP_PIPELINE_NAME`: Nombre para la ejecución del pipeline en Vertex AI.
+-   `_VERTEX_AI_PIPELINES_RUNNER_SA`: La cuenta de servicio que Vertex AI Pipelines utilizará para ejecutar los componentes del pipeline. Esta cuenta de servicio necesita permisos para acceder a GCS, BigQuery, GKE (para crear trabajos si es necesario), y otros servicios de GCP.
+
+Es fundamental que la cuenta de servicio de Cloud Build (`[PROJECT_NUMBER]@cloudbuild.gserviceaccount.com`) tenga los permisos necesarios para gestionar recursos en GCS, Artifact Registry, GKE, IAM (para roles en cuentas de servicio), y Vertex AI.
+
+### Acceso a Variables de Entorno en los Componentes
+
+-   **Pipeline de KFP / Vertex AI**: Los componentes del pipeline (definidos en `pipelines/trading_pipeline.py`) reciben parámetros como `gcp_project_id`, `gcs_bucket_name`, etc., directamente desde la definición del pipeline en Python. Estos valores se suministran al pipeline de Vertex AI en el paso `gcloud ai platform pipelines jobs submit` de Cloud Build, utilizando las sustituciones.
+-   **Scripts dentro de Contenedores (Entrenamiento y Bot en Vivo)**: Los scripts como `train_rl_agent.py` o `run_live_trader.py`, cuando se ejecutan dentro de contenedores Docker (ya sea como parte de un trabajo de Vertex AI o como un Deployment en GKE), leen su configuración (ej. ID del proyecto, nombre del bucket) de variables de entorno. En GKE, estas variables de entorno son pobladas por Kubernetes a partir del Secret `btcbot-env-vars`. La aplicación accede a ellas usando `os.environ.get()` o a través del `ConfigManager`.
+
+Este sistema de MLOps permite una gestión automatizada y centralizada del ciclo de vida del modelo de trading.
+
 ## Configuración del Sistema
 
 ### Configuración Centralizada
@@ -306,7 +400,15 @@ El sistema incluye un completo sistema de logging que registra:
 - **Gymnasium**: Framework para el entorno de simulación
 - **pandas-ta**: Biblioteca de indicadores técnicos para trading
 - **python-binance**: Cliente API oficial de Binance
-- **Google Cloud**: GCS, Secret Manager, BigQuery, Vertex AI
+- **Google Cloud**:
+    -   Google Cloud Storage (GCS): Para almacenamiento de datos y modelos.
+    -   Google Cloud Secret Manager: Para gestión de credenciales.
+    -   Google BigQuery: Para logging detallado de entrenamiento y trading en vivo.
+    -   Vertex AI Pipelines: Para la orquestación y ejecución de pipelines de ML.
+    -   Google Cloud Build: Para CI/CD y automatización de MLOps.
+    -   Google Kubernetes Engine (GKE Autopilot): Para orquestación de contenedores (ej. bot en vivo).
+- **Kubeflow Pipelines (KFP SDK)**: Para la definición de los pipelines de ML.
+- **Docker**: Para la contenerización de aplicaciones.
 - **Flask/Gunicorn**: Utilizado para `serving/serve.py` (opcional, para despliegues de API de predicción independientes).
 - **Websockets**: Conexión en tiempo real con Binance
 
