@@ -141,9 +141,6 @@ steps:
   args:
   - "-c"
   - |
-    CPU_IMAGE_WITH_TAG="${_ARTIFACT_REGISTRY_LOCATION}-docker.pkg.dev/${_GCP_PROJECT_ID}/${_ARTIFACT_REGISTRY_REPO}/${_CPU_IMAGE_NAME}:${SHORT_SHA}"
-    GPU_IMAGE_WITH_TAG="${_ARTIFACT_REGISTRY_LOCATION}-docker.pkg.dev/${_GCP_PROJECT_ID}/${_ARTIFACT_REGISTRY_REPO}/${_GPU_IMAGE_NAME}:${SHORT_SHA}"
-    
     # Substitute image URIs in job manifests
     sed "s|YOUR_GCP_PROJECT_ID|${_GCP_PROJECT_ID}|g; s|YOUR_ARTIFACT_REGISTRY_REPO|${_ARTIFACT_REGISTRY_REPO}|g; s|YOUR_CPU_IMAGE_NAME:latest|${_CPU_IMAGE_NAME}:${SHORT_SHA}|g" k8s/data-acquisition-job.yaml > k8s/data-acquisition-job-processed.yaml
     sed "s|YOUR_GCP_PROJECT_ID|${_GCP_PROJECT_ID}|g; s|YOUR_ARTIFACT_REGISTRY_REPO|${_ARTIFACT_REGISTRY_REPO}|g; s|YOUR_CPU_IMAGE_NAME:latest|${_CPU_IMAGE_NAME}:${SHORT_SHA}|g" k8s/data-preprocessing-job.yaml > k8s/data-preprocessing-job-processed.yaml
@@ -170,10 +167,9 @@ steps:
   args:
   - "-c"
   - |
-    CPU_IMAGE_WITH_TAG="${_ARTIFACT_REGISTRY_LOCATION}-docker.pkg.dev/${_GCP_PROJECT_ID}/${_ARTIFACT_REGISTRY_REPO}/${_CPU_IMAGE_NAME}:${SHORT_SHA}"
     # Substitute the image URI in the deployment YAML
     # Using a temporary file for substitution
-    sed "s|image: ".*"|image: "${CPU_IMAGE_WITH_TAG}"|g" k8s/live-trader-deployment.yaml > k8s/live-trader-deployment-processed.yaml
+    sed "s|image: \".*\"|image: \"${_ARTIFACT_REGISTRY_LOCATION}-docker.pkg.dev/${_GCP_PROJECT_ID}/${_ARTIFACT_REGISTRY_REPO}/${_CPU_IMAGE_NAME}:${SHORT_SHA}\"|g" k8s/live-trader-deployment.yaml > k8s/live-trader-deployment-processed.yaml
     
     kubectl apply -f k8s/live-trader-deployment-processed.yaml --namespace ${_K8S_NAMESPACE}
   env:
