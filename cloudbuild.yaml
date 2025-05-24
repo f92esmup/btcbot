@@ -199,4 +199,7 @@ timeout: "7200s" # 2 hours
 # Optional: Define machine type for Cloud Build workers (e.g., for faster builds)
 options:
   machineType: 'E2_HIGHCPU_8'
-  logsBucket: 'gs://lofty-complex-460416-r6_cloudbuild'
+  logging: CLOUD_LOGGING_ONLY
+
+# Optional: Specify logs bucket (if needed)
+logsBucket: 'gs://lofty-complex-460416-r6_cloudbuild'
