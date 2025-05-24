@@ -168,11 +168,7 @@ agent:
 # =====================================================================
 # Configuración de Trading en Vivo
 # =====================================================================
-live_trading:
-  # Las variables Vertex AI (vertex_ai_predict_url y vertex_ai_endpoint_raw_id) se han movido a variables de entorno
-  # VERTEX_AI_PREDICT_URL: URL completa del endpoint de predicción en Vertex AI
-  # VERTEX_AI_ENDPOINT_RAW_ID: ID "crudo" del endpoint de Vertex AI (solo el número identificador del endpoint)
-  
+live_trading:  
   # URLs de WebSocket para diferentes modos de trading
   websocket_urls:
     testnet: "wss://stream.binancefuture.com/ws"

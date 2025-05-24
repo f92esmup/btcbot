@@ -344,7 +344,7 @@ El archivo `src/config.yaml` contiene toda la configuración del sistema organiz
 - **preprocessing**: Configuración de indicadores técnicos y normalización
 - **environment**: Parámetros para el entorno de simulación
 - **agent**: Hiperparámetros del modelo SAC, arquitectura Transformer, ruta al modelo para trading en vivo (`live_model_path`) y configuración para el logging de entrenamiento a BigQuery (`bigquery_logging`).
-- **live_trading**: Configuración específica para el trading en vivo (ej. configuración de delays). Los logs de trading en vivo se envían a BigQuery a la tabla `LiveTrading_{FECHA}` dentro del dataset especificado por la variable de entorno `BIGQUERY_LOG_DATASET_ID`. Las configuraciones de endpoint de predicción (como `VERTEX_AI_PREDICT_URL`) ahora son relevantes principalmente si se utiliza `serving/serve.py` para un despliegue de API independiente.
+- **live_trading**: Configuración específica para el trading en vivo (ej. configuración de delays). Los logs de trading en vivo se envían a BigQuery a la tabla `LiveTrading_{FECHA}` dentro del dataset especificado por la variable de entorno `BIGQUERY_LOG_DATASET_ID`.
 
 ### Administración de Credenciales y Datos
 

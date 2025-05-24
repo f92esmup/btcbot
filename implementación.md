@@ -140,15 +140,6 @@ Añade una nueva sección `live_trading` al final de tu archivo `src/config.yaml
 # Configuración de Trading en Vivo
 # =====================================================================
 live_trading:
-  # URL completa del endpoint de predicción en Vertex AI
-  # Formato: https://{region}[-aiplatform.googleapis.com/v1/projects/](https://-aiplatform.googleapis.com/v1/projects/){project_id}/locations/{region}/endpoints/{endpoint_id}:predict
-  # EJEMPLO: vertex_ai_predict_url: "[https://europe-southwest1-aiplatform.googleapis.com/v1/projects/bitcoin-460320/locations/europe-southwest1/endpoints/1234567890123456789:predict](https://europe-southwest1-aiplatform.googleapis.com/v1/projects/bitcoin-460320/locations/europe-southwest1/endpoints/1234567890123456789:predict)"
-  vertex_ai_predict_url: "REEMPLAZAR_CON_URL_ENDPOINT_VERTEX_AI"
-  
-  # ID "crudo" del endpoint de Vertex AI (solo el número identificador del endpoint)
-  # EJEMPLO: vertex_ai_endpoint_raw_id: "1234567890123456789"
-  vertex_ai_endpoint_raw_id: "REEMPLAZAR_CON_ID_ENDPOINT_VERTEX_AI"
-
   # Número de velas a descargar para el preprocesamiento en cada ciclo de decisión
   # Debe ser suficiente para las ventanas de normalización e indicadores.
   # Ej: Si L=96 y normalization_window_multiplier_for_L=2, la ventana de normalización es 192.
@@ -1151,22 +1142,8 @@ async def main_live_trader():
 
         live_feature_processor = LiveFeatureProcessor(config_manager)
 
-        # Configuración de Vertex AI
+        # Configuración de GCP para logging en GCS
         gcp_project_id = config_manager.get_env_variable('GCP_PROJECT_ID')
-        gcp_region = config_manager.get_env_variable('GCP_REGION')
-        # vertex_ai_predict_url = live_config.get('vertex_ai_predict_url') # URL completa si se usa requests
-        vertex_endpoint_id = live_config.get('vertex_ai_endpoint_raw_id') # ID crudo para SDK
-
-        if not all([gcp_project_id, gcp_region, vertex_endpoint_id]):
-            logger.critical("Configuración de Vertex AI incompleta (GCP_PROJECT_ID, GCP_REGION, vertex_ai_endpoint_raw_id son obligatorios).")
-            if binance_api_manager: await binance_api_manager.close_client_session()
-            return
-            
-        aiplatform.init(project=gcp_project_id, location=gcp_region)
-        # Construir el resource name completo del endpoint
-        vertex_endpoint_resource_name = f"projects/{gcp_project_id}/locations/{gcp_region}/endpoints/{vertex_endpoint_id}"
-        vertex_endpoint = aiplatform.Endpoint(endpoint_name=vertex_endpoint_resource_name)
-        logger.info(f"🤖 Cliente de Vertex AI Endpoint inicializado para: {vertex_endpoint.resource_name}")
 
         # Configuración de Trading (Símbolo, Apalancamiento)
         symbol_to_trade = data_acq_config.get('symbol', "BTCUSDT").upper()

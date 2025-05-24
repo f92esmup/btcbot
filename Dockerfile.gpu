@@ -53,10 +53,6 @@ ENV SECRET_NAME_BINANCE_API_SECRET_FUTURES="BINANCE_API_SECRET_FUTURES"
 ENV SECRET_NAME_TESTNET_BINANCE_API_KEY_FUTURES="TESTNET_BINANCE_API_KEY_FUTURES"
 ENV SECRET_NAME_TESTNET_BINANCE_API_SECRET_FUTURES="TESTNET_BINANCE_API_SECRET_FUTURES"
 
-# Variables de entorno para Vertex AI
-ENV VERTEX_AI_PREDICT_URL="https://europe-southwest1-aiplatform.googleapis.com/v1/projects/lofty-complex-460416-r6/locations/europe-southwest1/endpoints/ENDPOINT_ID:predict"
-ENV VERTEX_AI_ENDPOINT_RAW_ID="ENDPOINT_ID"
-
 # Live Trading Mode: TESTNET o REAL
 # Esta variable determinará qué conjunto de NOMBRES de secretos se utilizan.
 ENV LIVE_TRADING_MODE="TESTNET"
