@@ -20,6 +20,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.utils.config import ConfigManager
 from src.utils.logging_utils import setup_logger
+from src.utils.bigquery_utils import stream_data_to_bigquery # Added import
 from src.live.websocket_manager import LiveWebsocketManager
 from src.agent.rl_agent_manager import RLAgentManager
 from src.live.binance_api_manager import LiveBinanceAPIManager
@@ -28,6 +29,40 @@ from src.live.portfolio_feature_builder import PortfolioFeatureBuilder
 
 # Configurar logger principal
 logger = setup_logger("LiveTrader")
+
+LIVE_TRADING_SCHEMA = [
+    bigquery.SchemaField("timestamp_decision_utc", "TIMESTAMP"),
+    bigquery.SchemaField("trading_mode", "STRING"),
+    bigquery.SchemaField("symbol", "STRING"),
+    bigquery.SchemaField("interval", "STRING"),
+    bigquery.SchemaField("kline_open_time_utc", "TIMESTAMP", mode="NULLABLE"),
+    bigquery.SchemaField("kline_close_time_utc", "TIMESTAMP", mode="NULLABLE"),
+    bigquery.SchemaField("kline_o", "FLOAT", mode="NULLABLE"),
+    bigquery.SchemaField("kline_h", "FLOAT", mode="NULLABLE"),
+    bigquery.SchemaField("kline_l", "FLOAT", mode="NULLABLE"),
+    bigquery.SchemaField("kline_c", "FLOAT", mode="NULLABLE"),
+    bigquery.SchemaField("kline_v", "FLOAT", mode="NULLABLE"),
+    bigquery.SchemaField("model_action_value", "FLOAT", mode="NULLABLE"),
+    bigquery.SchemaField("action_threshold", "FLOAT", mode="NULLABLE"),
+    bigquery.SchemaField("current_position_side_bq", "INTEGER", mode="NULLABLE"),
+    bigquery.SchemaField("pos_amt_before_action_bq", "FLOAT", mode="NULLABLE"),
+    bigquery.SchemaField("entry_price_bq", "FLOAT", mode="NULLABLE"),
+    bigquery.SchemaField("unrealized_pnl_bq", "FLOAT", mode="NULLABLE"),
+    bigquery.SchemaField("current_equity_before_action_bq", "FLOAT", mode="NULLABLE"),
+    bigquery.SchemaField("pnl_percent_bq", "FLOAT", mode="NULLABLE"),
+    bigquery.SchemaField("desired_signal_bq", "INTEGER", mode="NULLABLE"),
+    bigquery.SchemaField("position_change_bq", "BOOLEAN", mode="NULLABLE"),
+    bigquery.SchemaField("current_price_bq", "FLOAT", mode="NULLABLE"),
+    bigquery.SchemaField("leverage_bq", "FLOAT", mode="NULLABLE"),
+    bigquery.SchemaField("action_taken_desc_bq", "STRING", mode="NULLABLE"),
+    bigquery.SchemaField("order_id_close_bq", "STRING", mode="NULLABLE"),
+    bigquery.SchemaField("order_status_close_bq", "STRING", mode="NULLABLE"),
+    bigquery.SchemaField("order_id_open_bq", "STRING", mode="NULLABLE"),
+    bigquery.SchemaField("order_status_open_bq", "STRING", mode="NULLABLE"),
+    bigquery.SchemaField("order_qty_open_bq", "FLOAT", mode="NULLABLE"),
+    bigquery.SchemaField("current_equity_after_action_bq", "FLOAT", mode="NULLABLE"),
+    bigquery.SchemaField("error_message_bq", "STRING", mode="NULLABLE"),
+]
 
 def parse_arguments():
     parser = argparse.ArgumentParser(description="BTCBot Live Trader")
@@ -91,23 +126,35 @@ class LiveTrader:
             logger.error(f"Error inicializando RLAgentManager o cargando modelo: {e_agent}", exc_info=True)
             raise  # Re-lanzar la excepción para detener la inicialización si falla la carga del modelo
         
-        # NUEVO: Inicializar cliente de BigQuery y configuración
+        # BigQuery Initialization
         try:
             self.gcp_project_id = self.config_manager.get_env_variable('GCP_PROJECT_ID')
+            # Get dataset ID from environment variable, fallback to config
+            env_dataset_id = os.environ.get('BIGQUERY_LOG_DATASET_ID')
+            if env_dataset_id:
+                self.bigquery_dataset_id = env_dataset_id
+                logger.info(f"Using BigQuery dataset ID from environment variable BIGQUERY_LOG_DATASET_ID: {self.bigquery_dataset_id}")
+            else:
+                self.bigquery_dataset_id = self.live_trading_config.get('bigquery_dataset_id', 'btcbot_logs')
+                logger.info(f"Using BigQuery dataset ID from config (fallback): {self.bigquery_dataset_id}")
+
+            if not self.gcp_project_id:
+                raise ValueError("GCP_PROJECT_ID not found in environment variables.")
+            if not self.bigquery_dataset_id:
+                raise ValueError("BigQuery dataset ID not configured (checked BIGQUERY_LOG_DATASET_ID env var and config).")
+
             self.bigquery_client = bigquery.Client(project=self.gcp_project_id)
-            # Define los IDs del dataset y tabla usando configuración o valores por defecto
-            self.bigquery_dataset_id = self.live_trading_config.get('bigquery_dataset_id', 'btcbot_logs')
-            self.bigquery_table_name = self.live_trading_config.get('bigquery_table_name', 'live_trading_events')
-            self.bigquery_table_id = f"{self.gcp_project_id}.{self.bigquery_dataset_id}.{self.bigquery_table_name}"
-            logger.info(f"Logging de trading configurado para BigQuery table: {self.bigquery_table_id}")
+            logger.info(f"BigQuery client initialized for project {self.gcp_project_id}. Logging to dataset: {self.bigquery_dataset_id}")
             
-            # Determinar el modo de trading (TESTNET/REAL) para los logs
+            # Trading mode for logs
             self.trading_mode = "TESTNET" if self.config_manager.get_env_variable('USE_TESTNET', 'true').lower() == 'true' else "REAL"
-            logger.info(f"Modo de trading configurado: {self.trading_mode}")
+            logger.info(f"Modo de trading configurado para logs: {self.trading_mode}")
+
         except Exception as e_bq_init:
-            logger.error(f"Error inicializando cliente de BigQuery o IDs: {e_bq_init}. El logging a BigQuery no funcionará.")
+            logger.error(f"Error initializing BigQuery client or configuration: {e_bq_init}. BigQuery logging will be disabled.", exc_info=True)
             self.bigquery_client = None
-            self.bigquery_table_id = None
+            self.gcp_project_id = None
+            self.bigquery_dataset_id = None
         
         # Variable para almacenar el registro de trading para el CSV (ya no se usará activamente)
         self.trading_log = []
@@ -327,25 +374,35 @@ class LiveTrader:
         
         finally:
             # Siempre intentar enviar logs a BigQuery, incluso si hubo errores
-            if self.bigquery_client and self.bigquery_table_id:
+            # Ensure self.bigquery_client and self.bigquery_dataset_id are valid
+            if self.bigquery_client and self.gcp_project_id and self.bigquery_dataset_id:
                 try:
                     # Preparar el log completo para BigQuery
                     self._prepare_log_entry_for_bq(log_entry_data_for_bq, cycle_vars if 'cycle_vars' in locals() else {})
                     
-                    # Importar aquí para evitar dependencias circulares
-                    from src.utils.gcs_utils import stream_row_to_bigquery
-                    
+                    # Construct dynamic table ID
+                    current_date_str = datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%d')
+                    dynamic_table_id = f"LiveTrading_{current_date_str}"
+
+                    # Ensure all schema fields are present in the log_entry, adding None if missing
+                    # This is important if _prepare_log_entry_for_bq doesn't guarantee all fields
+                    processed_log_entry = {field.name: log_entry_data_for_bq.get(field.name) for field in LIVE_TRADING_SCHEMA}
+
                     # Enviar a BigQuery usando asyncio.to_thread para no bloquear
                     await asyncio.to_thread(
-                        stream_row_to_bigquery,
-                        self.bigquery_client,
-                        self.bigquery_table_id,
-                        log_entry_data_for_bq
+                        stream_data_to_bigquery, # New utility function
+                        project_id=self.gcp_project_id,
+                        dataset_id=self.bigquery_dataset_id,
+                        table_id=dynamic_table_id,
+                        rows_to_insert=[processed_log_entry], # Utility expects a list of rows
+                        client=self.bigquery_client, # Pass the initialized client
+                        schema=LIVE_TRADING_SCHEMA # Provide schema for table creation
                     )
-                    
-                    logger.debug("Log enviado a BigQuery correctamente")
+                    logger.debug(f"Log sent to BigQuery table {dynamic_table_id} successfully")
                 except Exception as e_bq:
-                    logger.error(f"Error enviando log a BigQuery: {e_bq}", exc_info=True)
+                    logger.error(f"Error sending log to BigQuery table {dynamic_table_id}: {e_bq}", exc_info=True)
+            else:
+                logger.warning("BigQuery client not available or not fully configured. Skipping log to BigQuery.")
 
     async def get_model_prediction(self, 
                                 market_features: np.ndarray, 

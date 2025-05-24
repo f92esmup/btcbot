@@ -6,6 +6,7 @@ from gymnasium import spaces
 from typing import Dict, Any, Tuple, Optional, Union, List
 import logging
 import io
+import datetime # Added import
 from google.cloud import storage
 
 from src.utils.config import ConfigManager
@@ -83,6 +84,19 @@ class TradingEnvironment(gym.Env):
         self.steps_in_current_position = 0
         self.liquidation_price = 0.0
         self.last_equity = 0.0  # Para el cálculo de recompensa
+
+        # For BigQuery logging
+        self.current_episode_step_data = []
+        self.latest_episode_summary = None
+        self.current_step_in_episode = 0
+        self.episode_id_counter = 0 # To assign unique IDs to episodes
+        # For aggregating stats per episode for the summary
+        self.current_episode_agg_stats = {
+            'total_reward': 0.0,
+            'pnl_realized': 0.0,
+            'num_trades': 0,
+            'total_fees': 0.0
+        }
         
         # Define el espacio de observación como un Dict
         market_features_dim = len(self.feature_names)
@@ -247,6 +261,18 @@ class TradingEnvironment(gym.Env):
         # Reinicia el generador de números aleatorios si se proporciona una semilla
         if seed is not None:
             super().reset(seed=seed)
+
+        # Increment episode counter and reset BQ logging structures
+        self.episode_id_counter += 1
+        self.current_episode_step_data.clear()
+        self.latest_episode_summary = None
+        self.current_step_in_episode = 0
+        self.current_episode_agg_stats = {
+            'total_reward': 0.0,
+            'pnl_realized': 0.0,
+            'num_trades': 0,
+            'total_fees': 0.0
+        }
         
         # Reinicia las estadísticas del episodio
         self.episode_stats = {
@@ -309,6 +335,7 @@ class TradingEnvironment(gym.Env):
         
         # Avanza al siguiente paso en los datos de mercado
         self.current_step_index += 1
+        self.current_step_in_episode += 1 # Increment step in episode
         
         # Obtiene los datos actuales del mercado (referencia, no copia)
         current_market_data = self.market_data[self.current_step_index]
@@ -330,8 +357,45 @@ class TradingEnvironment(gym.Env):
         self.episode_stats['min_equity'] = min(self.episode_stats['min_equity'], self.current_equity)
         
         # Calcula la recompensa (retorno logarítmico del equity)
-        reward = np.log(self.current_equity / self.last_equity)
+        reward = np.log(self.current_equity / self.last_equity) # Ensure self.last_equity is not zero if equity can be zero
+        if np.isinf(reward) or np.isnan(reward): # Handle potential log(0) or log(neg)
+            reward = 0.0 
+
+        # --- BigQuery Step Logging ---
+        step_info_log = {}
+        step_info_log['episode_id'] = self.episode_id_counter
+        step_info_log['step_in_episode'] = self.current_step_in_episode
+        step_info_log['timestamp_event'] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        step_info_log['event_type'] = 'step_info'
+        step_info_log['reward_step'] = float(reward)
+        step_info_log['action_value_raw'] = float(action_signal)
+        step_info_log['current_equity_step'] = float(self.current_equity)
+        step_info_log['current_position_side_step'] = int(self.active_position_side)
+        step_info_log['current_position_avg_price_step'] = float(self.active_position_entry_price) if self.active_position_side != 0 else 0.0
+        step_info_log['current_position_size_step'] = float(self.active_position_size_contracts)
+        step_info_log['market_price_at_step'] = float(close_price) # close_price from this step
+
+        # Log market and portfolio features
+        # Market features for the current step (that influenced this state)
+        current_market_data_for_log = self.market_data[self.current_step_index]
+        if current_market_data_for_log.ndim == 2 and current_market_data_for_log.shape[0] > 0 and current_market_data_for_log.shape[1] > 0:
+            last_market_feats = current_market_data_for_log[-1] # Last row of the sequence for current step
+            step_info_log['obs_market_feat_0_step'] = float(last_market_feats[0]) if len(last_market_feats) > 0 else None
+            step_info_log['obs_market_feat_1_step'] = float(last_market_feats[1]) if len(last_market_feats) > 1 else None
+            step_info_log['obs_market_feat_2_step'] = float(last_market_feats[2]) if len(last_market_feats) > 2 else None
+        else: # Handle cases where market features might not be as expected (e.g. 1D array)
+            step_info_log['obs_market_feat_0_step'] = None
+            step_info_log['obs_market_feat_1_step'] = None
+            step_info_log['obs_market_feat_2_step'] = None
+            
+        # Portfolio features reflecting the state *after* the current action
+        current_portfolio_features_for_log = self._get_normalized_portfolio_features() # This gets current state
+        step_info_log['obs_portfolio_pnl_norm_step'] = float(current_portfolio_features_for_log[3])
+        step_info_log['obs_portfolio_steps_in_pos_norm_step'] = float(current_portfolio_features_for_log[6])
         
+        self.current_episode_step_data.append(step_info_log)
+        # --- End BigQuery Step Logging ---
+
         # Comprueba condiciones de fin de episodio
         terminated = False
         truncated = False
@@ -354,6 +418,26 @@ class TradingEnvironment(gym.Env):
         
         # Obtiene la siguiente observación
         observation = self._get_observation()
+
+        # Update aggregated reward for BQ
+        self.current_episode_agg_stats['total_reward'] += reward
+        
+        # Episode End Logging for BigQuery
+        if terminated or truncated:
+            episode_summary_log = {}
+            episode_summary_log['episode_id'] = self.episode_id_counter
+            episode_summary_log['timestamp_event'] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+            episode_summary_log['event_type'] = 'episode_summary'
+            episode_summary_log['total_reward_episode'] = float(self.current_episode_agg_stats['total_reward'])
+            episode_summary_log['pnl_realized_episode'] = float(self.current_episode_agg_stats['pnl_realized'])
+            episode_summary_log['num_trades_episode'] = int(self.current_episode_agg_stats['num_trades'])
+            episode_summary_log['total_fees_episode'] = float(self.current_episode_agg_stats['total_fees'])
+            episode_summary_log['episode_duration_steps'] = int(self.current_step_in_episode)
+            episode_summary_log['final_equity_episode'] = float(self.current_equity)
+            episode_summary_log['termination_reason'] = info.get('termination_reason', None)
+            
+            self.latest_episode_summary = episode_summary_log
+            self.current_episode_step_data.append(episode_summary_log) # Append to step data for callback
         
         # Actualiza info con estadísticas de episodio
         info.update({
@@ -555,6 +639,9 @@ class TradingEnvironment(gym.Env):
         # Actualiza estadísticas
         self.episode_stats['trades'] += 1
         self.episode_stats['total_fees'] += commission
+        # BQ Agg Stats
+        self.current_episode_agg_stats['num_trades'] += 1
+        self.current_episode_agg_stats['total_fees'] += commission
         
         logger.info(f"Posición abierta: {desired_action}, Precio: {execution_price}, Tamaño: {position_size_contracts}, Comisión: {commission}")
     
@@ -597,6 +684,10 @@ class TradingEnvironment(gym.Env):
         
         self.episode_stats['total_pnl'] += pnl
         self.episode_stats['total_fees'] += commission
+        # BQ Agg Stats
+        self.current_episode_agg_stats['num_trades'] += 1 # Closing a position is also a trade event for this counter
+        self.current_episode_agg_stats['total_fees'] += commission
+        self.current_episode_agg_stats['pnl_realized'] += pnl
         
         logger.info(f"Posición cerrada: {desired_action}, Precio: {execution_price}, P&L: {pnl}, Comisión: {commission}")
         
@@ -763,6 +854,10 @@ class TradingEnvironment(gym.Env):
         self.episode_stats['unprofitable_trades'] += 1
         self.episode_stats['total_pnl'] += pnl
         self.episode_stats['total_fees'] += commission
+        # BQ Agg Stats
+        self.current_episode_agg_stats['num_trades'] += 1 # Liquidation is a trade event
+        self.current_episode_agg_stats['total_fees'] += commission
+        self.current_episode_agg_stats['pnl_realized'] += pnl
         
         logger.warning(f"Posición liquidada: Precio: {liquidation_price}, P&L: {pnl}, Comisión: {commission}")
         
@@ -963,3 +1058,9 @@ class TradingEnvironment(gym.Env):
         else:
             # Valor por defecto
             return close_price * 0.01  # 1% del precio como aproximación
+
+    def get_current_episode_step_data(self) -> list:
+        """Returns a copy of the current episode's step data and clears the internal list."""
+        data_to_return = list(self.current_episode_step_data) # Return a shallow copy
+        self.current_episode_step_data.clear()
+        return data_to_return

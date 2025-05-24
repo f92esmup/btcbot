@@ -20,6 +20,7 @@ fsspec==2025.3.2
 google-api-core==2.15.0
 google-auth==2.40.1
 google-cloud-aiplatform==1.36.0
+google-cloud-bigquery>=3.0.0 # For BigQuery interaction
 google-cloud-core==2.4.1
 google-cloud-firestore==2.12.0
 google-cloud-logging==3.9.0

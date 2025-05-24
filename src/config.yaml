@@ -160,6 +160,11 @@ agent:
   save_frequency_steps: 50000
   use_gpu: true  # Activar para usar GPU (CUDA/MPS) si está disponible
 
+  # --- Configuración de Logging para BigQuery en Entrenamiento ---
+  bigquery_logging:
+    training_log_batch_size: 100    # Número de registros de pasos de episodio a acumular antes de enviar a BQ (aprox)
+    training_metrics_log_interval_steps: 1000 # Intervalo de pasos para loguear métricas de entrenamiento (pérdidas, lr)
+
 # =====================================================================
 # Configuración de Trading en Vivo
 # =====================================================================

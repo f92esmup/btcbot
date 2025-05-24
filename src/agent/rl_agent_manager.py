@@ -7,7 +7,7 @@ import os
 import yaml
 import gymnasium as gym
 import numpy as np
-from typing import Dict, Union, Optional, Any, Tuple
+from typing import Dict, Union, Optional, Any, Tuple, List # Added List
 import logging
 from pathlib import Path
 import torch
@@ -201,13 +201,13 @@ class RLAgentManager:
     
     def train_agent(self, 
                     total_timesteps: Optional[int] = None,
-                    callbacks: list = None) -> SAC:
+                    user_callbacks: Optional[List[Any]] = None) -> SAC:
         """
         Entrena al agente por el número especificado de pasos.
         
         Args:
             total_timesteps: Número total de pasos de entrenamiento
-            callbacks: Lista de callbacks para usar durante el entrenamiento
+            user_callbacks: Lista opcional de callbacks proporcionados por el usuario
             
         Returns:
             El modelo SAC entrenado
@@ -218,101 +218,110 @@ class RLAgentManager:
         if total_timesteps is None:
             total_timesteps = self.config.get("total_training_timesteps", 1000000)
             
-        # Configurar callbacks por defecto si no se proporcionan
-        if callbacks is None:
-            save_freq = self.config.get("save_frequency_steps", 50000)
+        # Inicializar lista de callbacks
+        all_callbacks = []
             
-            # Crear un directorio temporal para guardar los checkpoints localmente antes de subirlos a GCS
-            temp_save_dir = tempfile.mkdtemp(prefix="model_checkpoints_")
-            logger.info(f"Creando directorio temporal para checkpoints: {temp_save_dir}")
+        # Configurar callbacks por defecto
+        save_freq = self.config.get("save_frequency_steps", 50000)
+        
+        # Crear un directorio temporal para guardar los checkpoints localmente antes de subirlos a GCS
+        temp_save_dir = tempfile.mkdtemp(prefix="model_checkpoints_")
+        logger.info(f"Creando directorio temporal para checkpoints: {temp_save_dir}")
+        
+        # Callback personalizado para guardar checkpoints y subirlos a GCS
+        class GCSCheckpointCallback(CheckpointCallback):
+            def __init__(self, save_freq, save_path, gcs_bucket, gcs_path_prefix, *args, **kwargs):
+                super().__init__(save_freq=save_freq, save_path=save_path, *args, **kwargs)
+                self.gcs_bucket = gcs_bucket
+                self.gcs_path_prefix = gcs_path_prefix
             
-            # Callback personalizado para guardar checkpoints y subirlos a GCS
-            class GCSCheckpointCallback(CheckpointCallback):
-                def __init__(self, save_freq, save_path, gcs_bucket, gcs_path_prefix, *args, **kwargs):
-                    super().__init__(save_freq=save_freq, save_path=save_path, *args, **kwargs)
-                    self.gcs_bucket = gcs_bucket
-                    self.gcs_path_prefix = gcs_path_prefix
-                
-                def _on_step(self):
-                    if self.n_calls % self.save_freq == 0:
-                        # Primero guardamos localmente (implementación de la clase padre)
-                        super()._on_step()
+            def _on_step(self):
+                if self.n_calls % self.save_freq == 0:
+                    # Primero guardamos localmente (implementación de la clase padre)
+                    super()._on_step()
+                    
+                    # Luego subimos a GCS el archivo más reciente guardado
+                    if hasattr(self, "last_save_path") and self.last_save_path:
+                        # Construir la ruta en GCS
+                        checkpoint_filename = os.path.basename(self.last_save_path)
+                        gcs_model_path = f"{self.gcs_bucket}/{self.gcs_path_prefix}/{checkpoint_filename}"
                         
-                        # Luego subimos a GCS el archivo más reciente guardado
-                        if hasattr(self, "last_save_path") and self.last_save_path:
-                            # Construir la ruta en GCS
-                            checkpoint_filename = os.path.basename(self.last_save_path)
-                            gcs_model_path = f"{self.gcs_bucket}/{self.gcs_path_prefix}/{checkpoint_filename}"
-                            
-                            # Subir a GCS
-                            try:
-                                gcs_url = upload_model_to_gcs(self.last_save_path, gcs_model_path)
-                                logger.info(f"Checkpoint subido a GCS: {gcs_url}")
-                            except Exception as e:
-                                logger.error(f"Error al subir checkpoint a GCS: {str(e)}")
-                    
-                    return True
-            
-            # Clase personalizada para guardar el mejor modelo en GCS
-            class GCSEvalCallback(EvalCallback):
-                def __init__(self, eval_env, gcs_bucket, gcs_path_prefix, *args, **kwargs):
-                    # Crear un directorio temporal para guardar el mejor modelo
-                    temp_best_dir = os.path.join(temp_save_dir, "best_model")
-                    os.makedirs(temp_best_dir, exist_ok=True)
-                    
-                    super().__init__(eval_env, best_model_save_path=temp_best_dir, *args, **kwargs)
-                    self.gcs_bucket = gcs_bucket
-                    self.gcs_path_prefix = gcs_path_prefix
+                        # Subir a GCS
+                        try:
+                            gcs_url = upload_model_to_gcs(self.last_save_path, gcs_model_path)
+                            logger.info(f"Checkpoint subido a GCS: {gcs_url}")
+                        except Exception as e:
+                            logger.error(f"Error al subir checkpoint a GCS: {str(e)}")
                 
-                def _on_step(self):
-                    # Primero ejecutamos la lógica de evaluación de la clase padre
-                    result = super()._on_step()
+                return True
+        
+        # Clase personalizada para guardar el mejor modelo en GCS
+        class GCSEvalCallback(EvalCallback):
+            def __init__(self, eval_env, gcs_bucket, gcs_path_prefix, *args, **kwargs):
+                # Crear un directorio temporal para guardar el mejor modelo
+                temp_best_dir = os.path.join(temp_save_dir, "best_model")
+                os.makedirs(temp_best_dir, exist_ok=True)
+                
+                super().__init__(eval_env, best_model_save_path=temp_best_dir, *args, **kwargs)
+                self.gcs_bucket = gcs_bucket
+                self.gcs_path_prefix = gcs_path_prefix
+            
+            def _on_step(self):
+                # Primero ejecutamos la lógica de evaluación de la clase padre
+                result = super()._on_step()
+                
+                # Si se guardó un nuevo mejor modelo, lo subimos a GCS
+                if self.best_model_save_path is not None and self.best_mean_reward > 0: # Check if best_model_save_path is actually set
+                    # Construir la ruta al mejor modelo (coincide con lo que hace la clase base)
+                    # Ensure that self.best_model_save_path is a directory, not a file path
+                    # The EvalCallback saves best_model.zip inside this directory.
+                    best_model_file_path = os.path.join(self.best_model_save_path, "best_model.zip")
                     
-                    # Si se guardó un nuevo mejor modelo, lo subimos a GCS
-                    if self.best_model_save_path is not None and self.best_mean_reward > 0:
-                        # Construir la ruta al mejor modelo (coincide con lo que hace la clase base)
-                        best_model_path = os.path.join(self.best_model_save_path, "best_model")
+                    # Verificar si el archivo existe antes de intentar subirlo
+                    if os.path.exists(best_model_file_path):
+                        # Construir la ruta en GCS
+                        gcs_model_path = f"{self.gcs_bucket}/{self.gcs_path_prefix}/best_model/best_model.zip"
                         
-                        # Verificar si el archivo existe antes de intentar subirlo
-                        if os.path.exists(f"{best_model_path}.zip"):
-                            # Construir la ruta en GCS
-                            gcs_model_path = f"{self.gcs_bucket}/{self.gcs_path_prefix}/best_model/best_model.zip"
-                            
-                            # Subir a GCS
-                            try:
-                                gcs_url = upload_model_to_gcs(f"{best_model_path}.zip", gcs_model_path)
-                                logger.info(f"Mejor modelo subido a GCS: {gcs_url}")
-                            except Exception as e:
-                                logger.error(f"Error al subir mejor modelo a GCS: {str(e)}")
-                    
-                    return result
-            
-            # Obtener prefijo de ruta para modelos en GCS
-            gcs_path_prefix = self.config.get("gcs_models_path_prefix", "models/sac_transformer_trading_agent")
-            
-            # Instanciar los callbacks personalizados
-            checkpoint_callback = GCSCheckpointCallback(
-                save_freq=save_freq,
-                save_path=temp_save_dir,
-                name_prefix="checkpoint",
-                save_replay_buffer=True,
-                save_vecnormalize=True,
-                gcs_bucket=self.gcs_bucket_name,
-                gcs_path_prefix=gcs_path_prefix
-            )
-            
-            # Callback para evaluación y guardado del mejor modelo
-            eval_callback = GCSEvalCallback(
-                self.eval_env,
-                log_path="./logs/eval/",
-                eval_freq=save_freq,
-                n_eval_episodes=10,
-                deterministic=True,
-                gcs_bucket=self.gcs_bucket_name,
-                gcs_path_prefix=gcs_path_prefix
-            )
-            
-            callbacks = [checkpoint_callback, eval_callback]
+                        # Subir a GCS
+                        try:
+                            gcs_url = upload_model_to_gcs(best_model_file_path, gcs_model_path)
+                            logger.info(f"Mejor modelo subido a GCS: {gcs_url}")
+                        except Exception as e:
+                            logger.error(f"Error al subir mejor modelo a GCS: {str(e)}")
+                
+                return result
+        
+        # Obtener prefijo de ruta para modelos en GCS
+        gcs_path_prefix = self.config.get("gcs_models_path_prefix", "models/sac_transformer_trading_agent")
+        
+        # Instanciar los callbacks personalizados y añadirlos a all_callbacks
+        checkpoint_callback = GCSCheckpointCallback(
+            save_freq=save_freq,
+            save_path=temp_save_dir,
+            name_prefix="checkpoint",
+            save_replay_buffer=True,
+            save_vecnormalize=True,
+            gcs_bucket=self.gcs_bucket_name,
+            gcs_path_prefix=gcs_path_prefix
+        )
+        all_callbacks.append(checkpoint_callback)
+        
+        # Callback para evaluación y guardado del mejor modelo
+        eval_callback = GCSEvalCallback(
+            self.eval_env,
+            log_path="./logs/eval/",
+            eval_freq=save_freq,
+            n_eval_episodes=10,
+            deterministic=True,
+            gcs_bucket=self.gcs_bucket_name,
+            gcs_path_prefix=gcs_path_prefix
+        )
+        all_callbacks.append(eval_callback)
+
+        # Añadir callbacks del usuario si se proporcionan
+        if user_callbacks is not None and isinstance(user_callbacks, list):
+            all_callbacks.extend(user_callbacks)
+            logger.info(f"Se añadieron {len(user_callbacks)} callbacks proporcionados por el usuario.")
             
         # Configurar la ruta de logs
         log_path = "logs/training/"
@@ -321,8 +330,8 @@ class RLAgentManager:
         self.model.set_logger(logger_sb3)
         
         # Entrenar el modelo
-        logger.info(f"Iniciando entrenamiento por {total_timesteps} pasos")
-        self.model.learn(total_timesteps=total_timesteps, callback=callbacks)
+        logger.info(f"Iniciando entrenamiento por {total_timesteps} pasos con {len(all_callbacks)} callbacks.")
+        self.model.learn(total_timesteps=total_timesteps, callback=all_callbacks)
         
         # Guardar el modelo final localmente primero
         temp_final_model = tempfile.mktemp(suffix=".zip")

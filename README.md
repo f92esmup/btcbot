@@ -125,6 +125,7 @@ El proyecto funciona exclusivamente con servicios en la nube:
    GCP_PROJECT_ID="tu-proyecto-id"
    GCS_BUCKET_NAME="tu-bucket-nombre"
    GCP_REGION="tu-region-preferida"
+   BIGQUERY_LOG_DATASET_ID="tu_dataset_id_para_logs" # Nuevo: Dataset de BigQuery para logs de entrenamiento y live trading
    
    # Configuración de modo de trading (opcional, por defecto es TESTNET)
    LIVE_TRADING_MODE="TESTNET"  # Cambiar a "REAL" para trading real
@@ -248,8 +249,8 @@ El archivo `src/config.yaml` contiene toda la configuración del sistema organiz
 - **data_acquisition_defaults**: Parámetros para descarga de datos (símbolo, intervalos)
 - **preprocessing**: Configuración de indicadores técnicos y normalización
 - **environment**: Parámetros para el entorno de simulación
-- **agent**: Hiperparámetros del modelo SAC, arquitectura Transformer y ruta al modelo para trading en vivo (`live_model_path`).
-- **live_trading**: Configuración específica para el trading en vivo (ej. parámetros de BigQuery, delays). Las configuraciones de endpoint de predicción (como `VERTEX_AI_PREDICT_URL`) ahora son relevantes principalmente si se utiliza `serving/serve.py` para un despliegue de API independiente.
+- **agent**: Hiperparámetros del modelo SAC, arquitectura Transformer, ruta al modelo para trading en vivo (`live_model_path`) y configuración para el logging de entrenamiento a BigQuery (`bigquery_logging`).
+- **live_trading**: Configuración específica para el trading en vivo (ej. configuración de delays). Los logs de trading en vivo se envían a BigQuery a la tabla `LiveTrading_{FECHA}` dentro del dataset especificado por la variable de entorno `BIGQUERY_LOG_DATASET_ID`. Las configuraciones de endpoint de predicción (como `VERTEX_AI_PREDICT_URL`) ahora son relevantes principalmente si se utiliza `serving/serve.py` para un despliegue de API independiente.
 
 ### Administración de Credenciales y Datos
 
@@ -293,7 +294,10 @@ El sistema incluye un completo sistema de logging que registra:
 
 - **Logs locales**: Archivos de texto detallados para depuración
 - **Logs en Google Cloud Storage**: Registros CSV para análisis posterior
-- **Logs en BigQuery** (opcional): Eventos de trading para análisis en tiempo real y dashboards
+- **Logs en BigQuery**:
+    - **Entrenamiento**: Durante el entrenamiento del agente (`scripts/train_rl_agent.py`), se registran datos detallados en tablas diarias con el formato `entrenamiento_{FECHA}` (ej. `entrenamiento_20231028`). Estas tablas contienen información por paso (estado, acción, recompensa), resúmenes de episodios y métricas de entrenamiento (pérdidas, tasa de aprendizaje). El dataset de BigQuery se especifica mediante la variable de entorno `BIGQUERY_LOG_DATASET_ID`. La configuración para este logging (ej. tamaño de batch) se encuentra en `src/config.yaml` bajo `agent.bigquery_logging`.
+    - **Trading en Vivo**: Los eventos y decisiones del trading en vivo (`scripts/run_live_trader.py`) se registran en tablas diarias con el formato `LiveTrading_{FECHA}` (ej. `LiveTrading_20231028`) dentro del mismo dataset de BigQuery especificado por `BIGQUERY_LOG_DATASET_ID`. Esto permite un análisis detallado del rendimiento en tiempo real.
+    - Los logs locales y en GCS (CSV) se mantienen para depuración y análisis complementarios.
 
 ## Tecnologías Utilizadas
 

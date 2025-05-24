@@ -17,6 +17,9 @@ sys.path.insert(0, project_root)
 # Importaciones locales
 from src.agent.rl_agent_manager import RLAgentManager
 from src.utils.config import ConfigManager
+from google.cloud import bigquery # Added import
+from src.callbacks import BigQueryLoggingCallback # Added import
+# import os # Already present
 from src.utils.logging_utils import setup_logger
 from dotenv import load_dotenv
 
@@ -76,6 +79,34 @@ def main():
     # Cargar la configuración centralizada
     config_manager = ConfigManager(config_path=args.config)
     agent_config = config_manager.get_agent_config()
+
+    # --- BigQuery Logging Setup ---
+    gcp_project_id = config_manager.get_env_variable('GCP_PROJECT_ID')
+    bigquery_log_dataset_id = os.environ.get('BIGQUERY_LOG_DATASET_ID') # Use os.environ.get
+    
+    bq_client = None
+    bigquery_callback = None
+
+    if gcp_project_id and bigquery_log_dataset_id:
+        try:
+            bq_client = bigquery.Client(project=gcp_project_id)
+            logger.info(f"BigQuery client initialized for project {gcp_project_id}, logging to dataset {bigquery_log_dataset_id}")
+            bigquery_callback = BigQueryLoggingCallback(
+                project_id=gcp_project_id,
+                dataset_id=bigquery_log_dataset_id,
+                config_manager=config_manager, # Pass the loaded config_manager
+                bq_client=bq_client
+            )
+            logger.info("BigQueryLoggingCallback initialized.")
+        except Exception as e:
+            logger.error(f"Failed to initialize BigQuery client or callback: {e}", exc_info=True)
+            logger.warning("BigQuery logging for training will be disabled.")
+    else:
+        logger.warning(
+            "GCP_PROJECT_ID or BIGQUERY_LOG_DATASET_ID not fully configured. "
+            "BigQuery logging for training will be disabled."
+        )
+    # --- End BigQuery Logging Setup ---
     
     # Actualizar la configuración si se solicita no usar GPU
     if args.no_gpu:
@@ -98,7 +129,14 @@ def main():
     )
     
     # Entrenar el agente
-    agent_manager.train_agent(total_timesteps=args.timesteps)
+    user_callbacks_list = []
+    if bigquery_callback:
+        user_callbacks_list.append(bigquery_callback)
+    
+    agent_manager.train_agent(
+        total_timesteps=args.timesteps,
+        user_callbacks=user_callbacks_list if user_callbacks_list else None
+    )
     
     logger.info("Entrenamiento completado.")
 
