@@ -1,0 +1,29 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: model-training-job
+  namespace: btcbot
+spec:
+  template:
+    spec:
+      serviceAccountName: btcbot-ksa
+      restartPolicy: OnFailure
+      containers:
+      - name: model-training
+        image: europe-southwest1-docker.pkg.dev/lofty-complex-460416-r6/lofty-complex-460416-r6-repo/btcbot-gpu:latest
+        command: ["python", "scripts/train_rl_agent.py"]
+        envFrom:
+        - configMapRef:
+            name: btcbot-env-vars
+        resources:
+          requests:
+            memory: "4Gi"
+            cpu: "2000m"
+            nvidia.com/gpu: "1"
+          limits:
+            memory: "8Gi"
+            cpu: "4000m"
+            nvidia.com/gpu: "1"
+      nodeSelector:
+        kubernetes.io/arch: amd64
+        cloud.google.com/gke-accelerator: nvidia-tesla-t4

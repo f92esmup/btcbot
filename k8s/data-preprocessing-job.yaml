@@ -1,0 +1,26 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: data-preprocessing-job
+  namespace: btcbot
+spec:
+  template:
+    spec:
+      serviceAccountName: btcbot-ksa
+      restartPolicy: OnFailure
+      containers:
+      - name: data-preprocessing
+        image: europe-southwest1-docker.pkg.dev/lofty-complex-460416-r6/lofty-complex-460416-r6-repo/btcbot-cpu:latest
+        command: ["python", "scripts/preprocess_data.py"]
+        envFrom:
+        - configMapRef:
+            name: btcbot-env-vars
+        resources:
+          requests:
+            memory: "2Gi"
+            cpu: "1000m"
+          limits:
+            memory: "4Gi"
+            cpu: "2000m"
+      nodeSelector:
+        kubernetes.io/arch: amd64

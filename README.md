@@ -30,12 +30,19 @@ Este proyecto implementa un agente de trading basado en Reinforcement Learning p
 
 ```
 btcbot/
-├── cloudbuild.yaml            # Definición de CI/CD para MLOps
-├── k8s/                       # Manifests de Kubernetes (Secrets, Deployments)
-├── logs/                      # Logs de entrenamiento y evaluación
-├── models/                    # Modelos guardados
-├── pipelines/                 # Definiciones de Kubeflow Pipelines (KFP)
-├── results/                   # Resultados de evaluación
+├── cloudbuild_cpu.yaml        # Build específico para imagen CPU
+├── cloudbuild.yaml            # Build específico para imagen GPU
+├── DEPLOYMENT.md              # Guía completa de despliegue en GKE
+├── Dockerfile.cpu             # Imagen Docker para componentes CPU
+├── Dockerfile.gpu             # Imagen Docker para entrenamiento con GPU
+├── k8s/                       # Manifiestos de Kubernetes para GKE Autopilot
+│   ├── configmap.yaml         # Variables de entorno no sensibles
+│   ├── data-acquisition-cronjob.yaml  # Job programado de descarga
+│   ├── data-preprocessing-job.yaml    # Job de preprocesamiento
+│   ├── live-trader-deployment.yaml    # Deployment del bot 24/7
+│   ├── model-training-job.yaml        # Job de entrenamiento con GPU
+│   ├── namespace.yaml         # Namespace btcbot
+│   └── pipeline-orchestrator.yaml     # Orquestador de pipeline secuencial
 ├── scripts/                   # Scripts ejecutables
 │   ├── download_data.py       # Descarga datos históricos de Binance
 │   ├── preprocess_data.py     # Preprocesa datos y extrae características
@@ -43,7 +50,6 @@ btcbot/
 │   ├── evaluate_rl_agent.py   # Evalúa el rendimiento del agente
 │   ├── run_live_trader.py     # Ejecuta el bot de trading en vivo
 │   └── test_binance_api.py    # Prueba la conexión con la API de Binance
-├── serving/                   # Servidor para despliegue en Vertex AI
 └── src/                       # Código fuente
     ├── config.yaml            # Configuración centralizada
     ├── agent/                 # Implementación del agente RL
@@ -85,13 +91,63 @@ btcbot/
 - **LiveBinanceAPIManager**: Gestiona conexión con Binance para operaciones
 - **LiveTrader**: Orquesta el flujo completo de trading en vivo
 
-## Requisitos para la Nube (Obligatorio)
+## Requisitos para la Nube y Despliegue
 
-El proyecto funciona exclusivamente con servicios en la nube:
+### Configuración de Google Cloud Platform
 
+El proyecto está **completamente desplegado en Google Cloud Platform** usando:
+
+- **Google Kubernetes Engine (GKE) Autopilot**: Orquestación y ejecución de todos los componentes
 - **Google Cloud Storage (GCS)**: Almacenamiento para datos brutos, procesados y modelos
 - **Google Cloud Secret Manager**: Gestión segura de credenciales de Binance
-- **Google Vertex AI**: Despliegue del modelo para inferencia en tiempo real
+- **Google BigQuery**: Logging y análisis de entrenamiento y trading en vivo
+- **Google Artifact Registry**: Almacenamiento de imágenes Docker
+- **Cloud NAT**: IP estática para whitelist de Binance API
+
+### Configuración del Proyecto
+
+Los valores de configuración actuales del proyecto son:
+
+- **GCP Project ID**: `lofty-complex-460416-r6`
+- **GCS Bucket**: `lofty-complex-460416-r6`
+- **Artifact Registry**: `lofty-complex-460416-r6-repo`
+- **Región**: `europe-southwest1` (Madrid)
+- **Clúster GKE**: `btcbot-autopilot-cluster`
+- **IP Estática NAT**: `34.175.215.35` (para whitelist Binance)
+
+### Arquitectura de Despliegue
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    GKE Autopilot Cluster                   │
+│  ┌─────────────────────┐  ┌─────────────────────────────┐  │
+│  │   CronJob Semanal   │  │    Live Trader Deployment  │  │
+│  │  Data Acquisition   │  │       (24/7 Running)       │  │
+│  └─────────────────────┘  └─────────────────────────────┘  │
+│  ┌─────────────────────┐  ┌─────────────────────────────┐  │
+│  │ Data Preprocessing  │  │   Model Training Job        │  │
+│  │      Job (CPU)      │  │      (GPU - NVIDIA T4)      │  │
+│  └─────────────────────┘  └─────────────────────────────┘  │
+│                                                             │
+│  ┌─────────────────────────────────────────────────────────┐│
+│  │           Pipeline Orchestrator                         ││
+│  │    (Ejecuta: Acquisition → Preprocessing → Training)   ││
+│  └─────────────────────────────────────────────────────────┘│
+└─────────────────────────────────────────────────────────────┘
+                                │
+                                ▼
+┌─────────────────────────────────────────────────────────────┐
+│                    Cloud NAT Gateway                       │
+│              IP Estática: 34.175.215.35                   │
+│                (Para Binance Whitelist)                    │
+└─────────────────────────────────────────────────────────────┘
+                                │
+                                ▼
+┌─────────────────────────────────────────────────────────────┐
+│                     Binance Futures API                    │
+│                   (Trading & Websockets)                   │
+└─────────────────────────────────────────────────────────────┘
+```
 
 ## Requisitos Previos
 
@@ -100,7 +156,52 @@ El proyecto funciona exclusivamente con servicios en la nube:
 - Cuenta en Google Cloud Platform con facturación activada
 - Cuenta en Binance Futures (real o testnet)
 
-## Instalación
+## Despliegue en GKE Autopilot
+
+### 🚀 Despliegue Rápido
+
+El proyecto está completamente containerizado y listo para desplegarse en Google Kubernetes Engine (GKE) Autopilot. Para una **guía completa de despliegue paso a paso**, consulta [`DEPLOYMENT.md`](./DEPLOYMENT.md).
+
+### Verificación del Estado
+
+Una vez desplegado, puedes verificar el estado de todos los componentes:
+
+```bash
+# Verificar pods en ejecución
+kubectl get pods -n btcbot
+
+# Ver logs del bot de trading en vivo
+kubectl logs -f -n btcbot deployment/live-trader-deployment
+
+# Verificar jobs programados
+kubectl get cronjobs -n btcbot
+
+# Ver estado general del sistema
+kubectl get all -n btcbot
+```
+
+### Gestión del Sistema
+
+```bash
+# Ejecutar pipeline completo manualmente
+kubectl apply -f k8s/pipeline-orchestrator.yaml
+
+# Parar/reiniciar el bot de trading
+kubectl scale deployment live-trader-deployment --replicas=0 -n btcbot  # Parar
+kubectl scale deployment live-trader-deployment --replicas=1 -n btcbot  # Reiniciar
+
+# Ejecutar adquisición de datos manual
+kubectl create job data-acquisition-manual --from=cronjob/data-acquisition-cronjob -n btcbot
+
+# Actualizar variables de configuración
+kubectl edit configmap btcbot-env-vars -n btcbot
+```
+
+### Configuración de Binance API
+
+**⚠️ IMPORTANTE**: Debes agregar la IP estática `34.175.215.35` a la whitelist de tu cuenta de Binance API para que el bot pueda operar correctamente.
+
+## Instalación Local (Desarrollo)
 
 1. **Clonar el repositorio**:
    ```
@@ -125,40 +226,78 @@ El proyecto funciona exclusivamente con servicios en la nube:
    
    ```
    # Configuración de Google Cloud (OBLIGATORIO)
-   GCP_PROJECT_ID="tu-proyecto-id"
-   GCS_BUCKET_NAME="tu-bucket-nombre"
-   GCP_REGION="tu-region-preferida"
-   BIGQUERY_LOG_DATASET_ID="tu_dataset_id_para_logs" # Nuevo: Dataset de BigQuery para logs de entrenamiento y live trading
+   GCP_PROJECT_ID="lofty-complex-460416-r6"
+   GCS_BUCKET_NAME="lofty-complex-460416-r6"
+   GCP_REGION="europe-southwest1"
+   BIGQUERY_LOG_DATASET_ID="btcbot_logs"
    
    # Configuración de modo de trading (opcional, por defecto es TESTNET)
-   LIVE_TRADING_MODE="TESTNET"  # Cambiar a "REAL" para trading real
+   LIVE_TRADING_MODE="false"  # Cambiar a "true" para trading real
    ```
    
-   > **Nota**: Las credenciales de Binance deben estar almacenadas en Google Cloud Secret Manager como `BINANCE_API_KEY_FUTURES` y `BINANCE_API_SECRET_FUTURES`.
+   > **Nota**: Las credenciales de Binance deben estar almacenadas en Google Cloud Secret Manager como `BINANCE_API_KEY_FUTURES` y `BINANCE_API_SECRET_FUTURES` para el despliegue en producción, o en variables de entorno locales para desarrollo.
 
 5. **Configurar Google Cloud**:
 
-   ```
+   ```bash
    # Iniciar sesión en Google Cloud
    gcloud auth login
    
    # Configurar credenciales de aplicación por defecto
    gcloud auth application-default login
    
+   # Configurar proyecto (usa los valores reales del proyecto)
+   gcloud config set project lofty-complex-460416-r6
+   
    # Habilitar APIs necesarias
-   gcloud services enable secretmanager.googleapis.com storage.googleapis.com aiplatform.googleapis.com
+   gcloud services enable secretmanager.googleapis.com storage.googleapis.com container.googleapis.com
    
    # Crear bucket de GCS (si no existe)
-   gsutil mb -p tu-proyecto-id -l tu-region gs://tu-bucket-nombre
+   gsutil mb -p lofty-complex-460416-r6 -l europe-southwest1 gs://lofty-complex-460416-r6
    
    # Almacenar credenciales de Binance en Secret Manager
    echo -n "tu-api-key" | gcloud secrets create BINANCE_API_KEY_FUTURES --data-file=-
    echo -n "tu-api-secret" | gcloud secrets create BINANCE_API_SECRET_FUTURES --data-file=-
    ```
 
-## Flujo de Trabajo Completo
+## Flujo de Trabajo
 
-> **Nota sobre Automatización**: Muchos de los pasos descritos a continuación (descarga de datos, preprocesamiento, entrenamiento) pueden ser orquestados automáticamente ejecutando el pipeline de Cloud Build descrito en la sección "Automatización y Orquestación MLOps". Los comandos manuales siguen siendo útiles para desarrollo local, depuración y ejecuciones individuales fuera del pipeline automatizado.
+### 🔄 Pipeline Automatizado en GKE
+
+El sistema está completamente automatizado y ejecuta los siguientes componentes en GKE Autopilot:
+
+1. **📊 Adquisición de Datos (CronJob)**
+   - Ejecuta automáticamente cada sábado a las 00:00 UTC
+   - Descarga datos históricos de Binance Futures
+   - Almacena en Google Cloud Storage
+
+2. **🔧 Preprocesamiento de Datos (Job)**
+   - Calcula indicadores técnicos
+   - Normaliza características
+   - Crea secuencias para entrenamiento
+
+3. **🧠 Entrenamiento del Modelo (Job con GPU)**
+   - Entrena el agente SAC con arquitectura Transformer
+   - Utiliza GPU NVIDIA T4 en GKE Autopilot
+   - Guarda modelos en GCS automáticamente
+
+4. **📈 Trading en Vivo (Deployment 24/7)**
+   - Bot de trading ejecutándose continuamente
+   - Websocket en tiempo real con Binance
+   - Decisiones automáticas con el modelo entrenado
+
+### 🚀 Ejecución Manual del Pipeline
+
+Para ejecutar todo el pipeline secuencialmente:
+
+```bash
+kubectl apply -f k8s/pipeline-orchestrator.yaml
+kubectl logs -f -n btcbot job/pipeline-orchestrator
+```
+
+### 💻 Ejecución Local (Desarrollo)
+
+> **Nota**: Para desarrollo local únicamente. En producción, usa el despliegue en GKE.
 
 ### 1. Descarga de Datos Históricos
 
@@ -236,6 +375,17 @@ gcloud ai endpoints deploy-model tu-id-endpoint --model=tu-id-modelo --region=tu
 
 ### 6. Trading en Vivo
 
+**En GKE (Producción):**
+```bash
+# El bot ya está ejecutándose automáticamente
+kubectl logs -f -n btcbot deployment/live-trader-deployment
+
+# Para parar/reiniciar:
+kubectl scale deployment live-trader-deployment --replicas=0 -n btcbot  # Parar
+kubectl scale deployment live-trader-deployment --replicas=1 -n btcbot  # Reiniciar
+```
+
+**Local (Desarrollo):**
 Asegúrese de que la ruta al modelo entrenado esté correctamente configurada en `src/config.yaml` bajo `agent.live_model_path`. Luego, ejecute:
 ```bash
 python scripts/run_live_trader.py --config src/config.yaml
