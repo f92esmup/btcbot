@@ -4,7 +4,7 @@ substitutions:
   _GCP_PROJECT_ID: "${PROJECT_ID}" # Automatically populated by Cloud Build
   _GCP_REGION: "europe-southwest1"
   _ARTIFACT_REGISTRY_LOCATION: "europe-southwest1" # Usually same as region
-  _ARTIFACT_REGISTRY_REPO: " lofty-complex-460416-r6-repo" # Your Artifact Registry repo name
+  _ARTIFACT_REGISTRY_REPO: "lofty-complex-460416-r6-repo" # Your Artifact Registry repo name
 
   # --- Image Configuration ---
   _CPU_IMAGE_NAME: "btcbot-cpu"
