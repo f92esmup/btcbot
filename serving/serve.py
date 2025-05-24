@@ -1,3 +1,10 @@
+# ##############################################################################
+# DEPRECATED: This script is no longer used for live trading predictions.
+# The agent's prediction logic has been integrated directly into
+# `scripts/run_live_trader.py`. This file is kept for reference purposes
+# or potential future use cases but should not be run for standard live trading.
+# ##############################################################################
+
 import os
 import sys
 import json

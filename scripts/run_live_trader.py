@@ -21,6 +21,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from src.utils.config import ConfigManager
 from src.utils.logging_utils import setup_logger
 from src.live.websocket_manager import LiveWebsocketManager
+from src.agent.rl_agent_manager import RLAgentManager
 from src.live.binance_api_manager import LiveBinanceAPIManager
 from src.live.live_data_processor import LiveFeatureProcessor
 from src.live.portfolio_feature_builder import PortfolioFeatureBuilder
@@ -35,28 +36,6 @@ def parse_arguments():
         type=str,
         default="src/config.yaml",
         help="Ruta al archivo de configuración centralizada"
-    )
-    parser.add_argument(
-        "--use_local_server",
-        action="store_true",
-        help="Usar el servidor de inferencia local en vez de Vertex AI"
-    )
-    parser.add_argument(
-        "--local_predict_url",
-        type=str,
-        default="http://localhost:8080/predict",
-        help="URL del endpoint local de inferencia (por defecto: http://localhost:8080/predict)"
-    )
-    parser.add_argument(
-        "--use_internal_service",
-        action="store_true",
-        help="Usar el servidor de inferencia interno de Kubernetes en vez de Vertex AI"
-    )
-    parser.add_argument(
-        "--internal_service_url",
-        type=str,
-        default="http://btcbot-inference-service:8080/predict",
-        help="URL del endpoint de inferencia interno en Kubernetes (por defecto: http://btcbot-inference-service:8080/predict)"
     )
     return parser.parse_args()
 
@@ -91,26 +70,26 @@ class LiveTrader:
         # Obtener lookback para datos de mercado
         self.lookback_candles = self.live_trading_config.get('market_data_lookback_candles', 250)
         
-        # Configurar endpoint para predicciones
-        # Puede ser un endpoint de Vertex AI, un servidor local o un servicio interno en Kubernetes
-        if args and args.use_local_server:
-            self.vertex_ai_predict_url = args.local_predict_url
-            logger.info(f"Usando endpoint local: {self.vertex_ai_predict_url}")
-        elif args and args.use_internal_service:
-            self.vertex_ai_predict_url = args.internal_service_url
-            logger.info(f"Usando endpoint interno de Kubernetes: {self.vertex_ai_predict_url}")
-        else:
-            # Obtener URL del endpoint de la variable de entorno
-            self.vertex_ai_predict_url = os.environ.get('VERTEX_AI_PREDICT_URL', "")
-            if not self.vertex_ai_predict_url or self.vertex_ai_predict_url == "":
-                logger.error("URL de endpoint no configurada correctamente en la variable de entorno VERTEX_AI_PREDICT_URL")
-                raise ValueError("URL de endpoint no configurada. Configure la variable de entorno VERTEX_AI_PREDICT_URL o use --use_local_server o --use_internal_service")
-        
         # Inicialización de gestores
         self.websocket_manager = LiveWebsocketManager(self.config_manager, self.notification_queue)
         self.api_manager = LiveBinanceAPIManager(self.config_manager)
         self.feature_processor = LiveFeatureProcessor(self.config_manager)
         self.portfolio_builder = PortfolioFeatureBuilder(self.config_manager)
+
+        # Inicializar RLAgentManager y cargar el modelo
+        try:
+            self.agent_manager = RLAgentManager(config_path=args.config_path if args else None)
+            # self.agent_manager.setup_environment() # No es necesario si load_model no lo requiere explícitamente
+            agent_config = self.config_manager.get_agent_config()
+            model_path = agent_config.get('live_model_path')
+            if not model_path:
+                logger.error("Ruta del modelo en vivo no configurada en agent_config.live_model_path")
+                raise ValueError("Ruta del modelo en vivo no configurada.")
+            self.agent_manager.load_model(model_path)
+            logger.info(f"Modelo RL cargado exitosamente desde: {model_path}")
+        except Exception as e_agent:
+            logger.error(f"Error inicializando RLAgentManager o cargando modelo: {e_agent}", exc_info=True)
+            raise  # Re-lanzar la excepción para detener la inicialización si falla la carga del modelo
         
         # NUEVO: Inicializar cliente de BigQuery y configuración
         try:
@@ -385,102 +364,63 @@ class LiveTrader:
             # Validar dimensiones de características
             # market_features debe ser 2D (L, num_market_features)
             # portfolio_features debe ser 1D (num_portfolio_features)
-            expected_market_shape = (self.feature_processor.sequence_length_L, 15)  # Ajusta 15 según tus características de mercado
-            expected_portfolio_shape = (8,)  # Ajusta 8 según tus características de cartera
-            
-            logger.debug(f"Forma recibida de market_features: {market_features.shape}, esperada: {expected_market_shape}")
-            logger.debug(f"Forma recibida de portfolio_features: {portfolio_features.shape}, esperada: {expected_portfolio_shape}")
-            
-            if market_features.ndim != 2:
-                raise ValueError(f"Market features debe ser 2D pero tiene dimensiones: {market_features.shape}")
+            # Estas validaciones se mantienen ya que son buenas prácticas.
+            # Ajusta los números (15, 8) si las características cambian con el nuevo modelo.
+            expected_market_shape_part = (self.feature_processor.sequence_length_L,) # Solo L, ya que num_market_features puede variar
+            expected_portfolio_shape_part = () # No hay una forma fija para portfolio_features en este punto.
+
+            logger.debug(f"Forma recibida de market_features: {market_features.shape}, esperada L={expected_market_shape_part[0]}")
+            logger.debug(f"Forma recibida de portfolio_features: {portfolio_features.shape}")
+
+            if market_features.ndim != 2 or market_features.shape[0] != self.feature_processor.sequence_length_L :
+                raise ValueError(f"Market features debe ser 2D (L, num_market_features) pero tiene dimensiones: {market_features.shape}")
             if portfolio_features.ndim != 1:
                 raise ValueError(f"Portfolio features debe ser 1D pero tiene dimensiones: {portfolio_features.shape}")
+
+            # Asegurar que los datos son np.float32
+            market_features_f32 = market_features.astype(np.float32)
+            portfolio_features_f32 = portfolio_features.astype(np.float32)
             
-            # Registrar también los valores para detectar problemas de normalización
-            logger.debug(f"Valores de portfolio_features: {portfolio_features}")
+            logger.debug(f"Valores de portfolio_features (float32): {portfolio_features_f32}")
+
+            # Preparar observación para el agente
+            observation = {
+                "market_features": market_features_f32,
+                "portfolio_features": portfolio_features_f32
+            }
             
-            # Convertir a listas para el formato JSON
-            market_features_list = market_features.tolist()
-            portfolio_features_list = portfolio_features.tolist()
-            
-            # Preparar payload para el endpoint en formato JSON
-            # Para servidor local o interno en Kubernetes, usamos formato directo
-            # Para Vertex AI, usamos formato con "instances"
-            is_local_endpoint = "localhost" in self.vertex_ai_predict_url or "127.0.0.1" in self.vertex_ai_predict_url or "btcbot-inference-service" in self.vertex_ai_predict_url
-            
-            if is_local_endpoint:
-                payload = {
-                    "market_features": market_features_list,
-                    "portfolio_features": portfolio_features_list
-                }
-            else:
-                # Formato para Vertex AI
-                payload = {
-                    "instances": [
-                        {
-                            "market_features": market_features_list,
-                            "portfolio_features": portfolio_features_list
-                        }
-                    ]
-                }
-            
-            # Comprobar tamaño del payload (logging)
-            payload_size_kb = sys.getsizeof(json.dumps(payload)) / 1024
-            logger.debug(f"Tamaño del payload: {payload_size_kb:.2f} KB")
-            
-            # Configurar encabezados según el tipo de endpoint
-            headers = {"Content-Type": "application/json"}
-            
-            # Añadir autenticación solo si no es local
-            if not is_local_endpoint and os.environ.get('GOOGLE_APPLICATION_CREDENTIALS'):
-                headers["Authorization"] = f"Bearer {os.environ.get('GOOGLE_APPLICATION_CREDENTIALS')}"
-            
-            # Realizar la solicitud HTTP
-            logger.debug(f"Enviando solicitud a endpoint: {self.vertex_ai_predict_url}")
+            logger.debug("Obteniendo predicción del RLAgentManager...")
             start_time = time.time()
             
-            # Usar requests en lugar de aiohttp para simplicidad
-            response = requests.post(
-                self.vertex_ai_predict_url,
-                json=payload,
-                headers=headers
-            )
+            # Llamar al método predict_action del RLAgentManager
+            # El método predict_action debe devolver un valor de acción (posiblemente en un array)
+            action_output = self.agent_manager.predict_action(observation)
             
             elapsed_time = time.time() - start_time
-            logger.debug(f"Respuesta recibida en {elapsed_time:.2f}s, status: {response.status_code}")
-            
-            if response.status_code != 200:
-                logger.error(f"Error llamando al endpoint: HTTP {response.status_code}, {response.text}")
-                return None
-            
-            # Parsear la respuesta y extraer el valor de acción
-            response_data = response.json()
-            
-            # La respuesta depende del tipo de servidor
-            if is_local_endpoint:
-                # Para servidor local o interno en Kubernetes, el formato es directo
-                if 'action_value' in response_data:
-                    action_value = float(response_data['action_value'])
-                elif 'action' in response_data and isinstance(response_data['action'], list):
-                    action_value = float(response_data['action'][0])
+            logger.debug(f"Predicción recibida del agente en {elapsed_time:.2f}s")
+
+            # Extraer el valor de acción. Asumiendo que es un array y necesitamos el primer elemento.
+            # Ajustar según lo que devuelva exactamente predict_action.
+            if isinstance(action_output, np.ndarray):
+                if action_output.size == 1:
+                    action_value = float(action_output.item()) # .item() para extraer el escalar de un array de un solo elemento
                 else:
-                    logger.error(f"Formato de respuesta local inválido: {response_data}")
-                    return None
+                    # Si devuelve múltiples valores, tomar el primero o ajustar la lógica.
+                    # Por ahora, se asume que el valor de acción deseado es el primero.
+                    action_value = float(action_output[0])
+                    logger.warning(f"predict_action devolvió un array con múltiples elementos: {action_output}. Usando el primero.")
+            elif isinstance(action_output, (float, int)):
+                action_value = float(action_output)
             else:
-                # Para Vertex AI, el formato incluye 'predictions'
-                if 'predictions' not in response_data or not response_data['predictions']:
-                    logger.error(f"Formato de respuesta Vertex AI inválido: {response_data}")
-                    return None
-                    
-                # La estructura esperada es ['predictions'][0][0]
-                action_value = float(response_data['predictions'][0][0])
+                logger.error(f"Tipo de salida de predict_action no esperado: {type(action_output)}, valor: {action_output}")
+                return None
                 
-            logger.info(f"Predicción recibida: {action_value:.4f}")
+            logger.info(f"Predicción recibida (RLAgentManager): {action_value:.4f}")
             
             return action_value
             
         except Exception as e:
-            logger.error(f"Error obteniendo predicción: {e}", exc_info=True)
+            logger.error(f"Error obteniendo predicción del RLAgentManager: {e}", exc_info=True)
             return None
 
     async def execute_trading_decision(self, 

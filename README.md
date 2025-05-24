@@ -65,14 +65,13 @@ btcbot/
    - Guardado de modelos y checkpoints en Google Cloud Storage
 
 3. **Despliegue del Modelo**:
-   - Servidor de inferencia (local o en Vertex AI)
-   - API de predicciones que recibe características de mercado y cartera
+   - Modelo cargado directamente: El modelo de RL se carga directamente en el script de trading en vivo para inferencia local.
 
 4. **Trading en Vivo**:
    - Websocket para detección de cierre de velas
    - Preprocesamiento en tiempo real de datos de mercado
    - Construcción de características de cartera basadas en posición actual
-   - Solicitud de predicciones al modelo desplegado
+   - Obtención de predicciones del modelo cargado localmente.
    - Ejecución de órdenes en Binance Futures
 
 ### Componentes Clave
@@ -206,14 +205,16 @@ Esto generará gráficos y estadísticas de rendimiento del agente en el directo
 
 ### 5. Despliegue del Modelo (Opcional)
 
-#### 5.1 Servidor Local (para pruebas)
+> **Nota**: Para el script principal `run_live_trader.py`, el despliegue de un servidor de inferencia separado como se describe a continuación ya no es el método estándar, ya que el modelo ahora se carga y utiliza directamente dentro del script. Las siguientes secciones sobre el servidor local y Vertex AI se mantienen como referencia para casos de uso alternativos donde se requiera un endpoint de predicción explícito (utilizando `serving/serve.py`).
+
+#### 5.1 Servidor Local (para pruebas con `serving/serve.py`)
 
 ```bash
 cd serving
 python serve.py --model_path tu-bucket-nombre/models/sac_transformer_trading_agent/sac_transformer_trading_agent_final_1000000_steps.zip
 ```
 
-#### 5.2 Despliegue en Vertex AI
+#### 5.2 Despliegue en Vertex AI (para `serving/serve.py`)
 
 a) Construir la imagen del contenedor:
 ```bash
@@ -229,17 +230,12 @@ gcloud ai endpoints deploy-model tu-id-endpoint --model=tu-id-modelo --region=tu
 
 ### 6. Trading en Vivo
 
-Modificar `src/config.yaml` para establecer la URL del endpoint de predicción (local o Vertex AI) y luego ejecutar:
-
+Asegúrese de que la ruta al modelo entrenado esté correctamente configurada en `src/config.yaml` bajo `agent.live_model_path`. Luego, ejecute:
 ```bash
-# Para usar Vertex AI
 python scripts/run_live_trader.py --config src/config.yaml
-
-# Para usar servidor local
-python scripts/run_live_trader.py --config src/config.yaml --use_local_server
 ```
 
-El bot comenzará a escuchar el cierre de nuevas velas, procesar datos en tiempo real y tomar decisiones de trading.
+El bot comenzará a escuchar el cierre de nuevas velas, procesar datos en tiempo real y tomar decisiones de trading utilizando el modelo cargado localmente.
 
 ## Configuración del Sistema
 
@@ -252,8 +248,8 @@ El archivo `src/config.yaml` contiene toda la configuración del sistema organiz
 - **data_acquisition_defaults**: Parámetros para descarga de datos (símbolo, intervalos)
 - **preprocessing**: Configuración de indicadores técnicos y normalización
 - **environment**: Parámetros para el entorno de simulación
-- **agent**: Hiperparámetros del modelo SAC y arquitectura Transformer
-- **live_trading**: Configuración para el trading en vivo
+- **agent**: Hiperparámetros del modelo SAC, arquitectura Transformer y ruta al modelo para trading en vivo (`live_model_path`).
+- **live_trading**: Configuración específica para el trading en vivo (ej. parámetros de BigQuery, delays). Las configuraciones de endpoint de predicción (como `VERTEX_AI_PREDICT_URL`) ahora son relevantes principalmente si se utiliza `serving/serve.py` para un despliegue de API independiente.
 
 ### Administración de Credenciales y Datos
 
@@ -307,7 +303,7 @@ El sistema incluye un completo sistema de logging que registra:
 - **pandas-ta**: Biblioteca de indicadores técnicos para trading
 - **python-binance**: Cliente API oficial de Binance
 - **Google Cloud**: GCS, Secret Manager, BigQuery, Vertex AI
-- **Flask/Gunicorn**: Servidor de inferencia para despliegue del modelo
+- **Flask/Gunicorn**: Utilizado para `serving/serve.py` (opcional, para despliegues de API de predicción independientes).
 - **Websockets**: Conexión en tiempo real con Binance
 
 ## Limitaciones y Consideraciones
