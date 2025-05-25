@@ -79,5 +79,22 @@ Necesito tu ayuda activa para desplegar mi proyecto de bot de trading de Python 
 5. Las sondas de salud son críticas para el despliegue del trader en vivo.
 6. El modo de trading en vivo debe activarse explícitamente con `LIVE_TRADING_MODE=true`.
 7. Para regiones sin GPU disponible, incrementar significativamente los recursos de CPU y memoria para compensar.
+8. **Problema con webhooks de admisión**: En GKE Autopilot pueden aparecer advertencias sobre webhooks de admisión sin endpoints disponibles, especialmente para el servicio Google Managed Prometheus (GMP). Esto puede afectar al rendimiento del plano de control de GKE. Si aparecen estos mensajes, verificar el estado de los servicios en el namespace `gke-gmp-system` y considerar deshabilitar el monitoreo de GMP si no es esencial para nuestra aplicación.
 
 Comencemos con la configuración o verificación del clúster GKE Autopilot en `europe-southwest1` (Madrid). Por favor, solicita los parámetros que necesites (como `YOUR_GCP_PROJECT_ID`, etc.) si no los puedes inferir del contexto de mis archivos.
+
+**Nota sobre la monitorización GKE**: Durante el despliegue, verifica si hay alertas relacionadas con webhooks de admisión sin endpoints disponibles en el namespace `gke-gmp-system`. Si las hay, puedes:
+
+1. Verificar el estado de los pods en el namespace `gke-gmp-system`:
+   ```
+   kubectl get pods -n gke-gmp-system
+   ```
+
+2. Si los pods de `gmp-operator` están en estado no disponible y no necesitas monitoreo avanzado, considera deshabilitar Google Managed Prometheus:
+   ```
+   gcloud container clusters update btcbot-autopilot-cluster \
+     --location=europe-southwest1 \
+     --update-addons=GcpManagedPrometheus=DISABLED
+   ```
+
+3. Alternativamente, espera a que Google resuelva automáticamente el problema, ya que estos componentes son gestionados por Google Cloud.
