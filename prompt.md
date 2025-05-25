@@ -8,6 +8,7 @@ Necesito tu ayuda activa para desplegar mi proyecto de bot de trading de Python 
 * El proyecto utiliza servicios de GCP: GCS, Secret Manager y BigQuery. La **región GCP principal para este despliegue es Madrid (`europe-southwest1`)**.
 * Los scripts principales se encuentran en el directorio `scripts/` (ej: `download_data.py`, `preprocess_data.py`, `train_rl_agent.py`, `run_live_trader.py`).
 * La configuración se gestiona a través de `src/config.yaml` y un archivo `.env`.
+* **IMPORTANTE**: El proyecto ahora usa un script orquestador único (`scripts/orchestrate_training.py`) que ejecuta toda la pipeline de entrenamiento en un solo job con acceso a GPU.
 
 **Pasos de Despliegue (necesito que generes y "ejecutes" los comandos para esto):**
 
@@ -34,23 +35,26 @@ Necesito tu ayuda activa para desplegar mi proyecto de bot de trading de Python 
 
     * **Namespace:** Un manifiesto para el namespace `btcbot` de Kubernetes si no se creó anteriormente.
     * **Variables de Entorno y Secretos:**
-        * Mis aplicaciones leen variables de entorno para la configuración (`GCP_PROJECT_ID`, `GCS_BUCKET_NAME`, `BIGQUERY_LOG_DATASET_ID`, `LIVE_TRADING_MODE`, etc.). Mi `README.md` menciona un Secret de Kubernetes `btcbot-env-vars` para variables no sensibles. ¿Cómo debemos configurar esto para los Jobs y Deployments? Los secretos de Binance se acceden vía Secret Manager usando Workload Identity.
-    * **CronJob de Adquisición de Datos (`data-acquisition-cronjob.yaml`):**
-        * Ejecuta `python scripts/download_data.py` usando la imagen `btcbot-cpu`.
-        * Programación: Semanal, cada sábado a las 00:00 UTC.
-        * Usa Workload Identity (la KSA `btcbot-ksa`).
-    * **Job de Preprocesamiento de Datos (`data-preprocessing-job.yaml`):**
-        * Ejecuta `python scripts/preprocess_data.py` usando la imagen `btcbot-cpu`.
-        * Usa Workload Identity.
-    * **Job de Entrenamiento del Modelo (`model-training-job.yaml`):**
-        * Ejecuta `python scripts/train_rl_agent.py` usando la imagen `btcbot-gpu`.
+        * Mis aplicaciones leen variables de entorno para la configuración (`GCP_PROJECT_ID`, `GCS_BUCKET_NAME`, `BIGQUERY_LOG_DATASET_ID`, `LIVE_TRADING_MODE`, etc.). Mi `README.md` menciona un ConfigMap de Kubernetes `btcbot-env-vars` para variables no sensibles. Los secretos de Binance se acceden vía Secret Manager usando Workload Identity.
+    * **Job Orquestrador de Pipeline (`pipeline-orchestrator.yaml`):**
+        * Ejecuta `python scripts/orchestrate_training.py --phase full` usando la imagen `btcbot-gpu`.
         * Solicita recursos de GPU (ej: NVIDIA T4 o la más adecuada para Autopilot en `europe-southwest1`).
-        * Usa Workload Identity.
-    * **Secuenciación de Jobs:** Una vez definidos estos tres jobs, ¿cómo podemos asegurar que se ejecuten secuencialmente en GKE (Adquisición -> Preprocesamiento -> Entrenamiento)?
+        * Usa Workload Identity (la KSA `btcbot-ksa`).
+        * Los datos y modelos se almacenan en Google Cloud Storage (no se requiere almacenamiento persistente en Kubernetes).
+        * Ejecuta toda la pipeline: descarga → preprocesamiento → entrenamiento → evaluación en un solo job.
+    * **CronJob para Pipeline Programada (opcional):**
+        * Para ejecutar la pipeline semanalmente, crear un CronJob que lance el job orquestrador.
+        * Programación: Semanal, cada sábado a las 00:00 UTC.
     * **Despliegue del Bot de Trading en Vivo (`live-trader-deployment.yaml`):**
         * Ejecuta `python scripts/run_live_trader.py` (24/7) usando la imagen `btcbot-cpu`.
         * Usa Workload Identity (`btcbot-ksa`).
         * Enruta el tráfico de salida a través de la IP estática configurada en el paso 3.
+
+**Características del Nuevo Enfoque:**
+* **Orquestador Único**: Un solo job con GPU ejecuta toda la pipeline de entrenamiento.
+* **Configuración Centralizada**: Toda la configuración (símbolos, timeframes, etc.) se gestiona a través de `config.yaml`.
+* **Almacenamiento en GCS**: Los datos y modelos se almacenan directamente en Google Cloud Storage, sin necesidad de almacenamiento persistente en Kubernetes.
+* **Flexibilidad**: El orquestador soporta diferentes fases (`data`, `preprocess`, `train`, `evaluate`, `full`).
 
 **Flujo de Interacción:**
 1.  Creas un comando `gcloud`, `kubectl` o un manifiesto YAML.
