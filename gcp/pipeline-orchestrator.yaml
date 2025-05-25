@@ -1,0 +1,35 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: btcbot-pipeline-orchestrator
+  namespace: btcbot
+spec:
+  template:
+    metadata:
+      annotations:
+        # Cloud NAT para asegurar que no usemos una IP efímera sino nuestra IP estática
+        cloud.google.com/network-tier: "Premium"
+    spec:
+      serviceAccountName: btcbot-ksa  # Usa la KSA para Workload Identity
+      nodeSelector:
+        cloud.google.com/gke-accelerator: "nvidia-tesla-t4"
+      containers:
+      - name: btcbot-pipeline
+        image: europe-southwest1-docker.pkg.dev/lofty-complex-460416-r6/lofty-complex-460416-r6-repo/btcbot-gpu:latest
+        command: ["python", "scripts/orchestrate_training.py", "--phase", "full"]
+        resources:
+          # GKE Autopilot asigna recursos automáticamente basado en la solicitud
+          requests:
+            cpu: "8"
+            memory: "16Gi"
+            nvidia.com/gpu: "1"
+          limits:
+            cpu: "16"
+            memory: "32Gi"
+            nvidia.com/gpu: "1"
+        envFrom:
+        - configMapRef:
+            name: btcbot-env-vars  # Usa el ConfigMap existente para variables de entorno
+      restartPolicy: OnFailure
+      # Configuramos un tiempo máximo de ejecución (12 horas)
+      activeDeadlineSeconds: 43200

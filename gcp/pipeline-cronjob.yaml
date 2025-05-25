@@ -15,14 +15,11 @@ spec:
             cloud.google.com/network-tier: "Premium"
         spec:
           serviceAccountName: btcbot-ksa  # Usa la KSA para Workload Identity
-          # Quitamos el nodeSelector para GPU ya que no hay GPUs disponibles en europe-southwest1
           containers:
           - name: btcbot-pipeline
             image: europe-southwest1-docker.pkg.dev/lofty-complex-460416-r6/lofty-complex-460416-r6-repo/btcbot-cpu:latest
             command: ["python", "scripts/orchestrate_training.py", "--timesteps", "100000"]
             resources:
-              # Omitimos la solicitud de GPU ya que no hay disponibles en esta región
-              # En su lugar, solicitamos más CPU y memoria
               requests:
                 cpu: "8"
                 memory: "16Gi"
