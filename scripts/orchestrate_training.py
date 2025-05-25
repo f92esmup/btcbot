@@ -13,13 +13,12 @@ import os
 from datetime import datetime, timedelta
 from pathlib import Path
 
-# Configurar logging
+# Configurar logging solo para terminal
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.StreamHandler(sys.stdout),
-        logging.FileHandler('orchestrator.log')
+        logging.StreamHandler(sys.stdout)
     ]
 )
 logger = logging.getLogger(__name__)
