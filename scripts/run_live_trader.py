@@ -72,6 +72,12 @@ def parse_arguments():
         default="src/config.yaml",
         help="Ruta al archivo de configuración centralizada"
     )
+    parser.add_argument(
+        "--modelpath",
+        type=str,
+        default=None,
+        help="Ruta al modelo de RL para sustituir al configurado en el archivo de configuración. Para modelos locales, usa una ruta absoluta. Para modelos en Google Cloud Storage, NO incluyas el prefijo 'gs://', solo la ruta dentro del bucket, por ejemplo: 'models/sac_transformer_trading_agent/best_model/best_model.zip'"
+    )
     return parser.parse_args()
 
 class LiveTrader:
@@ -115,11 +121,22 @@ class LiveTrader:
         try:
             self.agent_manager = RLAgentManager(config_path=args.config_path if args else None)
             # self.agent_manager.setup_environment() # No es necesario si load_model no lo requiere explícitamente
-            agent_config = self.config_manager.get_agent_config()
-            model_path = agent_config.get('live_model_path')
+            
+            # Verificar si se proporcionó un model_path como argumento
+            model_path = args.modelpath if args and hasattr(args, 'modelpath') else None
+            
+            # Si no se proporcionó en los argumentos, usar el de la configuración
             if not model_path:
-                logger.error("Ruta del modelo en vivo no configurada en agent_config.live_model_path")
+                agent_config = self.config_manager.get_agent_config()
+                model_path = agent_config.get('live_model_path')
+                logger.info("Usando ruta del modelo desde configuración.")
+            else:
+                logger.info(f"Usando ruta del modelo proporcionada por argumento: {model_path}")
+            
+            if not model_path:
+                logger.error("Ruta del modelo en vivo no configurada en agent_config.live_model_path ni en argumentos")
                 raise ValueError("Ruta del modelo en vivo no configurada.")
+                
             self.agent_manager.load_model(model_path)
             logger.info(f"Modelo RL cargado exitosamente desde: {model_path}")
         except Exception as e_agent:

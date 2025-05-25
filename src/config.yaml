@@ -25,7 +25,7 @@ binance_api:
 data_acquisition_defaults:
   symbol: "BTCUSDT"
   interval: "1m"
-  historical_start_date: "2025-05-21"
+  historical_start_date: "2020-01-01"
 
 # =====================================================================
 # Configuración de Preprocesamiento de Datos
