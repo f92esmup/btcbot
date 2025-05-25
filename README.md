@@ -386,12 +386,34 @@ kubectl scale deployment live-trader-deployment --replicas=1 -n btcbot  # Reinic
 ```
 
 **Local (Desarrollo):**
-Asegúrese de que la ruta al modelo entrenado esté correctamente configurada en `src/config.yaml` bajo `agent.live_model_path`. Luego, ejecute:
+Antes de ejecutar el trading en vivo, asegúrese de que:
+
+1. La ruta al modelo entrenado esté correctamente configurada en `src/config.yaml` bajo `agent.live_model_path`:
+   ```yaml
+   # En src/config.yaml
+   agent:
+     # otras configuraciones...
+     live_model_path: "models/sac_transformer_trading_agent/TU_MODELO_ENTRENADO.zip"
+   ```
+
+2. Las variables de entorno estén configuradas correctamente en su archivo `.env`:
+   ```
+   GCP_PROJECT_ID=tu-proyecto-id
+   GCP_REGION=tu-region
+   BIGQUERY_LOG_DATASET_ID=btcbot_logs
+   LIVE_TRADING_MODE=TESTNET  # Usar TESTNET para pruebas, REAL para trading real
+   SECRET_NAME_BINANCE_API_KEY_FUTURES=BINANCE_API_KEY_FUTURES
+   SECRET_NAME_BINANCE_API_SECRET_FUTURES=BINANCE_API_SECRET_FUTURES
+   SECRET_NAME_TESTNET_BINANCE_API_KEY_FUTURES=TESTNET_BINANCE_API_KEY_FUTURES
+   SECRET_NAME_TESTNET_BINANCE_API_SECRET_FUTURES=TESTNET_BINANCE_API_SECRET_FUTURES
+   ```
+
+Luego, ejecute:
 ```bash
-python scripts/run_live_trader.py --config src/config.yaml
+python scripts/run_live_trader.py --config_path src/config.yaml
 ```
 
-El bot comenzará a escuchar el cierre de nuevas velas, procesar datos en tiempo real y tomar decisiones de trading utilizando el modelo cargado localmente.
+El bot comenzará a escuchar el cierre de nuevas velas, procesar datos en tiempo real y tomar decisiones de trading utilizando el modelo cargado desde GCS.
 
 ## Automatización y Orquestación MLOps con Cloud Build y GKE/Vertex AI
 

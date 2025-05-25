@@ -156,7 +156,7 @@ agent:
   total_training_timesteps: 1000000
   log_interval_episodes: 10 # Loguear cada N episodios
   gcs_models_path_prefix: "models/sac_transformer_trading_agent"  # Prefijo para guardado en GCS
-  live_model_path: "models/sac_transformer_trading_agent/YOUR_MODEL_FILENAME.zip" # Path to the specific model for live trading
+  live_model_path: "models/sac_transformer_trading_agent/sac_transformer_trading_agent_final_1000_steps.zip" # Path to the specific model for live trading
   save_frequency_steps: 100000  # Guardar cada 100,000 steps para checkpoints regulares
   use_gpu: true  # Activar para usar GPU (CUDA/MPS) si está disponible
 

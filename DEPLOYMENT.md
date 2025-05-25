@@ -25,10 +25,14 @@
    - Jobs: `data-preprocessing-job`, `model-training-job`
    - Deployment: `live-trader-deployment`
 
+5. **Configuración del Modelo**
+   - ✅ Modelo desplegado: `models/sac_transformer_trading_agent/sac_transformer_trading_agent_final_1000_steps.zip`
+   - ✅ Ruta configurada correctamente en `src/config.yaml` bajo `agent.live_model_path`
+
 ### 🔄 Estado Actual
 
 - **Data Preprocessing Job**: ContainerCreating (descargando imagen)
-- **Live Trader Deployment**: ContainerCreating (descargando imagen)  
+- **Live Trader Deployment**: ✅ Running - Conectado a Binance TESTNET
 - **Model Training Job**: Pending (esperando nodo con GPU)
 
 ### 📋 Próximos Pasos
@@ -102,6 +106,18 @@ kubectl edit configmap btcbot-env-vars -n btcbot
 3. **Secretos de Binance**: Se acceden vía Secret Manager usando Workload Identity.
 
 4. **Costos**: GKE Autopilot factura por recursos utilizados. Monitorea el uso.
+
+5. **Ruta del Modelo**: El sistema está configurado para usar el modelo en la ruta:
+   ```
+   models/sac_transformer_trading_agent/sac_transformer_trading_agent_final_1000_steps.zip
+   ```
+   Si necesitas usar un modelo diferente, modifica el valor de `agent.live_model_path` en `src/config.yaml`.
+
+6. **Argumentos del Comando**: Para ejecutar el trader en vivo manualmente, usa:
+   ```bash
+   python scripts/run_live_trader.py --config_path src/config.yaml
+   ```
+   Asegúrate de usar `--config_path` (no `--config`) como argumento.
 
 ### 🔄 Pipeline de Datos
 
