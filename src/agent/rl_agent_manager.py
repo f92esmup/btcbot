@@ -403,7 +403,7 @@ class RLAgentManager:
             gcs_path_prefix = self.config.get("gcs_models_path_prefix", "models/sac_transformer_trading_agent")
             gcs_path = f"{gcs_path_prefix}/model_{int(time.time())}.zip"
             
-        # Ruta completa en GCS incluyendo el bucket
+        # Subir a GCS (gcs_path ya incluye la ruta completa sin bucket)
         full_gcs_path = f"{self.gcs_bucket_name}/{gcs_path}"
         
         # Subir a GCS

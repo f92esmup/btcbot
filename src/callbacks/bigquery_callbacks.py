@@ -121,7 +121,8 @@ class BigQueryLoggingCallback(BaseCallback):
         
         # Log training metrics periodically
         if (self.num_timesteps - self.last_metrics_log_step) >= self.metrics_log_interval:
-            sb3_logs = self.logger.get_latest_values() # SB3 logger, not Python logger
+            # Access the logger's name_to_value dictionary directly
+            sb3_logs = getattr(self.logger, 'name_to_value', {}) if self.logger else {}
             if sb3_logs:
                 # Filter for relevant metrics if possible, or log all scalars
                 # Example: time/fps, time/iterations, train/actor_loss, etc.

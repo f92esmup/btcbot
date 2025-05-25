@@ -59,7 +59,7 @@ def parse_arguments():
         "--model-path",
         type=str,
         required=False,
-        default="bitcoin-460320_data/models/sac_transformer_trading_agent/sac_transformer_trading_agent_final_1000_steps.zip", # No se usa el sufijo gs//
+        default="models/sac_transformer_trading_agent/sac_transformer_trading_agent_final_1000_steps.zip", # No se usa el sufijo gs//
         help="Ruta en GCS al modelo entrenado para evaluar (formato: path/to/model.zip)"
     )
     
