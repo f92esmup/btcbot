@@ -25,7 +25,7 @@ binance_api:
 data_acquisition_defaults:
   symbol: "BTCUSDT"
   interval: "1m"
-  historical_start_date: "2020-01-01"
+  historical_start_date: "2025-05-21"
 
 # =====================================================================
 # Configuración de Preprocesamiento de Datos
@@ -167,7 +167,7 @@ agent:
 
   # --- Configuración de Logging para BigQuery en Entrenamiento ---
   bigquery_logging:
-    training_log_batch_size: 25    # Número de registros de pasos de episodio a acumular antes de enviar a BQ (aprox)
+    # Los datos se guardan localmente en CSV durante entrenamiento y se suben a BigQuery al finalizar
     training_metrics_log_interval_steps: 100 # Intervalo de pasos para loguear métricas de entrenamiento (pérdidas, lr)
 
 # =====================================================================

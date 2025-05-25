@@ -9,8 +9,8 @@ logger = logging.getLogger(__name__)
 
 def sanitize_for_json(data):
     """
-    Recursively sanitize data for JSON serialization by converting numpy types to native Python types
-    and handling NaN/infinity values.
+    Recursively sanitize data for JSON serialization by converting numpy types to native Python types,
+    datetime objects to ISO strings, and handling NaN/infinity values.
     
     Args:
         data: The data to sanitize (can be dict, list, or primitive)
@@ -18,10 +18,15 @@ def sanitize_for_json(data):
     Returns:
         The sanitized data with numpy types converted to native Python types and NaN/inf handled
     """
+    import datetime
+    
     if isinstance(data, dict):
         return {key: sanitize_for_json(value) for key, value in data.items()}
     elif isinstance(data, list):
         return [sanitize_for_json(item) for item in data]
+    elif isinstance(data, datetime.datetime):
+        # Convert datetime to ISO format string for BigQuery JSON serialization
+        return data.isoformat()
     elif isinstance(data, np.integer):
         return int(data)
     elif isinstance(data, np.floating):
