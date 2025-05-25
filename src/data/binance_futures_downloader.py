@@ -7,6 +7,7 @@ import os
 import io
 from google.cloud import storage
 from src.utils.config import ConfigManager
+from src.utils.logging_utils import get_madrid_timestamp, MADRID_TZ
 
 logger = logging.getLogger(__name__) # Configurar el logger a nivel de script o aplicación
 
@@ -106,6 +107,8 @@ class BinanceFuturesDownloader:
             return
 
         current_time_utc = datetime.now(timezone.utc)
+        current_time_madrid = get_madrid_timestamp()
+        logger.info(f"Tiempo actual UTC: {current_time_utc.strftime('%Y-%m-%d %H:%M:%S')}, Madrid: {current_time_madrid.strftime('%Y-%m-%d %H:%M:%S %Z')}")
         
         # Convertir a milisegundos para la API de Binance
         start_timestamp_ms = int(start_dt.timestamp() * 1000)
@@ -179,7 +182,7 @@ class BinanceFuturesDownloader:
         df.reset_index(drop=True, inplace=True)
 
         # Guardar en Google Cloud Storage
-        output_filename = self._generate_filename(symbol, interval, start_dt, current_time_utc)
+        output_filename = self._generate_filename(symbol, interval, start_dt, current_time_madrid)
         try:
             # Guardar en Google Cloud Storage
             csv_buffer = io.StringIO()

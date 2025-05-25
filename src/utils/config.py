@@ -25,6 +25,7 @@ class ConfigManager:
             cls._instance = super(ConfigManager, cls).__new__(cls)
             # Inicializar estos atributos primero para evitar errores
             cls._instance.config = None
+            cls._instance.config_path = config_path  # Guardar el config_path
             cls._instance.gcp_project_id = None 
             cls._instance.secret_client = None
             

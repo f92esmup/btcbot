@@ -25,7 +25,7 @@ binance_api:
 data_acquisition_defaults:
   symbol: "BTCUSDT"
   interval: "1m"
-  historical_start_date: "2025-05-01"
+  historical_start_date: "2020-01-01"
 
 # =====================================================================
 # Configuración de Preprocesamiento de Datos
@@ -157,13 +157,18 @@ agent:
   log_interval_episodes: 10 # Loguear cada N episodios
   gcs_models_path_prefix: "models/sac_transformer_trading_agent"  # Prefijo para guardado en GCS
   live_model_path: "models/sac_transformer_trading_agent/YOUR_MODEL_FILENAME.zip" # Path to the specific model for live trading
-  save_frequency_steps: 50000
+  save_frequency_steps: 100000  # Guardar cada 100,000 steps para checkpoints regulares
   use_gpu: true  # Activar para usar GPU (CUDA/MPS) si está disponible
+
+  # --- Configuración adicional para el guardado de modelos ---
+  save_final_model: true  # Guardar el modelo final al completar el entrenamiento
+  save_best_model: true   # Guardar el mejor modelo durante la evaluación
+  keep_all_checkpoints: false  # Mantener todos los checkpoints (no sobrescribir)
 
   # --- Configuración de Logging para BigQuery en Entrenamiento ---
   bigquery_logging:
-    training_log_batch_size: 100    # Número de registros de pasos de episodio a acumular antes de enviar a BQ (aprox)
-    training_metrics_log_interval_steps: 1000 # Intervalo de pasos para loguear métricas de entrenamiento (pérdidas, lr)
+    training_log_batch_size: 25    # Número de registros de pasos de episodio a acumular antes de enviar a BQ (aprox)
+    training_metrics_log_interval_steps: 100 # Intervalo de pasos para loguear métricas de entrenamiento (pérdidas, lr)
 
 # =====================================================================
 # Configuración de Trading en Vivo

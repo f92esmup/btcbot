@@ -11,6 +11,7 @@ from google.cloud import storage
 
 from src.utils.config import ConfigManager
 from src.environments.simulated_broker import SimulatedBroker
+from src.utils.logging_utils import get_madrid_timestamp_str
 
 # Configurar logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -365,7 +366,7 @@ class TradingEnvironment(gym.Env):
         step_info_log = {}
         step_info_log['episode_id'] = self.episode_id_counter
         step_info_log['step_in_episode'] = self.current_step_in_episode
-        step_info_log['timestamp_event'] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        step_info_log['timestamp_event'] = get_madrid_timestamp_str()
         step_info_log['event_type'] = 'step_info'
         step_info_log['reward_step'] = float(reward)
         step_info_log['action_value_raw'] = float(action_signal)
@@ -426,7 +427,7 @@ class TradingEnvironment(gym.Env):
         if terminated or truncated:
             episode_summary_log = {}
             episode_summary_log['episode_id'] = self.episode_id_counter
-            episode_summary_log['timestamp_event'] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+            episode_summary_log['timestamp_event'] = get_madrid_timestamp_str()
             episode_summary_log['event_type'] = 'episode_summary'
             episode_summary_log['total_reward_episode'] = float(self.current_episode_agg_stats['total_reward'])
             episode_summary_log['pnl_realized_episode'] = float(self.current_episode_agg_stats['pnl_realized'])
@@ -506,6 +507,7 @@ class TradingEnvironment(gym.Env):
             'position_size': self.active_position_size_contracts,
             'entry_price': self.active_position_entry_price,
             'unrealized_pnl': self.unrealized_pnl,
+            'market_price': close_price,  # Add current market price
             'episode_stats': self.episode_stats
         })
         

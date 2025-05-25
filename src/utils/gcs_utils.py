@@ -171,7 +171,7 @@ def stream_row_to_bigquery(bigquery_client: bigquery.Client, table_id: str, row:
         # La API insert_rows_json espera una lista de filas.
         errors = bigquery_client.insert_rows_json(table_id, [row])
         if not errors:
-            logger.debug(f"Fila insertada correctamente en BigQuery table {table_id}: {row.get('timestamp_decision_utc', 'No timestamp')}")
+            logger.debug(f"Fila insertada correctamente en BigQuery table {table_id}: {row.get('timestamp_decision_madrid', 'No timestamp')}")
             return True
         else:
             logger.error(f"Errores al insertar fila en BigQuery table {table_id}: {errors}")

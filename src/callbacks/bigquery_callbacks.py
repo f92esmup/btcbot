@@ -8,6 +8,7 @@ from stable_baselines3.common.callbacks import BaseCallback
 
 from src.utils.bigquery_utils import stream_data_to_bigquery
 from src.utils.config import ConfigManager # For accessing config values
+from src.utils.logging_utils import get_madrid_timestamp_str
 
 logger = logging.getLogger(__name__)
 
@@ -133,7 +134,7 @@ class BigQueryLoggingCallback(BaseCallback):
                     'episode_id': -1, # Or use current episode_id if available and makes sense
                     'step_in_episode': -1,
                     'total_steps_elapsed': self.num_timesteps,
-                    'timestamp_event': datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                    'timestamp_event': get_madrid_timestamp_str(),
                     'event_type': 'training_metric',
                     'actor_loss': sb3_logs.get('train/actor_loss'),
                     'critic_loss': sb3_logs.get('train/critic_loss'),
@@ -148,19 +149,27 @@ class BigQueryLoggingCallback(BaseCallback):
 
         # Flush buffer if batch size reached or episode ended
         if len(self.log_buffer) >= self.batch_size or (episode_ended and self.log_buffer):
+            logger.info(f"Enviando batch de {len(self.log_buffer)} registros a BigQuery. Paso actual: {self.num_timesteps}")
             self._flush_log_buffer()
         
         return True
 
     def _on_training_end(self) -> None:
-        self._flush_log_buffer()
+        # Forzar el flush de cualquier dato restante en el buffer
+        if self.log_buffer:
+            logger.info(f"Forzando flush final de {len(self.log_buffer)} registros al finalizar entrenamiento")
+            self._flush_log_buffer()
         logger.info(f"BigQuery Logging Ended. Run ID: {self.run_id}, Session ID: {self.session_id}")
+        # Log resumen final
+        total_records_logged = self.num_timesteps // self.batch_size + (1 if self.num_timesteps % self.batch_size > 0 else 0)
+        logger.info(f"Total de pasos entrenados: {self.num_timesteps}, Batches enviados aprox: {total_records_logged}")
 
     def _flush_log_buffer(self):
         if not self.log_buffer:
             return
 
-        table_id_date_suffix = datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%d')
+        from src.utils.logging_utils import get_madrid_timestamp
+        table_id_date_suffix = get_madrid_timestamp().strftime('%Y%m%d')
         table_id = f"entrenamiento_{table_id_date_suffix}"
 
         logger.debug(f"Flushing {len(self.log_buffer)} log records to BigQuery table {self.dataset_id}.{table_id}")

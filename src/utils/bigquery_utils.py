@@ -1,10 +1,49 @@
 # src/utils/bigquery_utils.py
 import logging
 import time
+import numpy as np
 from google.cloud import bigquery
 from google.cloud.exceptions import NotFound
 
 logger = logging.getLogger(__name__)
+
+def sanitize_for_json(data):
+    """
+    Recursively sanitize data for JSON serialization by converting numpy types to native Python types
+    and handling NaN/infinity values.
+    
+    Args:
+        data: The data to sanitize (can be dict, list, or primitive)
+        
+    Returns:
+        The sanitized data with numpy types converted to native Python types and NaN/inf handled
+    """
+    if isinstance(data, dict):
+        return {key: sanitize_for_json(value) for key, value in data.items()}
+    elif isinstance(data, list):
+        return [sanitize_for_json(item) for item in data]
+    elif isinstance(data, np.integer):
+        return int(data)
+    elif isinstance(data, np.floating):
+        # Handle NaN and infinity values
+        if np.isnan(data):
+            return 0.0
+        elif np.isinf(data):
+            return 0.0
+        else:
+            return float(data)
+    elif isinstance(data, np.bool_):
+        return bool(data)
+    elif isinstance(data, np.ndarray):
+        return data.tolist()
+    elif isinstance(data, float):
+        # Handle native Python float NaN and infinity
+        if np.isnan(data) or np.isinf(data):
+            return 0.0
+        else:
+            return data
+    else:
+        return data
 
 def stream_data_to_bigquery(
     project_id: str,
@@ -35,6 +74,9 @@ def stream_data_to_bigquery(
     if not rows_to_insert:
         logger.info(f"No rows to insert into {dataset_id}.{table_id}.")
         return True
+
+    # Sanitize rows to handle numpy types that aren't JSON serializable
+    rows_to_insert = sanitize_for_json(rows_to_insert)
 
     if client is None:
         client = bigquery.Client(project=project_id)

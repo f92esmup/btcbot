@@ -7,7 +7,7 @@ import logging
 from src.utils.config import ConfigManager # Asumiendo que ConfigManager está accesible
 
 # Para consistencia, usa tu setup_logger si lo tienes
-from src.utils.logging_utils import setup_logger
+from src.utils.logging_utils import setup_logger, get_madrid_timestamp_str, MADRID_TZ
 logger = setup_logger("LiveWebsocketManager")
 
 
@@ -44,7 +44,11 @@ class LiveWebsocketManager:
             #   'x': True si la vela está cerrada
             if message.get('e') == 'kline' and message.get('k', {}).get('x') == True:
                 kline_data = message['k']
-                logger.debug(f"Vela cerrada detectada por WebSocket: T:{kline_data.get('t')}, O:{kline_data.get('o')}, H:{kline_data.get('h')}, L:{kline_data.get('l')}, C:{kline_data.get('c')}, V:{kline_data.get('v')}")
+                
+                # Añadir timestamp de Madrid para logging
+                kline_data['madrid_timestamp'] = get_madrid_timestamp_str()
+                
+                logger.debug(f"Vela cerrada detectada por WebSocket: T:{kline_data.get('t')}, O:{kline_data.get('o')}, H:{kline_data.get('h')}, L:{kline_data.get('l')}, C:{kline_data.get('c')}, V:{kline_data.get('v')}, Madrid_TS:{kline_data.get('madrid_timestamp')}")
                 await self.notification_queue.put(kline_data) # Poner solo el objeto 'k'
             elif 'e' in message and message.get('e') == 'error':
                 logger.error(f"Error recibido del WebSocket de Binance: {message}")

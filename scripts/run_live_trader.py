@@ -19,7 +19,7 @@ from google.cloud import bigquery  # Add BigQuery import
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.utils.config import ConfigManager
-from src.utils.logging_utils import setup_logger
+from src.utils.logging_utils import setup_logger, get_madrid_timestamp_str, get_madrid_timestamp
 from src.utils.bigquery_utils import stream_data_to_bigquery # Added import
 from src.live.websocket_manager import LiveWebsocketManager
 from src.agent.rl_agent_manager import RLAgentManager
@@ -31,12 +31,12 @@ from src.live.portfolio_feature_builder import PortfolioFeatureBuilder
 logger = setup_logger("LiveTrader")
 
 LIVE_TRADING_SCHEMA = [
-    bigquery.SchemaField("timestamp_decision_utc", "TIMESTAMP"),
+    bigquery.SchemaField("timestamp_decision_madrid", "TIMESTAMP"),
     bigquery.SchemaField("trading_mode", "STRING"),
     bigquery.SchemaField("symbol", "STRING"),
     bigquery.SchemaField("interval", "STRING"),
-    bigquery.SchemaField("kline_open_time_utc", "TIMESTAMP", mode="NULLABLE"),
-    bigquery.SchemaField("kline_close_time_utc", "TIMESTAMP", mode="NULLABLE"),
+    bigquery.SchemaField("kline_open_time_madrid", "TIMESTAMP", mode="NULLABLE"),
+    bigquery.SchemaField("kline_close_time_madrid", "TIMESTAMP", mode="NULLABLE"),
     bigquery.SchemaField("kline_o", "FLOAT", mode="NULLABLE"),
     bigquery.SchemaField("kline_h", "FLOAT", mode="NULLABLE"),
     bigquery.SchemaField("kline_l", "FLOAT", mode="NULLABLE"),
@@ -380,8 +380,8 @@ class LiveTrader:
                     # Preparar el log completo para BigQuery
                     self._prepare_log_entry_for_bq(log_entry_data_for_bq, cycle_vars if 'cycle_vars' in locals() else {})
                     
-                    # Construct dynamic table ID
-                    current_date_str = datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%d')
+                    # Construct dynamic table ID using Madrid timezone
+                    current_date_str = get_madrid_timestamp().strftime('%Y%m%d')
                     dynamic_table_id = f"LiveTrading_{current_date_str}"
 
                     # Ensure all schema fields are present in the log_entry, adding None if missing
@@ -741,16 +741,27 @@ class LiveTrader:
             cycle_vars: Diccionario con las variables del ciclo actual
         """
         # Datos básicos y timestamp
-        log_entry["timestamp_decision_utc"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        log_entry["timestamp_decision_madrid"] = get_madrid_timestamp_str()
         log_entry["trading_mode"] = self.trading_mode
         log_entry["symbol"] = self.symbol
         log_entry["interval"] = self.interval
         
-        # Datos de la vela
+        # Datos de la vela (convertir timestamps UTC a Madrid)
         kline_data = cycle_vars.get('kline_data', {})
         if kline_data:
-            log_entry["kline_open_time_utc"] = pd.to_datetime(kline_data.get('t'), unit='ms', utc=True).isoformat() if kline_data.get('t') else None
-            log_entry["kline_close_time_utc"] = pd.to_datetime(kline_data.get('T'), unit='ms', utc=True).isoformat() if kline_data.get('T') else None
+            from src.utils.logging_utils import utc_to_madrid
+            # Convertir timestamps de UTC a Madrid
+            if kline_data.get('t'):
+                kline_open_utc = pd.to_datetime(kline_data.get('t'), unit='ms', utc=True)
+                log_entry["kline_open_time_madrid"] = utc_to_madrid(kline_open_utc).isoformat()
+            else:
+                log_entry["kline_open_time_madrid"] = None
+                
+            if kline_data.get('T'):
+                kline_close_utc = pd.to_datetime(kline_data.get('T'), unit='ms', utc=True)
+                log_entry["kline_close_time_madrid"] = utc_to_madrid(kline_close_utc).isoformat()
+            else:
+                log_entry["kline_close_time_madrid"] = None
             log_entry["kline_o"] = float(kline_data.get('o', 0.0))
             log_entry["kline_h"] = float(kline_data.get('h', 0.0))
             log_entry["kline_l"] = float(kline_data.get('l', 0.0))
@@ -837,7 +848,7 @@ class LiveTrader:
             
         # Garantizar que todos los campos necesarios existan
         keys_to_ensure = [
-            "kline_open_time_utc", "kline_close_time_utc", 
+            "kline_open_time_madrid", "kline_close_time_madrid", 
             "kline_o", "kline_h", "kline_l", "kline_c", "kline_v",
             "model_action_value", "action_threshold", 
             "current_position_side_bq", "desired_signal_bq",
@@ -855,7 +866,7 @@ class LiveTrader:
             if key not in log_entry:
                 log_entry[key] = None
                 
-        logger.info(f"Registro para BigQuery preparado: {log_entry['timestamp_decision_utc']}, acción={log_entry.get('model_action_value', 'N/A')}")
+        logger.info(f"Registro para BigQuery preparado: {log_entry['timestamp_decision_madrid']}, acción={log_entry.get('model_action_value', 'N/A')}")
         
         return log_entry
 

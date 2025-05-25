@@ -11,7 +11,7 @@ from binance.exceptions import BinanceAPIException, BinanceOrderException, Binan
 from src.utils.config import ConfigManager
 from typing import Optional, Dict, List, Any, Union
 
-from src.utils.logging_utils import setup_logger
+from src.utils.logging_utils import setup_logger, get_madrid_timestamp_str, MADRID_TZ
 logger = setup_logger("LiveBinanceAPIManager")
 
 class LiveBinanceAPIManager:

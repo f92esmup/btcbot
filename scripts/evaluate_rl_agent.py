@@ -26,7 +26,7 @@ sys.path.insert(0, project_root)
 from src.agent.rl_agent_manager import RLAgentManager
 from src.environments.trading_env import TradingEnvironment
 from src.utils.config import ConfigManager
-from src.utils.logging_utils import setup_logger
+from src.utils.logging_utils import setup_logger, get_madrid_timestamp_str, get_madrid_timestamp
 from src.utils.bigquery_utils import stream_data_to_bigquery
 from src.callbacks.bigquery_evaluation_schema import EVALUATION_LOG_SCHEMA, EVALUATION_STEP_SCHEMA
 from dotenv import load_dotenv
@@ -331,7 +331,7 @@ def evaluate_agent(agent_manager, env, num_episodes=1, output_dir="results",
             'market_price': []
         }
         
-        episode_start_time = datetime.datetime.now(datetime.timezone.utc)
+        episode_start_time = get_madrid_timestamp()
         
         # Bucle principal del episodio
         while not (done or truncated):
@@ -342,13 +342,13 @@ def evaluate_agent(agent_manager, env, num_episodes=1, output_dir="results",
             # Recopilar datos para visualización
             episode_data['rewards'].append(reward)
             episode_data['actions'].append(float(action[0]))
-            episode_data['position'].append(info.get('position', 0))
-            episode_data['portfolio_value'].append(info.get('portfolio_value', 0))
-            episode_data['market_price'].append(info.get('current_price', 0))
+            episode_data['position'].append(info.get('position_side', 0))
+            episode_data['portfolio_value'].append(info.get('current_equity', 0))
+            episode_data['market_price'].append(info.get('market_price', 0))
             
             observation = next_observation
         
-        episode_end_time = datetime.datetime.now(datetime.timezone.utc)
+        episode_end_time = get_madrid_timestamp()
         
         # Visualizar y guardar resultados del episodio
         # Solo guardar archivos locales si BigQuery no está habilitado
@@ -394,7 +394,7 @@ def evaluate_agent(agent_manager, env, num_episodes=1, output_dir="results",
                 }
                 
                 # Crear tabla con fecha actual
-                current_date = datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%d')
+                current_date = get_madrid_timestamp().strftime('%Y%m%d')
                 table_id = f"evaluacion_{current_date}"
                 
                 # Enviar a BigQuery
@@ -488,8 +488,8 @@ def main():
     )
     
     # Configurar el entorno de evaluación (modo determinístico)
-    # Pasar directamente la ruta de configuración y establecer el modo de renderización
-    eval_env = TradingEnvironment(config_path=args.config, render_mode='human')
+    # Usar el agent manager para configurar el entorno correctamente
+    eval_env = agent_manager.setup_environment(is_eval=True)
     
     # Evaluar el agente
     logger.info("Iniciando evaluación del agente...")
@@ -516,7 +516,7 @@ def main():
     logger.info(f"Resultados guardados en: {args.output_path}")
     
     if use_bigquery:
-        current_date = datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%d')
+        current_date = get_madrid_timestamp().strftime('%Y%m%d')
         logger.info(f"Datos también disponibles en BigQuery: {gcp_project_id}.{bigquery_dataset_id}.evaluacion_{current_date}")
         logger.info("Para análisis posterior, consulte los archivos CSV generados y la tabla de BigQuery.")
     else:

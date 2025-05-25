@@ -106,9 +106,9 @@ class TrainingOrchestrator:
         logger.info("=" * 50)
         
         # evaluate_rl_agent.py evaluará con configuración por defecto
-        args = ['--episodes', '3']
+        args = ['--episodes', '1']
         
-        logger.info("Evaluando modelo con 3 episodios")
+        logger.info("Evaluando modelo con 1 episodios")
         
         return self.run_script('evaluate_rl_agent.py', args)
     
