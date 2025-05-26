@@ -151,19 +151,9 @@ class RLAgentManager:
         
         # Si se debe cargar un modelo existente
         if load_model:
-            # Check if using "Best Model Only" strategy
-            enable_best_model_only = self.config.get("enable_best_model_only", False)
-            
-            if model_path is None and enable_best_model_only:
-                # Use the best model path from config
-                model_path = self.config.get("best_model_path", "models/best_sac_model.zip")
-                logger.info(f"Using Best Model Only strategy, loading from: {model_path}")
-            elif model_path is None:
-                # If no path specified, try to use the configured one
-                model_path = self.config.get("model_path_to_load", self.config.get("live_model_path"))
-                
             if model_path is None:
-                raise ValueError("Se solicitó cargar un modelo pero no se especificó la ruta")
+                raise ValueError("Se solicitó cargar un modelo pero no se especificó la ruta. "
+                               "Proporciona explícitamente model_path cuando load_model=True.")
                 
             logger.info(f"Cargando modelo desde GCS: {model_path}")
             self.model = self.load_model(model_path)

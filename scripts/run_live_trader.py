@@ -121,29 +121,16 @@ class LiveTrader:
         try:
             self.agent_manager = RLAgentManager(config_path=args.config_path if args else None)
             
-            # Check if we're using the Best Model Only strategy
-            agent_config = self.config_manager.get_agent_config()
-            enable_best_model_only = agent_config.get('enable_best_model_only', False)
-            
             # Verificar si se proporcionó un model_path como argumento
             model_path = args.modelpath if args and hasattr(args, 'modelpath') else None
             
             # Determine which model path to use
             if not model_path:
-                if enable_best_model_only:
-                    # Use the best model path from config when using Best Model Only strategy
-                    model_path = agent_config.get('best_model_path', 'models/best_sac_model.zip')
-                    logger.info(f"Using Best Model Only strategy, loading from: {model_path}")
-                else:
-                    # Traditional approach: use the live_model_path from config
-                    model_path = agent_config.get('live_model_path')
-                    logger.info("Using model path from configuration.")
+                # Si no se especifica modelo como argumento, usar la ruta por defecto al mejor modelo
+                model_path = self.config_manager.get_best_model_default_gcs_path()
+                logger.info(f"No model path specified, using default best model path: {model_path}")
             else:
                 logger.info(f"Using model path provided by argument: {model_path}")
-            
-            if not model_path:
-                logger.error("Live model path not configured in agent_config or arguments")
-                raise ValueError("Live model path not configured.")
                 
             self.agent_manager.load_model(model_path)
             logger.info(f"RL model loaded successfully from: {model_path}")

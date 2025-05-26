@@ -25,7 +25,7 @@ binance_api:
 data_acquisition_defaults:
   symbol: "BTCUSDT"
   interval: "1m"
-  historical_start_date: "2020-01-01"
+  historical_start_date: "2025-02-01"  # Fecha modificada para procesar un chunk pequeño
 
 # =====================================================================
 # Configuración de Preprocesamiento de Datos
@@ -42,8 +42,8 @@ preprocessing:
   use_parquet_storage: true  # Guardar también en formato Parquet para mejor compresión y velocidad
 
   # Integrated data pipeline configuration
-  chunk_duration_months: 3  # Process data in quarterly chunks
-  required_buffer_periods: 200  # Minimum periods needed for indicators and normalization
+  chunk_duration_months: 1  # Process data in monthly chunks (modificado para pruebas)
+  required_buffer_periods: 100  # Minimum periods needed for indicators and normalization (reducido para pruebas)
 
   # Parámetros para el procesamiento de OHLCV
   ohlcv_processing:
@@ -166,10 +166,9 @@ agent:
   enable_best_model_only: true  # Use simplified "best model only" strategy
   best_model_evaluation_frequency: 10000  # Evaluate and potentially update best model every N steps
   
-  # Legacy checkpoint configuration (deprecated when using best_model_only)
-  gcs_models_path_prefix: "models/sac_transformer_trading_agent"  # Prefijo para guardado en GCS
-  live_model_path: "models/sac_transformer_trading_agent/sac_transformer_trading_agent_final_1000_steps.zip" # Path to the specific model for live trading
-  save_frequency_steps: 100000  # Guardar cada 100,000 steps para checkpoints regulares
+  # Model storage configuration
+  gcs_models_path_prefix: "models/sac_transformer_trading_agent"  # Base path for all models in GCS
+  save_frequency_steps: 100000  # Save frequency for training checkpoints
   
   use_gpu: true  # Activar para usar GPU (CUDA/MPS) si está disponible
 

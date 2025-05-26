@@ -41,9 +41,10 @@ class IntegratedDataPipeline:
         Args:
             config_path: Path to the configuration file
         """
-        self.config = ConfigManager.load_config(config_path)
-        self.downloader = BinanceFuturesDownloader(self.config)
-        self.preprocessor = Preprocessor(self.config)
+        self.config_manager = ConfigManager(config_path=config_path)
+        self.config = self.config_manager.get_full_config()
+        self.downloader = BinanceFuturesDownloader(self.config_manager)
+        self.preprocessor = Preprocessor(self.config_manager)
         
         # Pipeline configuration
         self.bucket_name = os.getenv('GCS_BUCKET_NAME')
@@ -53,9 +54,12 @@ class IntegratedDataPipeline:
         self.chunk_duration_months = 3  # Quarterly chunks
         
         # Data parameters from config
-        self.symbol = self.config['data_acquisition_defaults']['symbol']
-        self.interval = self.config['data_acquisition_defaults']['interval']
-        self.sequence_length = self.config['preprocessing']['sequence_length_L']
+        data_acq_config = self.config_manager.get_data_acquisition_defaults()
+        preprocessing_config = self.config_manager.get_preprocessing_config()
+        
+        self.symbol = data_acq_config['symbol']
+        self.interval = data_acq_config['interval']
+        self.sequence_length = preprocessing_config['sequence_length_L']
         
         logger.info(f"Initialized IntegratedDataPipeline for {self.symbol} {self.interval}")
         logger.info(f"Chunk duration: {self.chunk_duration_months} months")

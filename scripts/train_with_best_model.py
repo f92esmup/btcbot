@@ -26,7 +26,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from src.agent.rl_agent_manager import RLAgentManager
 from src.utils.config import ConfigManager
 from src.utils.logging_utils import setup_logger
-from src.callbacks.bigquery_callbacks import BigQueryMetricsLoggingCallback
+from src.callbacks.bigquery_callbacks import BigQueryLoggingCallback
 
 # Set up logging
 logger = setup_logger("TrainBestModelOnly")
@@ -68,9 +68,13 @@ def main():
         agent_manager = RLAgentManager(config_path=args.config)
         
         # Set up BigQuery callback for metrics logging
-        bigquery_callback = BigQueryMetricsLoggingCallback(
-            config_manager=config_manager,
-            log_interval=agent_config.get("training_metrics_log_interval_steps", 100)
+        project_id = os.environ.get("GCP_PROJECT_ID")
+        dataset_id = os.environ.get("BIGQUERY_LOG_DATASET_ID", "btcbot_logs")
+        
+        bigquery_callback = BigQueryLoggingCallback(
+            project_id=project_id,
+            dataset_id=dataset_id,
+            config_manager=config_manager
         )
         
         # Get best model path
