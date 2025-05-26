@@ -5,9 +5,13 @@
 # =====================================================================
 data_paths:
   # Rutas para Google Cloud Storage (obligatorias)
-  gcs_raw: "raw"
-  gcs_processed: "processed"
+  gcs_raw: "raw"  # Legacy - kept for backward compatibility
+  gcs_processed: "processed"  # Legacy - kept for backward compatibility
   gcs_models: "models"  # Directorio para guardar modelos en GCS
+  
+  # New integrated data pipeline paths
+  gcs_processed_sequences: "data/processed_sequences"  # Chunked processed sequences
+  gcs_best_model: "models/best_sac_model.zip"  # Single best model path
 
 # =====================================================================
 # Configuración de la API de Binance
@@ -40,6 +44,10 @@ preprocessing:
   # Optimizaciones de rendimiento y almacenamiento
   use_float32: true  # Usar float32 en lugar de float64 para reducir uso de memoria
   use_parquet_storage: true  # Guardar también en formato Parquet para mejor compresión y velocidad
+
+  # Integrated data pipeline configuration
+  chunk_duration_months: 3  # Process data in quarterly chunks
+  required_buffer_periods: 200  # Minimum periods needed for indicators and normalization
 
   # Parámetros para el procesamiento de OHLCV
   ohlcv_processing:
@@ -113,8 +121,9 @@ environment:
     max_steps_in_position: 288 # ej. L * 3 (para normalizar 'steps_in_current_position')
 
   # --- Carga de Datos de Mercado (del Módulo 2) ---
-  processed_data_directory: "processed"  # Directorio en GCS (sin barra final)
-  processed_data_file_identifier: "_L96_market_features.npz" # Parte del nombre del archivo
+  # Updated to use new integrated data pipeline
+  processed_sequences_directory: "data/processed_sequences"  # Directory in GCS for chunked sequences
+  processed_sequence_file_pattern: "*_L{sequence_length}_sequences_*.npz"  # Pattern to match sequence files
 
 # =====================================================================
 # Configuración del Agente RL
@@ -155,9 +164,17 @@ agent:
   # --- Configuración de Entrenamiento ---
   total_training_timesteps: 1000000
   log_interval_episodes: 10 # Loguear cada N episodios
+  
+  # Best model only strategy - simplified model management
+  best_model_path: "models/best_sac_model.zip"  # Single best model path in GCS
+  enable_best_model_only: true  # Use simplified "best model only" strategy
+  best_model_evaluation_frequency: 10000  # Evaluate and potentially update best model every N steps
+  
+  # Legacy checkpoint configuration (deprecated when using best_model_only)
   gcs_models_path_prefix: "models/sac_transformer_trading_agent"  # Prefijo para guardado en GCS
   live_model_path: "models/sac_transformer_trading_agent/sac_transformer_trading_agent_final_1000_steps.zip" # Path to the specific model for live trading
   save_frequency_steps: 100000  # Guardar cada 100,000 steps para checkpoints regulares
+  
   use_gpu: true  # Activar para usar GPU (CUDA/MPS) si está disponible
 
   # --- Configuración adicional para el guardado de modelos ---

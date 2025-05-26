@@ -120,25 +120,33 @@ class LiveTrader:
         # Inicializar RLAgentManager y cargar el modelo
         try:
             self.agent_manager = RLAgentManager(config_path=args.config_path if args else None)
-            # self.agent_manager.setup_environment() # No es necesario si load_model no lo requiere explícitamente
+            
+            # Check if we're using the Best Model Only strategy
+            agent_config = self.config_manager.get_agent_config()
+            enable_best_model_only = agent_config.get('enable_best_model_only', False)
             
             # Verificar si se proporcionó un model_path como argumento
             model_path = args.modelpath if args and hasattr(args, 'modelpath') else None
             
-            # Si no se proporcionó en los argumentos, usar el de la configuración
+            # Determine which model path to use
             if not model_path:
-                agent_config = self.config_manager.get_agent_config()
-                model_path = agent_config.get('live_model_path')
-                logger.info("Usando ruta del modelo desde configuración.")
+                if enable_best_model_only:
+                    # Use the best model path from config when using Best Model Only strategy
+                    model_path = agent_config.get('best_model_path', 'models/best_sac_model.zip')
+                    logger.info(f"Using Best Model Only strategy, loading from: {model_path}")
+                else:
+                    # Traditional approach: use the live_model_path from config
+                    model_path = agent_config.get('live_model_path')
+                    logger.info("Using model path from configuration.")
             else:
-                logger.info(f"Usando ruta del modelo proporcionada por argumento: {model_path}")
+                logger.info(f"Using model path provided by argument: {model_path}")
             
             if not model_path:
-                logger.error("Ruta del modelo en vivo no configurada en agent_config.live_model_path ni en argumentos")
-                raise ValueError("Ruta del modelo en vivo no configurada.")
+                logger.error("Live model path not configured in agent_config or arguments")
+                raise ValueError("Live model path not configured.")
                 
             self.agent_manager.load_model(model_path)
-            logger.info(f"Modelo RL cargado exitosamente desde: {model_path}")
+            logger.info(f"RL model loaded successfully from: {model_path}")
         except Exception as e_agent:
             logger.error(f"Error inicializando RLAgentManager o cargando modelo: {e_agent}", exc_info=True)
             raise  # Re-lanzar la excepción para detener la inicialización si falla la carga del modelo

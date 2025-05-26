@@ -9,6 +9,8 @@ import io
 import datetime # Added import
 from google.cloud import storage
 
+from src.environments.chunked_data_loader import ChunkedDataLoader
+
 from src.utils.config import ConfigManager
 from src.environments.simulated_broker import SimulatedBroker
 from src.utils.logging_utils import get_madrid_timestamp_str
@@ -139,102 +141,35 @@ class TradingEnvironment(gym.Env):
     
     def _load_market_data(self) -> Tuple[np.ndarray, List[str]]:
         """
-        Carga los datos de mercado preprocesados desde Google Cloud Storage.
+        Carga y prepara los datos de mercado preprocesados desde GCS o local.
+        Utiliza ChunkedDataLoader para cargar y concatenar múltiples archivos de secuencias.
         
         Returns:
-            Tuple con (datos_de_mercado, nombres_de_características)
+            Tuple[np.ndarray, List[str]]: Datos de mercado procesados y lista de nombres de características
         """
-        # Inicializar cliente de GCS
-        try:
-            # Obtener variables de GCS
-            gcp_project_id = self.config_manager.get_env_variable('GCP_PROJECT_ID')
-            gcs_bucket_name = self.config_manager.get_env_variable('GCS_BUCKET_NAME')
-            
-            if not gcp_project_id or not gcs_bucket_name:
-                raise ValueError("Variables de entorno GCP_PROJECT_ID o GCS_BUCKET_NAME no configuradas.")
-                
-            # Inicializar cliente de almacenamiento
-            storage_client = storage.Client(project=gcp_project_id)
-            bucket = storage_client.bucket(gcs_bucket_name)
-        except Exception as e:
-            logger.error(f"Error al inicializar cliente de Google Cloud Storage: {e}")
-            raise
-            
-        # Busca el archivo con los datos preprocesados
-        data_dir = self.config['processed_data_directory']
-        file_identifier = self.config['processed_data_file_identifier']
+        # Initialize chunked data loader
+        data_loader = ChunkedDataLoader(self.config_manager, self.L)
         
-        # Listar blobs en el bucket con el prefijo del directorio
-        prefix = f"{data_dir}/"
-        blobs = list(bucket.list_blobs(prefix=prefix))
+        # Load and concatenate market data
+        market_features, feature_names = data_loader.load_market_data()
         
-        # Filtrar por el identificador en el nombre del archivo
-        matching_files = [blob.name.split('/')[-1] for blob in blobs if file_identifier in blob.name]
+        # Import auxiliary data from the loader
+        self.close_prices = getattr(data_loader, 'close_prices', None)
+        self.atr_values = getattr(data_loader, 'atr_values', None)
         
-        if not matching_files:
-            raise FileNotFoundError(f"No se encontraron archivos con el identificador {file_identifier} en GCS: {gcs_bucket_name}/{data_dir}")
-        
-        # Utiliza el primer archivo que coincida (se podría hacer más sofisticado si hay múltiples)
-        matching_file = sorted(matching_files, reverse=True)[0]  # Usar el más reciente
-        gcs_file_path = f"{data_dir}/{matching_file}"
-        logger.info(f"Cargando datos de mercado desde GCS: {gcs_bucket_name}/{gcs_file_path}")
-        
-        # Descargar archivo a un buffer de memoria
-        blob = bucket.blob(gcs_file_path)
-        buffer = io.BytesIO()
-        blob.download_to_file(buffer)
-        buffer.seek(0)
-        
-        # Carga los datos
-        data = np.load(buffer)
-        
-        # Verificar las claves disponibles en el archivo
-        logger.info(f"Claves disponibles en el archivo: {list(data.keys())}")
-        
-        # Intenta cargar los datos según las claves disponibles
-        if 'X_market' in data:
-            market_features = data['X_market']
-            # Dado que no tenemos feature_names, creamos nombres genéricos basados en la forma
-            feature_names = [f"feature_{i}" for i in range(market_features.shape[2])]
-            logger.info(f"Datos cargados con la clave 'X_market' de forma {market_features.shape}")
-        elif 'market_features' in data:
-            market_features = data['market_features']
-            feature_names = data['feature_names'].tolist() if 'feature_names' in data else [f"feature_{i}" for i in range(market_features.shape[2])]
-            logger.info(f"Datos cargados con la clave 'market_features' de forma {market_features.shape}")
+        # Log information about loaded data
+        if self.close_prices is not None and self.atr_values is not None:
+            logger.info(f"Loaded auxiliary price data: {len(self.close_prices)} close prices, {len(self.atr_values)} ATR values")
         else:
-            raise KeyError(f"No se encontró ninguna clave válida para datos de mercado en el archivo descargado de GCS")
-        
-        # Cargar datos adicionales si están disponibles (para optimización)
-        self.close_prices = None
-        self.atr_values = None
-        
-        # Verificar si tenemos precios de cierre y ATR no normalizados
-        if 'close_prices' in data:
-            self.close_prices = data['close_prices']
-            logger.info(f"Precios de cierre no normalizados cargados: {len(self.close_prices)} valores")
+            logger.warning("No auxiliary price data found. Using approximations for price and ATR.")
             
-        if 'atr_values' in data:
-            self.atr_values = data['atr_values']
-            logger.info(f"Valores ATR no normalizados cargados: {len(self.atr_values)} valores")
-            
-        # Si alguno de los dos no está disponible, eliminamos ambos para consistencia
-        if self.close_prices is None or self.atr_values is None:
-            self.close_prices = None
-            self.atr_values = None
-            logger.warning("No se encontraron datos de precio y ATR sin normalizar. Usando aproximaciones.")
-        
-        # Asegurar que market_features sea float32
-        if market_features.dtype != np.float32:
-            logger.info(f"Convirtiendo market_features de {market_features.dtype} a float32")
-            market_features = market_features.astype(np.float32)
-            
-        # Verificar que self.L coincide con la dimensión secuencial de los datos
+        # Verify that self.L matches the sequence dimension in the data
         if market_features.shape[1] != self.L:
-            logger.warning(f"Advertencia: La longitud de secuencia en los datos ({market_features.shape[1]}) no coincide con self.L ({self.L})")
-            logger.warning(f"Ajustando self.L para que coincida con los datos")
+            logger.warning(f"Sequence length in data ({market_features.shape[1]}) doesn't match self.L ({self.L})")
+            logger.warning(f"Adjusting self.L to match data")
             self.L = market_features.shape[1]
             
-            # También actualizar el observation_space
+            # Also update observation_space
             market_features_dim = market_features.shape[2]
             self.observation_space = spaces.Dict({
                 'market_features': spaces.Box(
