@@ -149,7 +149,7 @@ class TrainingOrchestrator:
             logger.info(f"Chunks procesados: {results['newly_processed_chunks']}")
             logger.info(f"Total secuencias: {results['total_sequences']}")
             
-            return results['status'] == 'success'
+            return results['status'] in ['success', 'completed']
             
         except Exception as e:
             logger.error(f"Error en la fase de datos: {e}", exc_info=True)
@@ -503,6 +503,7 @@ Ejemplos de uso:
     parser.add_argument(
         '--timesteps',
         type=int,
+        required=True,
         default=None,
         help='Número de timesteps para entrenamiento (si se omite, usa valor de config.yaml)'
     )

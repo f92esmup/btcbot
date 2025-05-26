@@ -74,6 +74,7 @@ def parse_arguments():
     )
     parser.add_argument(
         "--modelpath",
+        required=False,
         type=str,
         default=None,
         help="Ruta al modelo de RL para sustituir al configurado en el archivo de configuración. Para modelos locales, usa una ruta absoluta. Para modelos en Google Cloud Storage, NO incluyas el prefijo 'gs://', solo la ruta dentro del bucket, por ejemplo: 'models/sac_transformer_trading_agent/best_model/best_model.zip'"

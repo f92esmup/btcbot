@@ -5,9 +5,10 @@ This module consolidates data acquisition and preprocessing into a single, effic
 that operates in chunks to manage memory with large datasets (5 years of 1-minute candles).
 
 Key Features:
-- Chunk-based processing (quarterly/semi-annually) to manage memory
+- Chunk-based processing with interleaved download and preprocessing
 - Smart checkpointing/resuming (only processes missing chunks)
-- Saves only final processed sequences to GCS under processed_sequences/
+- Always reprocesses the latest chunk to ensure data freshness
+- Saves processed sequences to GCS under processed_chunks/
 - Replaces separate download_data.py and preprocess_data.py scripts
 """
 
@@ -19,6 +20,7 @@ from typing import List, Tuple, Optional, Dict, Any
 import asyncio
 from pathlib import Path
 import os
+import re
 
 from src.data.binance_futures_downloader import BinanceFuturesDownloader
 from src.data.preprocessor import Preprocessor
@@ -31,7 +33,8 @@ logger = logging.getLogger(__name__)
 class IntegratedDataPipeline:
     """
     Integrated data acquisition and preprocessing pipeline that operates in chunks
-    to efficiently handle large datasets while providing smart resuming capabilities.
+    to efficiently handle large datasets while providing smart resuming capabilities
+    and interleaved processing.
     """
     
     def __init__(self, config_path: str = "src/config.yaml"):
@@ -44,18 +47,22 @@ class IntegratedDataPipeline:
         self.config_manager = ConfigManager(config_path=config_path)
         self.config = self.config_manager.get_full_config()
         self.downloader = BinanceFuturesDownloader(self.config_manager)
-        self.preprocessor = Preprocessor(self.config_manager)
+        self.preprocessor = Preprocessor(self.config)
         
         # Pipeline configuration
         self.bucket_name = os.getenv('GCS_BUCKET_NAME')
-        self.processed_sequences_path = "data/processed_sequences"
+        self.processed_chunks_path = "data/processed_chunks"  # Nueva ruta para chunks intercalados
+        self.raw_chunks_path = "data/raw_chunks"  # Ruta para chunks de datos crudos
+        self.processed_sequences_path = self.config.get('data_paths', {}).get('gcs_processed_sequences', 'data/processed_sequences')
         
-        # Chunk configuration - quarterly chunks for efficient memory management
-        self.chunk_duration_months = 3  # Quarterly chunks
+        # Chunk configuration from config
+        preprocessing_config = self.config_manager.get_preprocessing_config()
+        self.chunk_duration_months = preprocessing_config.get('chunk_duration_months', 1)
+        self.chunk_format = preprocessing_config.get('chunk_format', 'YYYY-MM')
+        self.interleaved_config = preprocessing_config.get('interleaved_processing', {})
         
         # Data parameters from config
         data_acq_config = self.config_manager.get_data_acquisition_defaults()
-        preprocessing_config = self.config_manager.get_preprocessing_config()
         
         self.symbol = data_acq_config['symbol']
         self.interval = data_acq_config['interval']
@@ -63,7 +70,9 @@ class IntegratedDataPipeline:
         
         logger.info(f"Initialized IntegratedDataPipeline for {self.symbol} {self.interval}")
         logger.info(f"Chunk duration: {self.chunk_duration_months} months")
+        logger.info(f"Chunk format: {self.chunk_format}")
         logger.info(f"Sequence length: {self.sequence_length}")
+        logger.info(f"Interleaved processing: {self.interleaved_config.get('enabled', False)}")
     
     def generate_chunk_periods(
         self, 
@@ -107,21 +116,90 @@ class IntegratedDataPipeline:
         
         return chunks
     
-    def get_chunk_filename(self, start_date: datetime, end_date: datetime) -> str:
+    def generate_chunk_periods_with_format(
+        self, 
+        start_date: str, 
+        end_date: str
+    ) -> List[Tuple[datetime, datetime, str]]:
+        """
+        Generate chunk periods with standardized format between start and end dates.
+        
+        Args:
+            start_date: Start date in YYYY-MM-DD format
+            end_date: End date in YYYY-MM-DD format
+            
+        Returns:
+            List of (chunk_start, chunk_end, period_string) tuples
+        """
+        start_dt = datetime.strptime(start_date, "%Y-%m-%d")
+        end_dt = datetime.strptime(end_date, "%Y-%m-%d")
+        
+        chunks = []
+        current_start = start_dt
+        
+        while current_start < end_dt:
+            # Calculate chunk end based on duration
+            if self.chunk_duration_months == 3:  # Quarterly
+                # Generate quarters: Q1, Q2, Q3, Q4
+                quarter = ((current_start.month - 1) // 3) + 1
+                period_string = f"{current_start.year}-Q{quarter}"
+                
+                # Calculate quarter end
+                if quarter == 4:
+                    chunk_end = datetime(current_start.year + 1, 1, 1)
+                else:
+                    chunk_end = datetime(current_start.year, quarter * 3 + 1, 1)
+                    
+            else:  # Monthly
+                period_string = current_start.strftime("%Y-%m")
+                
+                # Calculate month end
+                if current_start.month == 12:
+                    chunk_end = datetime(current_start.year + 1, 1, 1)
+                else:
+                    chunk_end = datetime(current_start.year, current_start.month + 1, 1)
+            
+            # Don't exceed the overall end date
+            chunk_end = min(chunk_end, end_dt)
+            
+            chunks.append((current_start, chunk_end, period_string))
+            current_start = chunk_end
+        
+        return chunks
+
+    def get_chunk_filename(self, period_string: str, is_processed: bool = True) -> str:
         """
         Generate standardized filename for a data chunk.
         
         Args:
-            start_date: Chunk start datetime
-            end_date: Chunk end datetime
+            period_string: Period in format like "2024-01" or "2024-Q1"
+            is_processed: True for processed chunks, False for raw chunks
             
         Returns:
             Standardized chunk filename
         """
-        start_str = start_date.strftime("%Y%m%d")
-        end_str = end_date.strftime("%Y%m%d")
-        return f"{self.symbol}_{self.interval}_L{self.sequence_length}_sequences_{start_str}_{end_str}.npz"
-    
+        if is_processed:
+            return f"{self.symbol}_{self.interval}_L{self.sequence_length}_processed_{period_string}.npz"
+        else:
+            return f"{self.symbol}_{self.interval}_raw_{period_string}.csv"
+
+    def get_latest_chunk_period(self, chunk_periods: List[Tuple[datetime, datetime, str]]) -> Optional[str]:
+        """
+        Identify the latest (most recent) chunk period.
+        
+        Args:
+            chunk_periods: List of chunk periods
+            
+        Returns:
+            Period string of the latest chunk or None if no chunks
+        """
+        if not chunk_periods:
+            return None
+            
+        # Find the chunk with the latest end date
+        latest_chunk = max(chunk_periods, key=lambda x: x[1])  # x[1] is chunk_end
+        return latest_chunk[2]  # x[2] is period_string
+
     def check_existing_chunks(
         self, 
         chunk_periods: List[Tuple[datetime, datetime]]
@@ -151,6 +229,47 @@ class IntegratedDataPipeline:
         
         return missing_chunks, existing_files
     
+    def check_existing_chunks_interleaved(
+        self, 
+        chunk_periods: List[Tuple[datetime, datetime, str]]
+    ) -> Tuple[List[Tuple[datetime, datetime, str]], List[str], str]:
+        """
+        Check which chunks already exist and identify missing ones with special handling
+        for the latest chunk which should always be reprocessed.
+        
+        Args:
+            chunk_periods: List of (start_date, end_date, period_string) tuples
+            
+        Returns:
+            Tuple of (missing_chunks, existing_chunk_files, latest_period)
+        """
+        missing_chunks = []
+        existing_files = []
+        latest_period = self.get_latest_chunk_period(chunk_periods)
+        force_reprocess_latest = self.interleaved_config.get('force_reprocess_latest_chunk', True)
+        
+        for start_date, end_date, period_string in chunk_periods:
+            chunk_filename = self.get_chunk_filename(period_string, is_processed=True)
+            chunk_gcs_path = f"{self.processed_chunks_path}/{chunk_filename}"
+            
+            # Check if chunk exists in GCS
+            chunk_exists = file_exists_in_gcs(self.bucket_name, chunk_gcs_path)
+            
+            # Always reprocess the latest chunk if configured to do so
+            if period_string == latest_period and force_reprocess_latest:
+                missing_chunks.append((start_date, end_date, period_string))
+                logger.info(f"Latest chunk {period_string} will be reprocessed (force_reprocess_latest=True)")
+                if chunk_exists:
+                    existing_files.append(chunk_gcs_path)  # Still track it as existing for info
+            elif chunk_exists:
+                existing_files.append(chunk_gcs_path)
+                logger.info(f"Found existing chunk: {period_string}")
+            else:
+                missing_chunks.append((start_date, end_date, period_string))
+                logger.info(f"Missing chunk: {period_string}")
+        
+        return missing_chunks, existing_files, latest_period
+    
     async def download_chunk_data(
         self, 
         start_date: datetime, 
@@ -172,11 +291,11 @@ class IntegratedDataPipeline:
         end_str = end_date.strftime("%Y-%m-%d")
         
         # Download data for this chunk
-        raw_data = await self.downloader.download_historical_data(
+        raw_data = await self.downloader.download_chunk_data_async(
             symbol=self.symbol,
             interval=self.interval,
-            start_date=start_str,
-            end_date=end_str
+            start_date=start_date,
+            end_date=end_date
         )
         
         logger.info(f"Downloaded {len(raw_data)} candles for chunk {start_date.date()} to {end_date.date()}")
@@ -252,9 +371,9 @@ class IntegratedDataPipeline:
         
         # Upload to GCS
         upload_to_gcs(
+            local_file_path=local_temp_path,
             bucket_name=self.bucket_name,
-            source_file_name=local_temp_path,
-            destination_blob_name=gcs_path
+            blob_path=gcs_path
         )
         
         # Clean up local temp file
@@ -395,6 +514,12 @@ class IntegratedDataPipeline:
         logger.info(f"Newly processed: {len(newly_processed)}")
         logger.info(f"Total sequences: {total_sequences}")
         
+        # Close async client to prevent warnings
+        try:
+            await self.downloader.close_async_client()
+        except Exception as e:
+            logger.debug(f"Note: Could not close async client: {e}")
+        
         return pipeline_results
     
     def list_available_chunks(self) -> List[str]:
@@ -445,6 +570,191 @@ class IntegratedDataPipeline:
                 for start, end in missing_chunks
             ]
         }
+    
+    async def download_and_preprocess_chunk_interleaved(
+        self, 
+        start_date: datetime, 
+        end_date: datetime, 
+        period_string: str
+    ) -> Optional[str]:
+        """
+        Download and immediately preprocess a single chunk in an interleaved manner.
+        
+        Args:
+            start_date: Chunk start datetime
+            end_date: Chunk end datetime
+            period_string: Period identifier (e.g., "2024-01", "2024-Q1")
+            
+        Returns:
+            GCS path of saved processed chunk or None if failed
+        """
+        try:
+            logger.info(f"🔄 Processing chunk {period_string} ({start_date.date()} to {end_date.date()})")
+            
+            # Step 1: Download raw data for this chunk
+            logger.info(f"📥 Downloading raw data for chunk {period_string}")
+            raw_data = await self.downloader.download_chunk_data_async(
+                symbol=self.symbol,
+                interval=self.interval,
+                start_date=start_date,
+                end_date=end_date
+            )
+            
+            if raw_data.empty:
+                logger.warning(f"No data downloaded for chunk {period_string}")
+                return None
+            
+            logger.info(f"Downloaded {len(raw_data)} candles for chunk {period_string}")
+            
+            # Step 2: Immediately preprocess the downloaded data using new chunk method
+            logger.info(f"⚙️ Preprocessing chunk {period_string}")
+            success = self.preprocessor.process_chunk_data(raw_data, period_string, self.symbol)
+            
+            if not success:
+                logger.warning(f"Chunk preprocessing failed for {period_string}")
+                return None
+                
+            logger.info(f"Chunk {period_string} preprocessed successfully")
+            
+            # Step 3: Determine GCS path for the saved chunk
+            chunk_filename = self.get_chunk_filename(period_string, is_processed=True)
+            gcs_path = f"{self.processed_chunks_path}/{chunk_filename}"
+            logger.info(f"💾 Chunk {period_string} saved to {gcs_path}")
+            
+            logger.info(f"✅ Chunk {period_string} processed and saved successfully")
+            return gcs_path
+            
+        except Exception as e:
+            logger.error(f"❌ Error processing chunk {period_string}: {e}", exc_info=True)
+            return None
+
+    def save_processed_chunk(
+        self, 
+        sequences: np.ndarray, 
+        period_string: str
+    ) -> str:
+        """
+        Save processed sequences for a chunk to GCS.
+        
+        Args:
+            sequences: Processed sequences array
+            period_string: Period identifier (e.g., "2024-01")
+            
+        Returns:
+            GCS path where sequences were saved
+        """
+        chunk_filename = self.get_chunk_filename(period_string, is_processed=True)
+        local_temp_path = f"/tmp/{chunk_filename}"
+        gcs_path = f"{self.processed_chunks_path}/{chunk_filename}"
+        
+        # Save sequences locally first
+        np.savez_compressed(local_temp_path, sequences=sequences)
+        
+        # Upload to GCS
+        try:
+            upload_to_gcs(
+                bucket_name=self.bucket_name,
+                source_file_path=local_temp_path,
+                destination_blob_name=gcs_path
+            )
+            
+            # Clean up local file
+            os.remove(local_temp_path)
+            
+            logger.info(f"Processed chunk saved to GCS: {gcs_path}")
+            return gcs_path
+            
+        except Exception as e:
+            logger.error(f"Error saving processed chunk to GCS: {e}")
+            raise
+
+    async def run_interleaved_pipeline(
+        self, 
+        start_date: str, 
+        end_date: str, 
+        force_reprocess: bool = False
+    ) -> Dict[str, Any]:
+        """
+        Run the complete interleaved data pipeline.
+        
+        Args:
+            start_date: Start date in YYYY-MM-DD format
+            end_date: End date in YYYY-MM-DD format
+            force_reprocess: Force reprocessing of all chunks
+            
+        Returns:
+            Dictionary with pipeline execution results
+        """
+        logger.info(f"🚀 Starting interleaved data pipeline from {start_date} to {end_date}")
+        
+        # Generate chunk periods
+        chunk_periods = self.generate_chunk_periods_with_format(start_date, end_date)
+        logger.info(f"Generated {len(chunk_periods)} chunks for processing")
+        
+        # Check existing chunks
+        if force_reprocess:
+            missing_chunks = chunk_periods
+            existing_files = []
+            latest_period = self.get_latest_chunk_period(chunk_periods)
+            logger.info("Force reprocess enabled - will process all chunks")
+        else:
+            missing_chunks, existing_files, latest_period = self.check_existing_chunks_interleaved(chunk_periods)
+        
+        logger.info(f"Found {len(existing_files)} existing chunks, {len(missing_chunks)} to process")
+        logger.info(f"Latest chunk period: {latest_period}")
+        
+        # Process missing chunks with controlled concurrency
+        max_concurrent = self.interleaved_config.get('max_concurrent_downloads', 2)
+        semaphore = asyncio.Semaphore(max_concurrent)
+        
+        async def process_chunk_with_semaphore(chunk_info):
+            async with semaphore:
+                start_dt, end_dt, period_str = chunk_info
+                return await self.download_and_preprocess_chunk_interleaved(start_dt, end_dt, period_str)
+        
+        # Execute processing
+        processed_chunks = []
+        failed_chunks = []
+        
+        if missing_chunks:
+            logger.info(f"Processing {len(missing_chunks)} chunks with max {max_concurrent} concurrent downloads")
+            
+            tasks = [process_chunk_with_semaphore(chunk) for chunk in missing_chunks]
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            
+            for i, result in enumerate(results):
+                chunk_period = missing_chunks[i][2]
+                if isinstance(result, Exception):
+                    logger.error(f"Failed to process chunk {chunk_period}: {result}")
+                    failed_chunks.append(chunk_period)
+                elif result:
+                    processed_chunks.append(result)
+                    logger.info(f"Successfully processed chunk {chunk_period}")
+                else:
+                    failed_chunks.append(chunk_period)
+        else:
+            logger.info("No chunks need processing")
+        
+        # Close async client
+        await self.downloader.close_async_client()
+        
+        # Prepare results
+        results = {
+            'total_chunks': len(chunk_periods),
+            'existing_chunks': len(existing_files),
+            'processed_chunks': len(processed_chunks),
+            'failed_chunks': len(failed_chunks),
+            'processed_chunk_paths': processed_chunks,
+            'failed_chunk_periods': failed_chunks,
+            'latest_period': latest_period,
+            'force_reprocessed_latest': force_reprocess or (
+                latest_period in [period for _, _, period in missing_chunks] and 
+                self.interleaved_config.get('force_reprocess_latest_chunk', True)
+            )
+        }
+        
+        logger.info(f"🎯 Pipeline completed: {results['processed_chunks']} processed, {results['failed_chunks']} failed")
+        return results
 
 
 # CLI interface for running the pipeline
