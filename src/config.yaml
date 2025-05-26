@@ -5,11 +5,7 @@
 # =====================================================================
 data_paths:
   # Rutas para Google Cloud Storage (obligatorias)
-  gcs_raw: "raw"  # Legacy - kept for backward compatibility
-  gcs_processed: "processed"  # Legacy - kept for backward compatibility
   gcs_models: "models"  # Directorio para guardar modelos en GCS
-  
-  # New integrated data pipeline paths
   gcs_processed_sequences: "data/processed_sequences"  # Chunked processed sequences
   gcs_best_model: "models/best_sac_model.zip"  # Single best model path
 

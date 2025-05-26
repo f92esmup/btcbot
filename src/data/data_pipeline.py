@@ -23,7 +23,7 @@ import os
 from src.data.binance_futures_downloader import BinanceFuturesDownloader
 from src.data.preprocessor import Preprocessor
 from src.utils.gcs_utils import upload_to_gcs, download_from_gcs, file_exists_in_gcs, list_files_in_gcs
-from src.utils.config_loader import load_config
+from src.utils.config import ConfigManager
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +41,7 @@ class IntegratedDataPipeline:
         Args:
             config_path: Path to the configuration file
         """
-        self.config = load_config(config_path)
+        self.config = ConfigManager.load_config(config_path)
         self.downloader = BinanceFuturesDownloader(self.config)
         self.preprocessor = Preprocessor(self.config)
         

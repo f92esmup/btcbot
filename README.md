@@ -260,6 +260,138 @@ kubectl edit configmap btcbot-env-vars -n btcbot
    echo -n "tu-api-secret" | gcloud secrets create BINANCE_API_SECRET_FUTURES --data-file=-
    ```
 
+## 🚀 Ejecución del Entrenamiento y Modo Live
+
+### 📋 Requisitos Previos
+
+Antes de ejecutar el entrenamiento o modo live, asegúrate de tener configurado:
+
+1. **Variables de entorno** (`.env` file) con los valores correctos
+2. **Google Cloud** configurado y autenticado
+3. **Credenciales de Binance** almacenadas en Secret Manager
+4. **Datos históricos** disponibles (descargados previamente)
+
+### 🎯 Pipeline de Datos Integrado (Recomendado)
+
+El sistema incluye un **pipeline de datos integrado** que maneja automáticamente la descarga y preprocesamiento en chunks para datasets grandes:
+
+```bash
+# Ejecutar pipeline completo para un rango de fechas
+python scripts/run_data_pipeline.py --start-date 2020-01-01 --end-date 2023-12-31
+
+# Ver estado del pipeline sin procesar
+python scripts/run_data_pipeline.py --status --start-date 2020-01-01
+
+# Listar todos los chunks disponibles
+python scripts/run_data_pipeline.py --list-chunks
+
+# Forzar reprocesamiento de todos los chunks
+python scripts/run_data_pipeline.py --start-date 2020-01-01 --force-reprocess
+```
+
+**Características del pipeline integrado**:
+- ✅ **Chunking inteligente**: Procesa datos en chunks trimestrales para manejar datasets grandes
+- ✅ **Resuming automático**: Solo procesa chunks faltantes
+- ✅ **Almacenamiento en GCS**: Guarda secuencias procesadas listas para entrenamiento
+
+### 🧠 Entrenamiento del Modelo
+
+#### Opción 1: Entrenamiento con Mejor Modelo (Recomendado)
+
+Utiliza la estrategia de "mejor modelo" que carga automáticamente el modelo existente si está disponible:
+
+```bash
+# Entrenamiento rápido (prueba)
+python scripts/train_with_best_model.py --steps 10000
+
+# Entrenamiento completo
+python scripts/train_with_best_model.py --steps 1000000
+
+# Entrenamiento con configuración personalizada
+python scripts/train_with_best_model.py --steps 500000 --config src/config.yaml
+```
+
+**Ventajas**:
+- 🔄 **Continuación automática**: Carga el mejor modelo existente si está disponible
+- 📊 **Evaluación periódica**: Actualiza automáticamente el "mejor modelo" durante entrenamiento
+- 💾 **Gestión simplificada**: Solo mantiene un modelo "best_sac_model.zip" en GCS
+
+#### Opción 2: Entrenamiento Tradicional
+
+```bash
+# Entrenamiento desde cero
+python scripts/train_rl_agent.py --config src/config.yaml --timesteps 1000000
+
+# Entrenamiento con evaluación
+python scripts/train_rl_agent.py --config src/config.yaml --timesteps 500000 --eval-freq 10000
+```
+
+### 📈 Trading en Vivo
+
+#### Configuración Previa
+
+1. **Configurar modo de trading** en `.env`:
+   ```bash
+   # Para testnet (seguro para pruebas)
+   LIVE_TRADING_MODE="TESTNET"
+   
+   # Para trading real (¡PRECAUCIÓN!)
+   LIVE_TRADING_MODE="REAL"
+   ```
+
+2. **Verificar modelo disponible** en `src/config.yaml`:
+   ```yaml
+   agent:
+     best_model_path: "models/best_sac_model.zip"  # Modelo cargado automáticamente
+     # O especificar un modelo específico:
+     # live_model_path: "models/sac_transformer_trading_agent_final_1000000_steps.zip"
+   ```
+
+#### Ejecución del Bot de Trading
+
+```bash
+# Ejecutar en modo testnet (recomendado para pruebas)
+python scripts/run_live_trader.py --config_path src/config.yaml
+
+# El bot mostrará información como:
+# ✓ Conectado a Binance (TESTNET/REAL)
+# ✓ Modelo cargado: best_sac_model.zip
+# ✓ WebSocket conectado, esperando nuevas velas...
+# 📊 Nueva vela recibida: procesando...
+# 🤖 Decisión del modelo: HOLD/BUY/SELL
+# 📋 Orden ejecutada: [detalles]
+```
+
+#### Monitoreo en Tiempo Real
+
+El bot proporciona logging detallado en:
+- **Consola**: Información en tiempo real de decisiones y órdenes
+- **Archivos locales**: Logs detallados en `logs/`
+- **BigQuery**: Registros estructurados para análisis posterior
+- **GCS**: Backups de logs en formato CSV
+
+### 🔧 Comandos de Gestión
+
+```bash
+# Evaluar rendimiento de un modelo
+python scripts/evaluate_rl_agent.py --config src/config.yaml --episodes 50
+
+# Probar conexión con Binance API
+python scripts/test_binance_api.py
+
+# Verificar configuración consolidada
+python test_config_consolidation.py
+```
+
+### ⚠️ Recomendaciones de Seguridad
+
+1. **Siempre probar en TESTNET** antes de usar modo REAL
+2. **Verificar whitelist de IP** en Binance (IP: `34.175.215.35` para GKE)
+3. **Configurar límites de trading** apropiados en tu cuenta Binance
+4. **Monitorear logs activamente** durante las primeras sesiones
+5. **Tener un plan de contingencia** para parar el bot manualmente si es necesario
+
+
 ## Flujo de Trabajo
 
 ### 🔄 Pipeline Automatizado en GKE

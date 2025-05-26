@@ -187,6 +187,35 @@ class ConfigManager:
         """Obtiene la configuración completa"""
         return self.config
 
+    @staticmethod
+    def load_config(config_path: str) -> Dict[str, Any]:
+        """
+        Load configuration from a YAML file (static method for simple use cases).
+        
+        This method provides the same functionality as the deprecated config_loader.load_config
+        for backward compatibility and simple use cases where you don't need the full ConfigManager.
+        
+        Args:
+            config_path: Path to the YAML configuration file
+            
+        Returns:
+            Dictionary containing the parsed configuration
+        """
+        try:
+            with open(config_path, 'r') as f:
+                config = yaml.safe_load(f)
+            logger.info(f"Configuration loaded successfully from {config_path}")
+            return config
+        except FileNotFoundError:
+            logger.error(f"Configuration file not found: {config_path}")
+            raise FileNotFoundError(f"Configuration file not found: {config_path}")
+        except yaml.YAMLError as e:
+            logger.error(f"Error parsing YAML configuration: {e}")
+            raise yaml.YAMLError(f"Error parsing YAML configuration: {e}")
+        except Exception as e:
+            logger.error(f"Unexpected error loading configuration: {e}")
+            raise RuntimeError(f"Unexpected error loading configuration: {e}")
+
 
 if __name__ == '__main__': # Para pruebas rápidas
     manager = ConfigManager(config_path='../../src/config.yaml', env_path='../../.env') # Ajusta paths si ejecutas directo
