@@ -22,6 +22,7 @@ from stable_baselines3.common.logger import configure
 
 # Importaciones locales
 from src.agent.custom_transformer_extractor import CustomTransformerFeatureExtractor
+from src.agent.best_model_strategy import BestModelOnlyCallback, load_best_model
 from src.environments.trading_env import TradingEnvironment
 from src.utils.config import ConfigManager
 from src.utils.gcs_utils import upload_model_to_gcs, download_model_from_gcs
@@ -151,11 +152,8 @@ class RLAgentManager:
         # Si se debe cargar un modelo existente
         if load_model:
             if model_path is None:
-                # Si no se especifica ruta, intentar usar la configurada
-                model_path = self.config.get("model_path_to_load")
-                
-            if model_path is None:
-                raise ValueError("Se solicitó cargar un modelo pero no se especificó la ruta")
+                raise ValueError("Se solicitó cargar un modelo pero no se especificó la ruta. "
+                               "Proporciona explícitamente model_path cuando load_model=True.")
                 
             logger.info(f"Cargando modelo desde GCS: {model_path}")
             self.model = self.load_model(model_path)
@@ -220,103 +218,129 @@ class RLAgentManager:
             
         # Inicializar lista de callbacks
         all_callbacks = []
-            
-        # Configurar callbacks por defecto
-        save_freq = self.config.get("save_frequency_steps", 50000)
         
-        # Crear un directorio temporal para guardar los checkpoints localmente antes de subirlos a GCS
-        temp_save_dir = tempfile.mkdtemp(prefix="model_checkpoints_")
-        logger.info(f"Creando directorio temporal para checkpoints: {temp_save_dir}")
+        # Check if using "Best Model Only" strategy
+        enable_best_model_only = self.config.get("enable_best_model_only", False)
         
-        # Callback personalizado para guardar checkpoints y subirlos a GCS
-        class GCSCheckpointCallback(CheckpointCallback):
-            def __init__(self, save_freq, save_path, gcs_bucket, gcs_path_prefix, *args, **kwargs):
-                super().__init__(save_freq=save_freq, save_path=save_path, *args, **kwargs)
-                self.gcs_bucket = gcs_bucket
-                self.gcs_path_prefix = gcs_path_prefix
+        if enable_best_model_only:
+            # Use the simplified "Best Model Only" strategy
+            best_model_path = self.config.get("best_model_path", "models/best_sac_model.zip")
+            eval_freq = self.config.get("best_model_evaluation_frequency", 10000)
             
-            def _on_step(self):
-                if self.n_calls % self.save_freq == 0:
-                    # Primero guardamos localmente (implementación de la clase padre)
-                    super()._on_step()
-                    
-                    # Luego subimos a GCS el archivo más reciente guardado
-                    if hasattr(self, "last_save_path") and self.last_save_path:
-                        # Construir la ruta en GCS
-                        checkpoint_filename = os.path.basename(self.last_save_path)
-                        gcs_model_path = f"{self.gcs_bucket}/{self.gcs_path_prefix}/{checkpoint_filename}"
+            logger.info(f"Using 'Best Model Only' strategy with path: {best_model_path}, eval frequency: {eval_freq}")
+            
+            # Create the best model callback
+            best_model_callback = BestModelOnlyCallback(
+                eval_env=self.eval_env,
+                bucket_name=self.gcs_bucket_name,
+                best_model_path=best_model_path,
+                eval_freq=eval_freq,
+                n_eval_episodes=5,
+                deterministic=True,
+                verbose=1
+            )
+            
+            all_callbacks.append(best_model_callback)
+            logger.info("Best Model Only callback added")
+            
+        else:
+            # Use the legacy multiple checkpoint strategy
+            save_freq = self.config.get("save_frequency_steps", 50000)
+            
+            # Crear un directorio temporal para guardar los checkpoints localmente antes de subirlos a GCS
+            temp_save_dir = tempfile.mkdtemp(prefix="model_checkpoints_")
+            logger.info(f"Using legacy checkpoint strategy with frequency: {save_freq}")
+            logger.info(f"Creando directorio temporal para checkpoints: {temp_save_dir}")
+            
+            # Callback personalizado para guardar checkpoints y subirlos a GCS
+            class GCSCheckpointCallback(CheckpointCallback):
+                def __init__(self, save_freq, save_path, gcs_bucket, gcs_path_prefix, *args, **kwargs):
+                    super().__init__(save_freq=save_freq, save_path=save_path, *args, **kwargs)
+                    self.gcs_bucket = gcs_bucket
+                    self.gcs_path_prefix = gcs_path_prefix
+                
+                def _on_step(self):
+                    if self.n_calls % self.save_freq == 0:
+                        # Primero guardamos localmente (implementación de la clase padre)
+                        super()._on_step()
                         
-                        # Subir a GCS
-                        try:
-                            gcs_url = upload_model_to_gcs(self.last_save_path, gcs_model_path)
-                            logger.info(f"Checkpoint subido a GCS: {gcs_url}")
-                        except Exception as e:
-                            logger.error(f"Error al subir checkpoint a GCS: {str(e)}")
-                
-                return True
-        
-        # Clase personalizada para guardar el mejor modelo en GCS
-        class GCSEvalCallback(EvalCallback):
-            def __init__(self, eval_env, gcs_bucket, gcs_path_prefix, *args, **kwargs):
-                # Crear un directorio temporal para guardar el mejor modelo
-                temp_best_dir = os.path.join(temp_save_dir, "best_model")
-                os.makedirs(temp_best_dir, exist_ok=True)
-                
-                super().__init__(eval_env, best_model_save_path=temp_best_dir, *args, **kwargs)
-                self.gcs_bucket = gcs_bucket
-                self.gcs_path_prefix = gcs_path_prefix
-            
-            def _on_step(self):
-                # Primero ejecutamos la lógica de evaluación de la clase padre
-                result = super()._on_step()
-                
-                # Si se guardó un nuevo mejor modelo, lo subimos a GCS
-                if self.best_model_save_path is not None and self.best_mean_reward > 0: # Check if best_model_save_path is actually set
-                    # Construir la ruta al mejor modelo (coincide con lo que hace la clase base)
-                    # Ensure that self.best_model_save_path is a directory, not a file path
-                    # The EvalCallback saves best_model.zip inside this directory.
-                    best_model_file_path = os.path.join(self.best_model_save_path, "best_model.zip")
+                        # Luego subimos a GCS el archivo más reciente guardado
+                        if hasattr(self, "last_save_path") and self.last_save_path:
+                            # Construir la ruta en GCS
+                            checkpoint_filename = os.path.basename(self.last_save_path)
+                            gcs_model_path = f"{self.gcs_bucket}/{self.gcs_path_prefix}/{checkpoint_filename}"
+                            
+                            # Subir a GCS
+                            try:
+                                gcs_url = upload_model_to_gcs(self.last_save_path, gcs_model_path)
+                                logger.info(f"Checkpoint subido a GCS: {gcs_url}")
+                            except Exception as e:
+                                logger.error(f"Error al subir checkpoint a GCS: {str(e)}")
                     
-                    # Verificar si el archivo existe antes de intentar subirlo
-                    if os.path.exists(best_model_file_path):
-                        # Construir la ruta en GCS
-                        gcs_model_path = f"{self.gcs_bucket}/{self.gcs_path_prefix}/best_model/best_model.zip"
-                        
-                        # Subir a GCS
-                        try:
-                            gcs_url = upload_model_to_gcs(best_model_file_path, gcs_model_path)
-                            logger.info(f"Mejor modelo subido a GCS: {gcs_url}")
-                        except Exception as e:
-                            logger.error(f"Error al subir mejor modelo a GCS: {str(e)}")
+                    return True
+            
+            # Clase personalizada para guardar el mejor modelo en GCS
+            class GCSEvalCallback(EvalCallback):
+                def __init__(self, eval_env, gcs_bucket, gcs_path_prefix, *args, **kwargs):
+                    # Crear un directorio temporal para guardar el mejor modelo
+                    temp_best_dir = os.path.join(temp_save_dir, "best_model")
+                    os.makedirs(temp_best_dir, exist_ok=True)
+                    
+                    super().__init__(eval_env, best_model_save_path=temp_best_dir, *args, **kwargs)
+                    self.gcs_bucket = gcs_bucket
+                    self.gcs_path_prefix = gcs_path_prefix
                 
-                return result
-        
-        # Obtener prefijo de ruta para modelos en GCS
-        gcs_path_prefix = self.config.get("gcs_models_path_prefix", "models/sac_transformer_trading_agent")
-        
-        # Instanciar los callbacks personalizados y añadirlos a all_callbacks
-        checkpoint_callback = GCSCheckpointCallback(
-            save_freq=save_freq,
-            save_path=temp_save_dir,
-            name_prefix="checkpoint",
-            save_replay_buffer=True,
-            save_vecnormalize=True,
-            gcs_bucket=self.gcs_bucket_name,
-            gcs_path_prefix=gcs_path_prefix
-        )
-        all_callbacks.append(checkpoint_callback)
-        
-        # Callback para evaluación y guardado del mejor modelo
-        eval_callback = GCSEvalCallback(
-            self.eval_env,
-            log_path="./logs/eval/",
-            eval_freq=save_freq,
-            n_eval_episodes=10,
-            deterministic=True,
-            gcs_bucket=self.gcs_bucket_name,
-            gcs_path_prefix=gcs_path_prefix
-        )
-        all_callbacks.append(eval_callback)
+                def _on_step(self):
+                    # Primero ejecutamos la lógica de evaluación de la clase padre
+                    result = super()._on_step()
+                    
+                    # Si se guardó un nuevo mejor modelo, lo subimos a GCS
+                    if self.best_model_save_path is not None and self.best_mean_reward > 0: # Check if best_model_save_path is actually set
+                        # Construir la ruta al mejor modelo (coincide con lo que hace la clase base)
+                        # Ensure that self.best_model_save_path is a directory, not a file path
+                        # The EvalCallback saves best_model.zip inside this directory.
+                        best_model_file_path = os.path.join(self.best_model_save_path, "best_model.zip")
+                        
+                        # Verificar si el archivo existe antes de intentar subirlo
+                        if os.path.exists(best_model_file_path):
+                            # Construir la ruta en GCS
+                            gcs_model_path = f"{self.gcs_bucket}/{self.gcs_path_prefix}/best_model/best_model.zip"
+                            
+                            # Subir a GCS
+                            try:
+                                gcs_url = upload_model_to_gcs(best_model_file_path, gcs_model_path)
+                                logger.info(f"Mejor modelo subido a GCS: {gcs_url}")
+                            except Exception as e:
+                                logger.error(f"Error al subir mejor modelo a GCS: {str(e)}")
+                    
+                    return result
+            
+            # Obtener prefijo de ruta para modelos en GCS
+            gcs_path_prefix = self.config.get("gcs_models_path_prefix", "models/sac_transformer_trading_agent")
+            
+            # Instanciar los callbacks personalizados y añadirlos a all_callbacks
+            checkpoint_callback = GCSCheckpointCallback(
+                save_freq=save_freq,
+                save_path=temp_save_dir,
+                name_prefix="checkpoint",
+                save_replay_buffer=True,
+                save_vecnormalize=True,
+                gcs_bucket=self.gcs_bucket_name,
+                gcs_path_prefix=gcs_path_prefix
+            )
+            all_callbacks.append(checkpoint_callback)
+            
+            # Callback para evaluación y guardado del mejor modelo
+            eval_callback = GCSEvalCallback(
+                self.eval_env,
+                log_path="./logs/eval/",
+                eval_freq=save_freq,
+                n_eval_episodes=10,
+                deterministic=True,
+                gcs_bucket=self.gcs_bucket_name,
+                gcs_path_prefix=gcs_path_prefix
+            )
+            all_callbacks.append(eval_callback)
 
         # Añadir callbacks del usuario si se proporcionan
         if user_callbacks is not None and isinstance(user_callbacks, list):

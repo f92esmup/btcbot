@@ -9,9 +9,127 @@ import tempfile
 import logging
 import pandas as pd
 import io
-from typing import Dict, Any, List  # Added typing imports
+from typing import Dict, Any, List, Optional, Union  # Expanded typing imports
 
 logger = logging.getLogger("GCSUtils")
+
+def upload_to_gcs(local_file_path: str, bucket_name: str, blob_path: str) -> bool:
+    """
+    Sube un archivo a Google Cloud Storage.
+    
+    Args:
+        local_file_path: Ruta local al archivo a subir
+        bucket_name: Nombre del bucket de GCS
+        blob_path: Ruta al archivo dentro del bucket (sin el nombre del bucket)
+    
+    Returns:
+        True si la operación fue exitosa, False en caso contrario
+    """
+    try:
+        # Inicializar cliente de GCS
+        storage_client = storage.Client()
+        bucket = storage_client.bucket(bucket_name)
+        blob = bucket.blob(blob_path)
+        
+        # Subir el archivo
+        blob.upload_from_filename(local_file_path)
+        
+        # Construir URL de GCS para el log
+        gcs_url = f"gs://{bucket_name}/{blob_path}"
+        logger.info(f"Archivo subido exitosamente a: {gcs_url}")
+        
+        return True
+        
+    except Exception as e:
+        logger.error(f"Error al subir archivo a GCS: {str(e)}")
+        return False
+
+def download_from_gcs(bucket_name: str, blob_path: str, local_file_path: str) -> bool:
+    """
+    Descarga un archivo desde Google Cloud Storage.
+    
+    Args:
+        bucket_name: Nombre del bucket de GCS
+        blob_path: Ruta al archivo dentro del bucket
+        local_file_path: Ruta local donde guardar el archivo
+    
+    Returns:
+        True si la operación fue exitosa, False en caso contrario
+    """
+    try:
+        # Asegurar que el directorio local exista
+        os.makedirs(os.path.dirname(os.path.abspath(local_file_path)), exist_ok=True)
+        
+        # Inicializar cliente de GCS
+        storage_client = storage.Client()
+        bucket = storage_client.bucket(bucket_name)
+        blob = bucket.blob(blob_path)
+        
+        # Verificar si el archivo existe
+        if not blob.exists():
+            logger.warning(f"El archivo gs://{bucket_name}/{blob_path} no existe en GCS")
+            return False
+        
+        # Descargar el archivo
+        blob.download_to_filename(local_file_path)
+        logger.info(f"Archivo descargado exitosamente a: {local_file_path}")
+        
+        return True
+        
+    except Exception as e:
+        logger.error(f"Error al descargar archivo desde GCS: {str(e)}")
+        return False
+
+def file_exists_in_gcs(bucket_name: str, blob_path: str) -> bool:
+    """
+    Verifica si un archivo existe en Google Cloud Storage.
+    
+    Args:
+        bucket_name: Nombre del bucket de GCS
+        blob_path: Ruta al archivo dentro del bucket
+    
+    Returns:
+        True si el archivo existe, False en caso contrario
+    """
+    try:
+        # Inicializar cliente de GCS
+        storage_client = storage.Client()
+        bucket = storage_client.bucket(bucket_name)
+        blob = bucket.blob(blob_path)
+        
+        # Verificar si el archivo existe
+        return blob.exists()
+        
+    except Exception as e:
+        logger.error(f"Error al verificar existencia de archivo en GCS: {str(e)}")
+        return False
+
+def list_files_in_gcs(bucket_name: str, prefix: str = "") -> List[str]:
+    """
+    Lista archivos en un bucket de Google Cloud Storage con un prefijo opcional.
+    
+    Args:
+        bucket_name: Nombre del bucket de GCS
+        prefix: Prefijo para filtrar archivos (opcional)
+    
+    Returns:
+        Lista de rutas de archivos en el bucket que coinciden con el prefijo
+    """
+    try:
+        # Inicializar cliente de GCS
+        storage_client = storage.Client()
+        bucket = storage_client.bucket(bucket_name)
+        
+        # Listar blobs con el prefijo dado
+        blobs = bucket.list_blobs(prefix=prefix)
+        
+        # Extraer nombres de archivos
+        file_paths = [blob.name for blob in blobs]
+        return file_paths
+        
+    except Exception as e:
+        logger.error(f"Error al listar archivos en GCS: {str(e)}")
+        return []
 
 def upload_model_to_gcs(local_model_path: str, gcs_model_path: str) -> str:
     """

@@ -5,9 +5,12 @@
 # =====================================================================
 data_paths:
   # Rutas para Google Cloud Storage (obligatorias)
-  gcs_raw: "raw"
-  gcs_processed: "processed"
+  gcs_raw: "raw"  # Directorio para datos crudos
+  gcs_processed: "processed"  # Directorio para datos procesados (legacy)
   gcs_models: "models"  # Directorio para guardar modelos en GCS
+  gcs_processed_sequences: "data/processed_sequences"  # Chunked processed sequences
+  gcs_processed_chunks: "data/processed_chunks"  # Nuevos chunks procesados intercalados
+  gcs_best_model: "models/best_sac_model.zip"  # Single best model path
 
 # =====================================================================
 # Configuración de la API de Binance
@@ -25,7 +28,7 @@ binance_api:
 data_acquisition_defaults:
   symbol: "BTCUSDT"
   interval: "1m"
-  historical_start_date: "2020-01-01"
+  historical_start_date: "2020-01-01"  # Fecha de inicio para datos históricos completos
 
 # =====================================================================
 # Configuración de Preprocesamiento de Datos
@@ -40,6 +43,18 @@ preprocessing:
   # Optimizaciones de rendimiento y almacenamiento
   use_float32: true  # Usar float32 en lugar de float64 para reducir uso de memoria
   use_parquet_storage: true  # Guardar también en formato Parquet para mejor compresión y velocidad
+
+  # Integrated data pipeline configuration
+  chunk_duration_months: 1  # Process data in monthly chunks
+  chunk_format: "YYYY-MM"  # Formato de nombrado: YYYY-QX (trimestral), YYYY-MM (mensual), etc.
+  required_buffer_periods: 500  # Minimum periods needed for indicators and normalization
+  
+  # Configuración para descarga y procesamiento intercalado por chunks
+  interleaved_processing:
+    enabled: true  # Activar procesamiento intercalado
+    max_concurrent_downloads: 4  # Número máximo de descargas concurrentes
+    force_reprocess_latest_chunk: true  # Siempre reprocesar el chunk más reciente
+    chunk_overlap_hours: 24  # Horas de superposición entre chunks para continuidad
 
   # Parámetros para el procesamiento de OHLCV
   ohlcv_processing:
@@ -113,8 +128,9 @@ environment:
     max_steps_in_position: 288 # ej. L * 3 (para normalizar 'steps_in_current_position')
 
   # --- Carga de Datos de Mercado (del Módulo 2) ---
-  processed_data_directory: "processed"  # Directorio en GCS (sin barra final)
-  processed_data_file_identifier: "_L96_market_features.npz" # Parte del nombre del archivo
+  # Updated to use new integrated data pipeline
+  processed_sequences_directory: "data/processed_sequences"  # Directory in GCS for chunked sequences
+  processed_sequence_file_pattern: "*_L{sequence_length}_sequences_*.npz"  # Pattern to match sequence files
 
 # =====================================================================
 # Configuración del Agente RL
@@ -123,9 +139,9 @@ agent:
   # --- Configuración del Algoritmo SAC (para Stable Baselines3) ---
   algorithm: "SAC"
   learning_rate: 0.0003
-  buffer_size: 100000
+  buffer_size: 100000  # Buffer de experiencia más grande para producción
   learning_starts: 10000      # Pasos para llenar el buffer antes de entrenar
-  batch_size: 256
+  batch_size: 256             # Batch size más grande para mejor estabilidad
   tau: 0.005                  # Coeficiente de actualización suave para redes objetivo
   gamma: 0.99                 # Factor de descuento
   train_freq: 1               # Frecuencia de entrenamiento (en pasos de entorno, ej., (1, "step"))
@@ -153,11 +169,18 @@ agent:
       qf: [256, 256] # Capas ocultas para los críticos
 
   # --- Configuración de Entrenamiento ---
-  total_training_timesteps: 1000000
+  total_training_timesteps: 500000  # Timesteps completos para entrenamiento de producción
   log_interval_episodes: 10 # Loguear cada N episodios
-  gcs_models_path_prefix: "models/sac_transformer_trading_agent"  # Prefijo para guardado en GCS
-  live_model_path: "models/sac_transformer_trading_agent/sac_transformer_trading_agent_final_1000_steps.zip" # Path to the specific model for live trading
-  save_frequency_steps: 100000  # Guardar cada 100,000 steps para checkpoints regulares
+  
+  # Best model only strategy - simplified model management
+  best_model_path: "models/best_sac_model.zip"  # Single best model path in GCS
+  enable_best_model_only: true  # Use simplified "best model only" strategy
+  best_model_evaluation_frequency: 10000  # Evaluate and potentially update best model every N steps
+  
+  # Model storage configuration
+  gcs_models_path_prefix: "models/sac_transformer_trading_agent"  # Base path for all models in GCS
+  save_frequency_steps: 25000  # Save frequency for training checkpoints
+  
   use_gpu: true  # Activar para usar GPU (CUDA/MPS) si está disponible
 
   # --- Configuración adicional para el guardado de modelos ---
@@ -168,7 +191,7 @@ agent:
   # --- Configuración de Logging para BigQuery en Entrenamiento ---
   bigquery_logging:
     # Los datos se guardan localmente en CSV durante entrenamiento y se suben a BigQuery al finalizar
-    training_metrics_log_interval_steps: 100 # Intervalo de pasos para loguear métricas de entrenamiento (pérdidas, lr)
+    training_metrics_log_interval_steps: 1000 # Intervalo de pasos para loguear métricas de entrenamiento
 
 # =====================================================================
 # Configuración de Trading en Vivo

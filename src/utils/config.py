@@ -183,9 +183,66 @@ class ConfigManager:
         else:  # REAL
             return websocket_urls.get('real', 'wss://fstream.binance.com/ws')
 
+    def get_best_model_default_gcs_path(self) -> str:
+        """
+        Construye y devuelve la ruta GCS por defecto al mejor modelo.
+        
+        Esta función busca, en orden de prioridad:
+        1. La ruta explícita si está definida en best_model_path
+        2. El modelo final de entrenamiento (si se ha ejecutado el pipeline completo)
+        3. La ruta por convención en best_model/best_model.zip
+        
+        Returns:
+            Ruta completa al mejor modelo en GCS (sin incluir el nombre del bucket)
+        """
+        agent_config = self.get_agent_config()
+        
+        # Si hay una ruta explícita al mejor modelo en la configuración, usarla
+        if "best_model_path" in agent_config:
+            return agent_config["best_model_path"]
+            
+        # Si no, construir la ruta para buscar el modelo final del entrenamiento
+        gcs_path_prefix = agent_config.get("gcs_models_path_prefix", "models/sac_transformer_trading_agent")
+        
+        # 1. Intentar con el modelo final del entrenamiento más reciente
+        timesteps = agent_config.get("total_training_timesteps", 1000000)
+        final_model_path = f"{gcs_path_prefix}/sac_transformer_trading_agent_final_{timesteps}_steps.zip"
+        
+        # Devolver la ruta al modelo final
+        return final_model_path
+    
     def get_full_config(self) -> Dict[str, Any]:
         """Obtiene la configuración completa"""
         return self.config
+
+    @staticmethod
+    def load_config(config_path: str) -> Dict[str, Any]:
+        """
+        Load configuration from a YAML file (static method for simple use cases).
+        
+        This method provides the same functionality as the deprecated config_loader.load_config
+        for backward compatibility and simple use cases where you don't need the full ConfigManager.
+        
+        Args:
+            config_path: Path to the YAML configuration file
+            
+        Returns:
+            Dictionary containing the parsed configuration
+        """
+        try:
+            with open(config_path, 'r') as f:
+                config = yaml.safe_load(f)
+            logger.info(f"Configuration loaded successfully from {config_path}")
+            return config
+        except FileNotFoundError:
+            logger.error(f"Configuration file not found: {config_path}")
+            raise FileNotFoundError(f"Configuration file not found: {config_path}")
+        except yaml.YAMLError as e:
+            logger.error(f"Error parsing YAML configuration: {e}")
+            raise yaml.YAMLError(f"Error parsing YAML configuration: {e}")
+        except Exception as e:
+            logger.error(f"Unexpected error loading configuration: {e}")
+            raise RuntimeError(f"Unexpected error loading configuration: {e}")
 
 
 if __name__ == '__main__': # Para pruebas rápidas
@@ -205,3 +262,4 @@ if __name__ == '__main__': # Para pruebas rápidas
     print(f"Testing Config: {manager.get_testing_config()}")
     print(f"WebSocket URL (TESTNET): {manager.get_websocket_url('TESTNET')}")
     print(f"WebSocket URL (REAL): {manager.get_websocket_url('REAL')}")
+    print(f"Default GCS Path to Best Model: {manager.get_best_model_default_gcs_path()}")

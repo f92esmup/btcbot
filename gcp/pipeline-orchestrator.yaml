@@ -16,7 +16,7 @@ spec:
       containers:
       - name: btcbot-pipeline
         image: europe-southwest1-docker.pkg.dev/lofty-complex-460416-r6/lofty-complex-460416-r6-repo/btcbot-gpu:latest
-        command: ["python", "scripts/orchestrate_training.py", "--phase", "full"]
+        command: ["python", "scripts/orchestrate_training.py"]
         resources:
           # GKE Autopilot asigna recursos automáticamente basado en la solicitud
           requests:
