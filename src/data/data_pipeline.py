@@ -96,16 +96,19 @@ class IntegratedDataPipeline:
         current_start = start_dt
         
         while current_start < end_dt:
-            # Calculate chunk end (3 months later)
-            if current_start.month <= 9:
+            # Calculate chunk end based on chunk duration
+            target_month = current_start.month + self.chunk_duration_months
+            
+            # Handle month overflow properly
+            if target_month <= 12:
                 chunk_end = current_start.replace(
-                    month=current_start.month + self.chunk_duration_months
+                    month=target_month
                 )
             else:
                 # Handle year rollover
                 chunk_end = current_start.replace(
-                    year=current_start.year + 1,
-                    month=current_start.month + self.chunk_duration_months - 12
+                    year=current_start.year + ((target_month - 1) // 12),
+                    month=((target_month - 1) % 12) + 1
                 )
             
             # Don't exceed the overall end date
