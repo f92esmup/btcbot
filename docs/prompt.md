@@ -1,100 +1,104 @@
-Hola Copilot,
+Hola Gemini,
 
-Necesito tu ayuda activa para desplegar mi proyecto de bot de trading de Python (BTCBot) en Google Kubernetes Engine (GKE) Autopilot. La idea es que me propongas los comandos `gcloud` y `kubectl`. **Conceptualiza que los ejecutas usando tus herramientas de terminal integradas.** Después de cada comando "ejecutado", evaluaremos el resultado (si lo ejecutas tú y puedes ver el output, o si yo lo ejecuto y te confirmo el éxito o te proporciono mensajes de error). Basándote en este resultado, me guiarás con los siguientes pasos, me ayudarás a depurar o generarás los manifiestos YAML necesarios.
+Necesito tu ayuda activa para desplegar mi proyecto de bot de trading de Python (BTCBot) utilizando una nueva estrategia:
+* **Vertex AI Training en `europe-west4` (ej. Países Bajos)** para el pipeline de entrenamiento completo, aprovechando la mejor disponibilidad de GPUs.
+* **Cloud Run en `europe-southwest1` (Madrid)** para el bot de trading en vivo, buscando optimizar la latencia con la API de Binance.
 
-**Resumen del Proyecto:**
-* Es un bot de trading con un pipeline de datos (adquisición, preprocesamiento, entrenamiento) y un componente de trading en vivo 24/7.
-* Las imágenes Docker (`btcbot-cpu`, `btcbot-gpu`) ya están construidas y disponibles en Google Artifact Registry. Te proporcionaré las rutas completas de las imágenes cuando las necesites (ej: `europe-southwest1-docker.pkg.dev/YOUR_GCP_PROJECT_ID/YOUR_ARTIFACT_REGISTRY_REPO/btcbot-cpu:latest`).
-* El proyecto utiliza servicios de GCP: GCS, Secret Manager y BigQuery. La **región GCP principal para este despliegue es Madrid (`europe-southwest1`)**.
-* **NOTA**: La región de Madrid NO dispone de GPUs para GKE Autopilot, aunque la intención original era usar GPUs. Por tanto, debemos estar preparados para usar la imagen CPU con más recursos cuando sea necesario.
-* Los scripts principales se encuentran en el directorio `scripts/` (ej: `download_data.py`, `preprocess_data.py`, `train_rl_agent.py`, `run_live_trader.py`).
-* La configuración se gestiona a través de `src/config.yaml` y un archivo `.env`.
-* **IMPORTANTE**: El proyecto ahora usa un script orquestador único (`scripts/orchestrate_training.py`) que ejecuta toda la pipeline de entrenamiento en un solo job, idealmente con GPU pero compatible con CPU.
+La idea es que me propongas los comandos `gcloud`. **Conceptualiza que los ejecutas usando tus herramientas de terminal integradas.** Después de cada comando "ejecutado", evaluaremos el resultado (si lo ejecutas tú y puedes ver el output, o si yo lo ejecuto y te confirmo el éxito o te proporciono mensajes de error). Basándote en este resultado, me guiarás con los siguientes pasos o me ayudarás a depurar.
+
+**Resumen del Proyecto (Nueva Estrategia Multiregión):**
+* **Entrenamiento (`europe-west4`):** Un único script `scripts/orchestrate_training.py` ejecutará toda la pipeline (adquisición, preprocesamiento, entrenamiento del modelo y evaluación) como un **Custom Job en Vertex AI Training**.
+* **Trading en Vivo (`europe-southwest1`):** El script `scripts/run_live_trader.py` se desplegará como un servicio en **Cloud Run** para operar 24/7.
+* Las imágenes Docker (`btcbot-cpu`, `btcbot-gpu`) ya están construidas y disponibles en Google Artifact Registry (asumiremos que están en un repositorio en `europe-southwest1` pero accesibles desde `europe-west4`).
+* El proyecto utiliza servicios de GCP: GCS, Secret Manager y BigQuery.
+* La configuración se gestiona a través de `src/config.yaml` y un archivo `.env` para desarrollo local (en GCP se pasarán como variables de entorno o secretos).
 
 **Pasos de Despliegue (necesito que generes y "ejecutes" los comandos para esto):**
 
-1.  **Configuración de GCP y GKE:**
-    * Por favor, pregúntame por mi ID de Proyecto GCP (`YOUR_GCP_PROJECT_ID`), Nombre del Bucket GCS (`YOUR_GCS_BUCKET_NAME`), y el nombre del repositorio de Artifact Registry (`YOUR_ARTIFACT_REGISTRY_REPO`) si no puedes inferirlos de mis archivos de contexto (como `cloudbuild.yaml` o `README.md`). La región GCP que usaremos es `europe-southwest1` (Madrid).
-    * **Clúster GKE Autopilot:**
-        * Comando para verificar si mi clúster `btcbot-autopilot-cluster` (mencionado en `README.md`) existe y está configurado correctamente en `europe-southwest1`.
-        * Si no existe, comandos para crear un nuevo clúster GKE Autopilot en `europe-southwest1`.
+### 0. Configuración Inicial y Verificación de Prerrequisitos
+Antes de empezar, necesito que me confirmes o me ayudes a obtener la siguiente información:
 
-2.  **Workload Identity:**
-    * Comandos para crear una Cuenta de Servicio (SA) de GCP (ej: `btcbot-gke-sa`).
-    * Comandos para asignar los roles IAM necesarios a esta SA de GCP:
-        * Google Cloud Storage: `roles/storage.admin` y `roles/storage.objectAdmin` sobre el bucket específico (`gs://YOUR_GCS_BUCKET_NAME`). El rol admin es necesario para asegurar permisos completos de gestión del bucket.
-        * Secret Manager: `roles/secretmanager.secretAccessor` sobre los secretos específicos de Binance (ej: `BINANCE_API_KEY_FUTURES`, `TESTNET_BINANCE_API_KEY_FUTURES`, etc., que están definidos como nombres de secretos en mi archivo `.env` y accedidos por `ConfigManager`).
-        * BigQuery: `roles/bigquery.dataEditor` y `roles/bigquery.user` sobre el dataset de logs (el ID del dataset, ej: `BIGQUERY_LOG_DATASET_ID`, lo obtendremos de la configuración o variables de entorno).
-    * Comandos para crear una Cuenta de Servicio (KSA) de Kubernetes (ej: `btcbot-ksa`) en el namespace `btcbot` (crea el namespace si no existe).
-    * Comandos para vincular la KSA con la SA de GCP.
+* `YOUR_GCP_PROJECT_ID`: Tu ID de Proyecto GCP.
+* `YOUR_GCS_BUCKET_NAME`: El nombre de tu bucket de GCS. **Recomendación:** Para esta estrategia, este bucket debería estar idealmente ubicado en `europe-west4` (Países Bajos) para optimizar el acceso durante el entrenamiento.
+* `YOUR_ARTIFACT_REGISTRY_REPO`: El nombre de tu repositorio de Artifact Registry (ej: `btcbotrepo`). Podemos asumir que está en `europe-southwest1` (Madrid), pero las imágenes serán accesibles desde `europe-west4`.
+* `YOUR_BIGQUERY_DATASET_ID`: El ID de tu dataset en BigQuery para los logs (ej: `btcbot_logs`). Deberás decidir la ubicación de este dataset (ej. `europe-west4`, `europe-southwest1`, o multiregión `EU`).
+* `DOCKER_IMAGE_CPU`: Ruta completa a tu imagen Docker CPU en Artifact Registry (ej: `europe-southwest1-docker.pkg.dev/YOUR_GCP_PROJECT_ID/YOUR_ARTIFACT_REGISTRY_REPO/btcbot-cpu:latest`).
+* `DOCKER_IMAGE_GPU`: Ruta completa a tu imagen Docker GPU en Artifact Registry (ej: `europe-southwest1-docker.pkg.dev/YOUR_GCP_PROJECT_ID/YOUR_ARTIFACT_REGISTRY_REPO/btcbot-gpu:latest`).
 
-3.  **IP de Salida Persistente para el Bot en Vivo:**
-    * Comandos para configurar una dirección IP estática para el tráfico de salida de los pods del bot de trading en vivo en `europe-southwest1`. Esto es para la lista blanca de la API de Binance.
-    * Configurar Cloud NAT con un router (`btcbot-nat-router`) y un gateway NAT (`btcbot-nat`) que use una IP estática reservada (`btcbot-nat-ip`).
-    * Verificar que todos los pods del clúster utilizarán esta IP para el tráfico saliente.
+### 1. Cuenta de Servicio (Service Account) y Permisos IAM
+Crearemos una única Cuenta de Servicio (SA) de GCP que será utilizada tanto por Vertex AI Training (en `europe-west4`) como por Cloud Run (en `europe-southwest1`).
 
-4.  **Manifiestos de Kubernetes y Despliegue:**
-    Para cada uno de los siguientes, proporciónanos el manifiesto YAML. Lo guardaré en un archivo, y luego me indicarás el comando `kubectl apply -f <filename.yaml>`. Después de la "ejecución", confirmaremos el resultado.
+* **Comandos para crear una SA de GCP** (ej: `btcbot-compute-sa@${YOUR_GCP_PROJECT_ID}.iam.gserviceaccount.com`).
+* **Comandos para asignar los roles IAM necesarios a esta SA de GCP:**
+    * **Google Cloud Storage**: `roles/storage.objectAdmin` sobre el bucket específico (`gs://YOUR_GCS_BUCKET_NAME`).
+    * **Secret Manager**: `roles/secretmanager.secretAccessor` (especificando los secretos de Binance o acceso general según tu política de seguridad).
+    * **BigQuery**: `roles/bigquery.dataEditor` y `roles/bigquery.user` sobre el proyecto o el dataset específico (`YOUR_BIGQUERY_DATASET_ID`).
+    * **Vertex AI**: `roles/aiplatform.customCodeServiceAgent` y `roles/aiplatform.user`.
+    * **Cloud Run**: La SA que usará el servicio de Cloud Run necesita estos permisos. Adicionalmente, la identidad de servicio de Cloud Run podría necesitar `roles/cloudnat.user`.
+    * **Artifact Registry**: `roles/artifactregistry.reader`.
+    * **(Opcional) Service Account User**: `roles/iam.serviceAccountUser` si fuera necesario.
 
-    * **Namespace:** Un manifiesto para el namespace `btcbot` de Kubernetes si no se creó anteriormente.
-    * **Variables de Entorno y Secretos:**
-        * Mis aplicaciones leen variables de entorno para la configuración (`GCP_PROJECT_ID`, `GCS_BUCKET_NAME`, `BIGQUERY_LOG_DATASET_ID`, `LIVE_TRADING_MODE`, etc.). Mi `README.md` menciona un ConfigMap de Kubernetes `btcbot-env-vars` para variables no sensibles. Los secretos de Binance se acceden vía Secret Manager usando Workload Identity.
-    * **Job Orquestador de Pipeline (`pipeline-orchestrator.yaml`):**
-        * Ejecuta `python scripts/orchestrate_training.py --timesteps 100000` usando preferentemente la imagen `btcbot-gpu`.
-        * El job debería solicitar recursos de GPU (NVIDIA T4 o similar) para acelerar el entrenamiento.
-        * IMPORTANTE: En caso de que las GPUs no estén disponibles en la región seleccionada (como ocurre en `europe-southwest1`/Madrid), usar una versión alternativa del manifiesto (`pipeline-orchestrator-cpu.yaml`) con la imagen `btcbot-cpu` y recursos CPU adecuados (8-16 CPU, 16-32 GB RAM).
-        * Usa Workload Identity (la KSA `btcbot-ksa`).
-        * Los datos y modelos se almacenan en Google Cloud Storage (no se requiere almacenamiento persistente en Kubernetes).
-        * Ejecuta toda la pipeline: descarga → preprocesamiento → entrenamiento → evaluación en un solo job.
-    * **CronJob para Pipeline Programada (`pipeline-scheduler.yaml`):**
-        * Para ejecutar la pipeline semanalmente, crear un CronJob que lance el job orquestador.
-        * Programación: Semanal, cada sábado a las 00:00 UTC (`0 0 * * 6`).
-        * Utilizará el mismo comando `python scripts/orchestrate_training.py --timesteps 100000` que el job manual.
-        * Al igual que con el job, idealmente usar la imagen `btcbot-gpu` con GPUs, pero si no están disponibles en la región, usar la imagen `btcbot-cpu` con recursos suficientes.
-    * **Despliegue del Bot de Trading en Vivo (`live-trader-deployment.yaml`):**
-        * Ejecuta `python scripts/run_live_trader.py` (24/7) usando la imagen `btcbot-cpu`.
-        * Usa Workload Identity (`btcbot-ksa`).
-        * Enruta el tráfico de salida a través de la IP estática configurada en el paso 3.
-        * Incluir sondas de salud (liveness y readiness) verificando los archivos `/tmp/healthy` y `/tmp/ready`.
-        * Establecer la variable de entorno `LIVE_TRADING_MODE=true` para este despliegue.
+### 2. Vertex AI Custom Training Job para el Pipeline de Entrenamiento (en `europe-west4`)
+Este job ejecutará el script `scripts/orchestrate_training.py`.
 
-**Características del Nuevo Enfoque:**
-* **Orquestador Único**: Un solo job ejecuta toda la pipeline de entrenamiento, idealmente con GPU para acelerar el proceso, pero con fallback a CPU cuando sea necesario.
-* **Configuración Centralizada**: Toda la configuración (símbolos, timeframes, etc.) se gestiona a través de `config.yaml`.
-* **Almacenamiento en GCS**: Los datos y modelos se almacenan directamente en Google Cloud Storage, sin necesidad de almacenamiento persistente en Kubernetes.
-* **Parametrización**: El orquestador permite especificar el número de timesteps para el entrenamiento (ej: `--timesteps 100000`).
-* **Flexibilidad de Recursos**: Capacidad para adaptarse a la disponibilidad de hardware, priorizando GPU pero funcionando eficientemente con CPU si es necesario.
+* **Comando `gcloud ai custom-jobs create` para enviar el job de entrenamiento.**
+    * `display-name`: (ej: `btcbot-training-pipeline-ew4`).
+    * `region`: **`europe-west4`** (o la región de Países Bajos/Bélgica con GPUs).
+    * `worker-pool-spec`:
+        * `machine-type`: Un tipo de máquina compatible con GPU en `europe-west4` (ej: `a2-highgpu-1g` para A100, o `n1-standard-4` con T4 si A100 no es necesaria/disponible).
+        * `accelerator-type`: (ej: `NVIDIA_A100_40GB` o `NVIDIA_TESLA_T4`).
+        * `accelerator-count`: 1.
+        * `replica-count`: 1.
+        * `executor-image-uri` (o `container-image-uri`): Tu `DOCKER_IMAGE_GPU`.
+        * `args`: `["python", "scripts/orchestrate_training.py", "--timesteps", "100000"]`.
+    * `service-account`: El email de la SA creada en el paso 1.
+    * Variables de entorno para el job: `GCP_PROJECT_ID`, `GCS_BUCKET_NAME` (que idealmente está en `europe-west4`), `BIGQUERY_LOG_DATASET_ID`.
+
+### 3. Configuración de Red para IP de Salida Estática (para Cloud Run en `europe-southwest1`)
+Esto es crucial para que la API de Binance pueda añadir la IP del bot a su lista blanca.
+
+* **Comandos para crear un conector de Serverless VPC Access en `europe-southwest1`.**
+    * Necesitará una red VPC y una subred en `europe-southwest1`.
+* **Comandos para reservar una dirección IP estática** (ej: `btcbot-cloud-run-static-ip`) en `europe-southwest1`.
+* **Comandos para crear un Cloud Router** en `europe-southwest1` en la misma red que el conector VPC.
+* **Comandos para configurar Cloud NAT** usando el Cloud Router y la IP estática reservada, aplicado a la subred del conector VPC en `europe-southwest1`.
+
+### 4. Despliegue del Bot de Trading en Vivo en Cloud Run (en `europe-southwest1`)
+Desplegaremos el script `scripts/run_live_trader.py`.
+
+* **Comando `gcloud run deploy` para el servicio del bot en vivo** (ej: `btcbot-live-trader`).
+    * `image`: Tu `DOCKER_IMAGE_CPU`.
+    * `region`: **`europe-southwest1`** (Madrid).
+    * `service-account`: El email de la SA creada en el paso 1.
+    * `set-env-vars`:
+        * `GCP_PROJECT_ID=YOUR_GCP_PROJECT_ID`
+        * `GCS_BUCKET_NAME=YOUR_GCS_BUCKET_NAME` (accediendo al bucket que podría estar en `europe-west4`)
+        * `BIGQUERY_LOG_DATASET_ID=YOUR_BIGQUERY_DATASET_ID` (accediendo al dataset donde esté ubicado)
+        * `LIVE_TRADING_MODE=true`
+        * `PYTHONUNBUFFERED=1`.
+    * `set-secrets`: Para montar las claves API de Binance desde Secret Manager.
+    * `vpc-connector`: El nombre del conector Serverless VPC Access creado en `europe-southwest1`.
+    * `vpc-egress`: `all-traffic`.
+    * `cpu` y `memory`: (ej: 1 CPU, 2Gi memoria).
+    * `concurrency`: Probablemente bajo.
+    * `port`: A discutir cómo manejar los health checks de Cloud Run si `run_live_trader.py` no expone un puerto HTTP.
+
+### 5. Programación de Entrenamientos (Opcional)
+Si deseas reentrenar el modelo periódicamente:
+
+* Podemos usar **Cloud Scheduler** (configurado, por ejemplo, en `europe-west1`) para activar el Vertex AI Custom Training Job en `europe-west4`.
 
 **Flujo de Interacción:**
-1.  Creas un comando `gcloud`, `kubectl` o un manifiesto YAML.
-2.  Tú "ejecutas" el comando. Tu confirmas el resultado.
-3.  Basándote en el resultado, proporcionas el siguiente comando, una corrección o el siguiente manifiesto.
-4.  Continuamos este proceso hasta que todos los componentes estén desplegados.
+1.  Me propones un comando `gcloud`.
+2.  Yo conceptualizo su ejecución y te confirmo el resultado esperado o te pido aclaraciones. Si lo ejecuto realmente y hay errores, te los proporciono.
+3.  Basándote en el resultado, me proporcionas el siguiente comando o una corrección.
+4.  Continuamos este proceso.
 
-**Lecciones aprendidas del despliegue anterior:**
-1. La región `europe-southwest1` (Madrid) no tiene GPUs disponibles para GKE Autopilot. Por lo tanto, hay que tener preparada una versión alternativa con CPU y recursos adecuados.
-2. Preferir el despliegue con GPU si está disponible, pero tener siempre un plan alternativo con CPU.
-3. El parámetro para el orquestador debe ser `--timesteps 100000` en lugar de `--phase full`.
-4. Para Google Cloud Storage, se necesita tanto el rol `roles/storage.admin` como `roles/storage.objectAdmin`.
-5. Las sondas de salud son críticas para el despliegue del trader en vivo.
-6. El modo de trading en vivo debe activarse explícitamente con `LIVE_TRADING_MODE=true`.
-7. Para regiones sin GPU disponible, incrementar significativamente los recursos de CPU y memoria para compensar.
-8. **Problema con webhooks de admisión**: En GKE Autopilot pueden aparecer advertencias sobre webhooks de admisión sin endpoints disponibles, especialmente para el servicio Google Managed Prometheus (GMP). Esto puede afectar al rendimiento del plano de control de GKE. Si aparecen estos mensajes, verificar el estado de los servicios en el namespace `gke-gmp-system` y considerar deshabilitar el monitoreo de GMP si no es esencial para nuestra aplicación.
+**Lecciones Aprendidas y Consideraciones (Adaptadas a la Estrategia Multiregión):**
+1.  **Disponibilidad de GPU para Vertex AI Training en `europe-west4`**: Esta región suele tener mejor disponibilidad de GPUs (T4, A100) que Madrid.
+2.  **Ubicación del Bucket GCS**: Idealmente en la misma región que el entrenamiento (`europe-west4`) para minimizar latencia y costos de E/S de datos.
+3.  **Ubicación del Dataset BigQuery**: Considerar dónde se harán más escrituras/consultas (entrenamiento en `europe-west4` vs. bot en vivo en `europe-southwest1`) o usar multiregión `EU`.
+4.  **Parámetros del Orquestador**: El script `scripts/orchestrate_training.py --timesteps 100000`.
+5.  **Health Checks en Cloud Run**: Adaptar o encontrar una solución para `run_live_trader.py`.
 
-Comencemos con la configuración o verificación del clúster GKE Autopilot en `europe-southwest1` (Madrid). Por favor, solicita los parámetros que necesites (como `YOUR_GCP_PROJECT_ID`, etc.) si no los puedes inferir del contexto de mis archivos.
-
-**Nota sobre la monitorización GKE**: Durante el despliegue, verifica si hay alertas relacionadas con webhooks de admisión sin endpoints disponibles en el namespace `gke-gmp-system`. Si las hay, puedes:
-
-1. Verificar el estado de los pods en el namespace `gke-gmp-system`:
-   ```
-   kubectl get pods -n gke-gmp-system
-   ```
-
-2. Si los pods de `gmp-operator` están en estado no disponible y no necesitas monitoreo avanzado, considera deshabilitar Google Managed Prometheus:
-   ```
-   gcloud container clusters update btcbot-autopilot-cluster \
-     --location=europe-southwest1 \
-     --update-addons=GcpManagedPrometheus=DISABLED
-   ```
-
-3. Alternativamente, espera a que Google resuelva automáticamente el problema, ya que estos componentes son gestionados por Google Cloud.
+Comencemos con la **información inicial del paso 0** y luego procederemos con la **creación de la Cuenta de Servicio y la asignación de permisos IAM (Paso 1)**.

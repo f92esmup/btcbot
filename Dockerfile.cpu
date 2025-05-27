@@ -39,7 +39,7 @@ ENV PYTHONPATH=/app
 
 # Variables de entorno para Google Cloud (configurar al ejecutar el contenedor)
 ENV GCP_PROJECT_ID="btcbot-461022"
-ENV GCS_BUCKET_NAME="btcbotbucket"
+ENV GCS_BUCKET_NAME="btcbot-training-ew4"
 ENV GCP_REGION="europe-southwest1"
 ENV BIGQUERY_LOG_DATASET_ID="btcbot_logs"
 # Para la cuenta REAL de Binance Futures
