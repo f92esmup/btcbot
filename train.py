@@ -8,6 +8,7 @@ import sys
 import logging
 from datetime import datetime
 from src.data.Adquisicion import Adquisicion
+from src.data.indicadores import Indicadores
 
 
 def setup_logging():
@@ -109,9 +110,27 @@ def main():
         logger.info("Estadísticas básicas del DataFrame:")
         logger.info(f"\n{dataframe.describe()}")
         
-        # 2. TODO: Aquí se agregarán los indicadores técnicos
-        logger.info("=== FASE 2: Cálculo de Indicadores (Pendiente) ===")
-        logger.info("Esta fase se implementará más adelante...")
+        # 2. Cálculo de Indicadores Técnicos
+        logger.info("=== FASE 2: Cálculo de Indicadores Técnicos ===")
+        indicadores = Indicadores(dataframe)
+        
+        # Ejecutar proceso de cálculo de indicadores
+        dataframe_with_indicators = indicadores.main()
+        
+        logger.info(f"Indicadores calculados exitosamente:")
+        logger.info(f"  - Forma del DataFrame: {dataframe_with_indicators.shape}")
+        logger.info(f"  - Columnas totales: {len(dataframe_with_indicators.columns)}")
+        logger.info(f"  - Nuevas columnas de indicadores: {len(dataframe_with_indicators.columns) - len(dataframe.columns)}")
+        logger.info(f"  - Memoria utilizada: {dataframe_with_indicators.memory_usage(deep=True).sum() / 1024**2:.2f} MB")
+        
+        # Mostrar las nuevas columnas
+        original_columns = set(dataframe.columns)
+        new_columns = [col for col in dataframe_with_indicators.columns if col not in original_columns]
+        if new_columns:
+            logger.info(f"  - Indicadores añadidos: {new_columns}")
+        
+        # Actualizar referencia al dataframe
+        dataframe = dataframe_with_indicators
         
         # 3. TODO: Aquí se agregará el entrenamiento del modelo
         logger.info("=== FASE 3: Entrenamiento del Modelo (Pendiente) ===")

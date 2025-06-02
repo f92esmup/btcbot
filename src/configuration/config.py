@@ -169,6 +169,32 @@ class Config:
         """Dirección límite para interpolación."""
         return self._config['interpolation']['limit_direction']
     
+    # Propiedades para indicadores técnicos
+    @property
+    def indicators_config(self) -> Dict[str, Any]:
+        """Configuración completa de indicadores técnicos."""
+        return self._config.get('indicators', {})
+    
+    @property
+    def trend_indicators(self) -> Dict[str, Any]:
+        """Configuración de indicadores de tendencia."""
+        return self.indicators_config.get('trend', {})
+    
+    @property
+    def momentum_indicators(self) -> Dict[str, Any]:
+        """Configuración de indicadores de momento."""
+        return self.indicators_config.get('momentum', {})
+    
+    @property
+    def volatility_indicators(self) -> Dict[str, Any]:
+        """Configuración de indicadores de volatilidad."""
+        return self.indicators_config.get('volatility', {})
+    
+    @property
+    def volume_indicators(self) -> Dict[str, Any]:
+        """Configuración de indicadores de volumen."""
+        return self.indicators_config.get('volume', {})
+    
     # Métodos adicionales
     def refresh_api_keys(self):
         """Recarga las API keys desde Google Cloud Secret Manager."""

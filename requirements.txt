@@ -1,7 +1,8 @@
 # Dependencias para el bot de trading de Bitcoin
 pandas>=2.0.0
-numpy>=1.24.0
+numpy>=1.24.0,<2.0.0
 PyYAML>=6.0
 python-binance>=1.0.17
 pytz>=2023.3
 google-cloud-secret-manager>=2.16.0
+pandas-ta>=0.3.14b

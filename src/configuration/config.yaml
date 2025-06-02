@@ -41,3 +41,39 @@ timezone:
 interpolation:
   method: "linear"  # Método de interpolación para NaNs
   limit_direction: "both"  # Dirección para fill
+
+# Configuración de indicadores técnicos
+indicators:
+  # Indicadores de tendencia
+  trend:
+    ema_20:
+      period: 20
+      enabled: true
+    ema_50:
+      period: 50
+      enabled: true
+    adx:
+      period: 14
+      enabled: true
+  
+  # Indicadores de momento
+  momentum:
+    rsi:
+      period: 14
+      enabled: true
+    stoch:
+      k_period: 14
+      d_period: 3
+      smooth_k: 3
+      enabled: true
+  
+  # Indicadores de volatilidad
+  volatility:
+    atr:
+      period: 14
+      enabled: true
+  
+  # Indicadores de volumen
+  volume:
+    obv:
+      enabled: true
