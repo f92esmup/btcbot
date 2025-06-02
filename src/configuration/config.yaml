@@ -1,0 +1,43 @@
+# Configuración para el bot de trading de Bitcoin
+# Parámetros de la API de Binance
+api:
+  call_limit: 1000  # Número máximo de velas por llamada
+  max_retries: 3    # Número máximo de reintentos en caso de error
+  retry_delay: 1    # Segundos entre reintentos
+  timeout: 10       # Timeout para las peticiones en segundos
+
+# Configuración de trading
+trading:
+  testnet: true  # Si está en modo testnet (true) o producción (false)
+
+# Configuración de Google Cloud
+gcp:
+  project_id: "btcbot-461022"  # Tu project ID de Google Cloud
+
+# Configuración de datos
+data:
+  # Columnas OHLCV a mantener
+  columns:
+    - "Open"
+    - "High" 
+    - "Low"
+    - "Close"
+    - "Volume"
+  
+  # Configuración de tipos de datos para optimizar RAM
+  dtypes:
+    Open: "float32"
+    High: "float32"
+    Low: "float32" 
+    Close: "float32"
+    Volume: "float32"
+
+# Configuración de zona horaria
+timezone:
+  target: "Europe/Madrid"  # UTC+1/UTC+2
+  source: "UTC"
+
+# Configuración de interpolación
+interpolation:
+  method: "linear"  # Método de interpolación para NaNs
+  limit_direction: "both"  # Dirección para fill
