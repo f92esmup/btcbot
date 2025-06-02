@@ -7,9 +7,18 @@ import argparse
 import sys
 import logging
 from datetime import datetime
+import numpy as np
+import torch
+from pathlib import Path
+from typing import Dict, Any
+import time
+
 from src.data.Adquisicion import Adquisicion
 from src.data.indicadores import Indicadores
 from src.data.normalization import Normalization
+from src.entorno.environment import FuturesTradingEnv
+from src.agente.agent import TransformerSACAgent
+from src.configuration.config import config
 
 
 def setup_logging():
@@ -51,7 +60,389 @@ def parse_arguments():
         help='Fecha de inicio en formato YYYY-MM-DD'
     )
     
+    # Argumentos opcionales para entrenamiento
+    parser.add_argument(
+        '--episodes',
+        type=int,
+        default=1000,
+        help='Número de episodios de entrenamiento (default: 1000)'
+    )
+    
+    parser.add_argument(
+        '--eval-frequency',
+        type=int,
+        default=50,
+        help='Frecuencia de evaluación en episodios (default: 50)'
+    )
+    
+    parser.add_argument(
+        '--save-frequency',
+        type=int,
+        default=100,
+        help='Frecuencia de guardado en episodios (default: 100)'
+    )
+    
+    parser.add_argument(
+        '--no-cuda',
+        action='store_true',
+        help='Deshabilitar CUDA aunque esté disponible'
+    )
+    
+    parser.add_argument(
+        '--eval-episodes',
+        type=int,
+        default=5,
+        help='Número de episodios para evaluación (default: 5)'
+    )
+    
     return parser.parse_args()
+
+
+def setup_device(no_cuda: bool = False) -> torch.device:
+    """
+    Configura el device para el entrenamiento.
+    
+    Args:
+        no_cuda (bool): Si True, fuerza el uso de CPU
+        
+    Returns:
+        torch.device: Device configurado
+    """
+    if no_cuda or not torch.cuda.is_available():
+        device = torch.device('cpu')
+    else:
+        device = torch.device('cuda')
+        # Configurar para mejor rendimiento
+        torch.backends.cudnn.benchmark = True
+    
+    return device
+
+
+def create_trading_environment(dataframe: Any, logger) -> FuturesTradingEnv:
+    """
+    Crea el entorno de trading con los datos procesados.
+    
+    Args:
+        dataframe: DataFrame con datos normalizados
+        logger: Logger para mensajes
+        
+    Returns:
+        FuturesTradingEnv: Entorno configurado
+    """
+    logger.info("Creando entorno de trading...")
+    
+    # Cargar el scaler completo desde GCS y extraer el scaler específico para Close
+    from sklearn.preprocessing import MinMaxScaler
+    from src.data.normalization import Normalization
+    
+    logger.info("Cargando scaler desde GCS para crear price_scaler...")
+    try:
+        # Cargar el scaler completo que se guardó durante la normalización
+        full_scaler = Normalization.load_scaler()
+        
+        # Crear un price_scaler específico usando los parámetros del Close del scaler completo
+        price_scaler = MinMaxScaler()
+        
+        # Encontrar el índice de la columna Close en el scaler completo
+        # Asumimos que Close es la primera columna (índice 0) en los datos OHLCV
+        close_min = full_scaler.data_min_[0]  # Min del Close
+        close_max = full_scaler.data_max_[0]  # Max del Close
+        
+        # Configurar el price_scaler con el rango real del Close
+        price_scaler.data_min_ = np.array([close_min])
+        price_scaler.data_max_ = np.array([close_max])
+        price_scaler.data_range_ = np.array([close_max - close_min])
+        price_scaler.scale_ = np.array([1.0 / (close_max - close_min)])
+        price_scaler.min_ = np.array([-close_min / (close_max - close_min)])
+        price_scaler.feature_range = (0, 1)
+        price_scaler.n_features_in_ = 1
+        
+        logger.info(f"Price scaler configurado desde GCS - Rango Close: {close_min:.2f} - {close_max:.2f}")
+        
+    except Exception as e:
+        logger.error(f"Error crítico al cargar scaler desde GCS: {e}")
+        logger.error("No se puede continuar sin el scaler real. Deteniendo ejecución.")
+        raise RuntimeError(f"Fallo al cargar scaler desde GCS: {e}")
+    
+    env = FuturesTradingEnv(
+        data_df=dataframe,
+        price_scaler=price_scaler
+    )
+    
+    logger.info(f"Entorno creado:")
+    logger.info(f"  - Balance inicial: ${config.capital_inicial:,.2f}")
+    logger.info(f"  - Apalancamiento: {config.apalancamiento}x")
+    logger.info(f"  - Ventana observación: {config.ventana_observacion_size}")
+    logger.info(f"  - Espacio de observación: {env.observation_space}")
+    logger.info(f"  - Espacio de acción: {env.action_space}")
+    
+    return env
+
+
+def create_sac_agent(env: FuturesTradingEnv, device: torch.device, logger) -> TransformerSACAgent:
+    """
+    Crea el agente SAC con arquitectura Transformer.
+    
+    Args:
+        env: Entorno de trading
+        device: Device para el entrenamiento
+        logger: Logger para mensajes
+        
+    Returns:
+        TransformerSACAgent: Agente configurado
+    """
+    logger.info("Creando agente SAC con Transformer...")
+    
+    # Obtener parámetros del entorno
+    observation_space_shape = env.observation_space.shape
+    action_space_shape = env.action_space.shape
+    
+    # Calcular características de mercado y portfolio
+    ventana_size = config.ventana_observacion_size
+    num_features_mercado = len(env.data_df.columns)
+    market_features = num_features_mercado
+    portfolio_features = 4  # tipo_posicion, pnl_roe, pasos_posicion, precio_entrada
+    sequence_length = ventana_size
+    
+    agent = TransformerSACAgent(
+        observation_space_shape=observation_space_shape,
+        action_space_shape=action_space_shape,
+        market_features=market_features,
+        portfolio_features=portfolio_features,
+        sequence_length=sequence_length,
+        device=device
+    )
+    
+    # Contar parámetros del modelo
+    total_params = sum(p.numel() for p in agent.actor.parameters())
+    trainable_params = sum(p.numel() for p in agent.actor.parameters() if p.requires_grad)
+    
+    logger.info(f"Agente SAC creado:")
+    logger.info(f"  - Parámetros totales: {total_params:,}")
+    logger.info(f"  - Parámetros entrenables: {trainable_params:,}")
+    logger.info(f"  - Market features: {market_features}")
+    logger.info(f"  - Portfolio features: {portfolio_features}")
+    logger.info(f"  - Sequence length: {sequence_length}")
+    logger.info(f"  - Gamma: {config.gamma}")
+    logger.info(f"  - Tau: {config.tau}")
+    logger.info(f"  - Alpha inicial: {config.initial_log_alpha}")
+    logger.info(f"  - Learning rates: Actor={config.actor_learning_rate}, Critic={config.critic_learning_rate}")
+    
+    return agent
+
+
+def evaluate_agent(agent: TransformerSACAgent, env: FuturesTradingEnv, 
+                  num_episodes: int, logger) -> Dict[str, float]:
+    """
+    Evalúa el rendimiento del agente.
+    
+    Args:
+        agent: Agente a evaluar
+        env: Entorno de trading
+        num_episodes: Número de episodios de evaluación
+        logger: Logger para mensajes
+        
+    Returns:
+        Dict[str, float]: Métricas de evaluación
+    """
+    agent.eval_mode()
+    
+    episode_returns = []
+    episode_profits = []
+    episode_lengths = []
+    successful_trades = 0
+    total_trades = 0
+    
+    for episode in range(num_episodes):
+        obs, _ = env.reset()
+        episode_return = 0
+        episode_length = 0
+        initial_balance = env.balance
+        
+        done = False
+        while not done:
+            action = agent.select_action(obs, deterministic=True)
+            obs, reward, terminated, truncated, info = env.step(action)
+            done = terminated or truncated
+            
+            episode_return += reward
+            episode_length += 1
+            
+            # Contar trades
+            if 'trade_executed' in info and info['trade_executed']:
+                total_trades += 1
+                if reward > 0:
+                    successful_trades += 1
+        
+        final_balance = env.balance
+        profit_pct = ((final_balance - initial_balance) / initial_balance) * 100
+        
+        episode_returns.append(episode_return)
+        episode_profits.append(profit_pct)
+        episode_lengths.append(episode_length)
+    
+    agent.train_mode()
+    
+    metrics = {
+        'mean_return': np.mean(episode_returns),
+        'std_return': np.std(episode_returns),
+        'mean_profit_pct': np.mean(episode_profits),
+        'std_profit_pct': np.std(episode_profits),
+        'mean_episode_length': np.mean(episode_lengths),
+        'win_rate': successful_trades / max(total_trades, 1),
+        'total_trades': total_trades / num_episodes
+    }
+    
+    return metrics
+
+
+def train_agent(agent: TransformerSACAgent, env: FuturesTradingEnv, 
+               num_episodes: int, eval_frequency: int, eval_episodes: int,
+               save_frequency: int, logger):
+    """
+    Entrena el agente SAC.
+    
+    Args:
+        agent: Agente a entrenar
+        env: Entorno de trading
+        num_episodes: Número de episodios de entrenamiento
+        eval_frequency: Frecuencia de evaluación
+        eval_episodes: Episodios para evaluación
+        save_frequency: Frecuencia de guardado
+        logger: Logger para mensajes
+    """
+    logger.info(f"Iniciando entrenamiento por {num_episodes} episodios...")
+    
+    # Métricas de entrenamiento
+    episode_returns = []
+    episode_profits = []
+    episode_lengths = []
+    actor_losses = []
+    critic_losses = []
+    alpha_losses = []
+    alpha_values = []
+    
+    # Crear directorio para modelos
+    models_dir = Path("models")
+    models_dir.mkdir(exist_ok=True)
+    
+    # Variables para tracking
+    best_eval_return = float('-inf')
+    start_time = time.time()
+    
+    for episode in range(num_episodes):
+        episode_start_time = time.time()
+        
+        # Reset del entorno
+        obs, _ = env.reset()
+        episode_return = 0
+        episode_length = 0
+        initial_balance = env.balance_actual
+        
+        # Variables para losses del episodio
+        ep_actor_losses = []
+        ep_critic1_losses = []
+        ep_critic2_losses = []
+        ep_alpha_losses = []
+        
+        done = False
+        while not done:
+            # Seleccionar acción
+            action = agent.select_action(obs, deterministic=False)
+            
+            # Ejecutar acción en el entorno
+            next_obs, reward, terminated, truncated, info = env.step(action)
+            done = terminated or truncated
+            
+            # Almacenar experiencia
+            agent.replay_buffer.add(obs, action, reward, next_obs, terminated, truncated)
+            
+            # Entrenar si hay suficientes experiencias
+            if len(agent.replay_buffer) >= config.batch_size:
+                losses = agent.learn()
+                if losses:
+                    ep_actor_losses.append(losses['actor_loss'])
+                    ep_critic1_losses.append(losses['critic_1_loss'])
+                    ep_critic2_losses.append(losses['critic_2_loss'])
+                    ep_alpha_losses.append(losses['alpha_loss'])
+            
+            obs = next_obs
+            episode_return += reward
+            episode_length += 1
+        
+        # Calcular profit del episodio
+        final_balance = env.balance_actual
+        profit_pct = ((final_balance - initial_balance) / initial_balance) * 100
+        
+        # Guardar métricas
+        episode_returns.append(episode_return)
+        episode_profits.append(profit_pct)
+        episode_lengths.append(episode_length)
+        
+        if ep_actor_losses:
+            actor_losses.append(np.mean(ep_actor_losses))
+            # Promedio de ambos critic losses
+            critic_losses.append((np.mean(ep_critic1_losses) + np.mean(ep_critic2_losses)) / 2)
+            alpha_losses.append(np.mean(ep_alpha_losses))
+            alpha_values.append(agent.alpha.item())
+        
+        episode_time = time.time() - episode_start_time
+        
+        # Log progreso cada 10 episodios
+        if (episode + 1) % 10 == 0:
+            avg_return = np.mean(episode_returns[-10:])
+            avg_profit = np.mean(episode_profits[-10:])
+            buffer_size = len(agent.replay_buffer)
+            
+            logger.info(f"Episodio {episode + 1}/{num_episodes} | "
+                       f"Return: {episode_return:.2f} | "
+                       f"Profit: {profit_pct:.2f}% | "
+                       f"Avg Return (10): {avg_return:.2f} | "
+                       f"Avg Profit (10): {avg_profit:.2f}% | "
+                       f"Buffer: {buffer_size} | "
+                       f"Time: {episode_time:.1f}s")
+            
+            if alpha_values:
+                logger.info(f"Alpha: {alpha_values[-1]:.4f} | "
+                           f"Actor Loss: {actor_losses[-1]:.4f} | "
+                           f"Critic Loss: {critic_losses[-1]:.4f}")
+        
+        # Evaluación periódica
+        if (episode + 1) % eval_frequency == 0:
+            logger.info(f"\n=== Evaluación en episodio {episode + 1} ===")
+            eval_metrics = evaluate_agent(agent, env, eval_episodes, logger)
+            
+            logger.info(f"Métricas de evaluación:")
+            logger.info(f"  - Return promedio: {eval_metrics['mean_return']:.2f} ± {eval_metrics['std_return']:.2f}")
+            logger.info(f"  - Profit promedio: {eval_metrics['mean_profit_pct']:.2f}% ± {eval_metrics['std_profit_pct']:.2f}%")
+            logger.info(f"  - Longitud promedio: {eval_metrics['mean_episode_length']:.1f}")
+            logger.info(f"  - Win rate: {eval_metrics['win_rate']:.2%}")
+            logger.info(f"  - Trades por episodio: {eval_metrics['total_trades']:.1f}")
+            
+            # Guardar mejor modelo
+            if eval_metrics['mean_return'] > best_eval_return:
+                best_eval_return = eval_metrics['mean_return']
+                best_model_path = models_dir / "best_model.pth"
+                agent.save(best_model_path)
+                logger.info(f"  - Nuevo mejor modelo guardado: {best_model_path}")
+        
+        # Guardado periódico
+        if (episode + 1) % save_frequency == 0:
+            checkpoint_path = models_dir / f"checkpoint_episode_{episode + 1}.pth"
+            agent.save(checkpoint_path)
+            logger.info(f"Checkpoint guardado: {checkpoint_path}")
+    
+    # Guardado final
+    final_model_path = models_dir / "final_model.pth"
+    agent.save(final_model_path)
+    
+    total_time = time.time() - start_time
+    logger.info(f"\n=== Entrenamiento Completado ===")
+    logger.info(f"Tiempo total: {total_time/3600:.2f} horas")
+    logger.info(f"Return promedio: {np.mean(episode_returns):.2f}")
+    logger.info(f"Profit promedio: {np.mean(episode_profits):.2f}%")
+    logger.info(f"Mejor evaluación: {best_eval_return:.2f}")
+    logger.info(f"Modelo final guardado: {final_model_path}")
 
 
 def validate_start_date(date_string: str) -> bool:
@@ -155,9 +546,29 @@ def main():
         # Actualizar referencia al dataframe
         dataframe = normalized_dataframe
         
-        # 4. TODO: Aquí se agregará el entrenamiento del modelo
-        logger.info("=== FASE 4: Entrenamiento del Modelo (Pendiente) ===")
-        logger.info("Esta fase se implementará más adelante...")
+        # 4. Entrenamiento del Modelo SAC
+        logger.info("=== FASE 4: Entrenamiento del Modelo SAC ===")
+        
+        # Configurar device
+        device = setup_device(args.no_cuda)
+        logger.info(f"Usando device: {device}")
+        
+        # Crear entorno de trading
+        env = create_trading_environment(dataframe, logger)
+        
+        # Crear y entrenar agente
+        agent = create_sac_agent(env, device, logger)
+        
+        # Ejecutar entrenamiento
+        train_agent(
+            agent=agent,
+            env=env,
+            num_episodes=args.episodes,
+            eval_frequency=args.eval_frequency,
+            eval_episodes=args.eval_episodes,
+            save_frequency=args.save_frequency,
+            logger=logger
+        )
         
         logger.info("=== Proceso Completado Exitosamente ===")
         

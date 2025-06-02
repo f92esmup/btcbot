@@ -634,10 +634,17 @@ class FuturesTradingEnv(gym.Env):
         if 'Close' not in self.data_df.columns:
             raise ValueError("Columna 'Close' no encontrada en los datos")
         
-        precio_normalizado = self.data_df.iloc[self.paso_actual]['Close']
+        # Obtener toda la fila actual normalizada
+        fila_actual = self.data_df.iloc[self.paso_actual].values.reshape(1, -1)
         
-        # Desnormalizar usando el price_scaler
-        precio_actual = self.price_scaler.inverse_transform([[precio_normalizado]])[0][0]
+        # Desnormalizar toda la fila
+        fila_desnormalizada = self.price_scaler.inverse_transform(fila_actual)
+        
+        # Obtener el índice de la columna 'Close'
+        close_index = list(self.data_df.columns).index('Close')
+        
+        # Retornar solo el precio Close desnormalizado
+        precio_actual = fila_desnormalizada[0, close_index]
         
         return precio_actual
     

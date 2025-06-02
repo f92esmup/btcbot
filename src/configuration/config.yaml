@@ -120,3 +120,53 @@ environment:
   # Condiciones de finalización
   usar_max_pasos_episodio: true       # Si limitar pasos por episodio
   max_pasos_episodio: 1000           # Máximo pasos por episodio (si se usa)
+
+# Configuración del Agente SAC con Transformer
+agent:
+  algorithm: "SAC" # Confirmando el algoritmo
+  
+  # --- Parámetros del Replay Buffer y Entrenamiento General ---
+  replay_buffer_size: 1000000   # Capacidad del buffer de repetición (1 millón de transiciones)
+  batch_size: 256               # Tamaño del mini-batch para cada paso de aprendizaje
+
+  # --- Hiperparámetros Específicos de SAC ---
+  hiperparametros_sac: # Usando un nombre un poco más específico que solo "hiperparametros"
+    gamma: 0.99                   # Factor de descuento para recompensas futuras
+    tau: 0.005                    # Coeficiente para la actualización suave de las redes objetivo
+    
+    actor_learning_rate: 0.0003   # Tasa de aprendizaje para la red del Actor (Adam optimizer)
+    critic_learning_rate: 0.0003  # Tasa de aprendizaje para las redes del Crítico (Adam optimizer)
+    
+    learn_alpha: True             # Si alpha (temperatura de entropía) es aprendible
+    alpha_learning_rate: 0.0003   # Tasa de aprendizaje para alpha (si es aprendible)
+    # target_entropy: 'auto'      # Muchas implementaciones permiten 'auto' que lo calcula como -dim_accion.
+                                  # Para tu caso, dim_accion = 1, así que puedes poner -1.0
+    target_entropy: -1.0          # Entropía objetivo para el ajuste automático de alpha
+    initial_log_alpha: 0.0        # Valor inicial para log(alpha), resultando en alpha=1.0. Ajustable.
+
+  # --- Parámetros de la Arquitectura del Transformer (para StateTransformerEncoder) ---
+  # Asumimos que el Transformer procesa la ventana de datos de mercado.
+  # Número de características de mercado por paso de tiempo (5 OHLCV + 7 Indicadores = 12)
+  # input_features_per_step_transformer: 12 (Esto se derivaría de los datos, no es un hiperparámetro a tunear tanto como una especificación de entrada)
+  transformer:
+    d_model: 128                  # Dimensión interna del Transformer (embeddings).
+    n_head: 4                     # Número de cabezales de atención (d_model debe ser divisible por n_head; 128/4=32).
+    num_encoder_layers: 3         # Número de capas de Encoder de Transformer apiladas (2-4 es un buen inicio).
+    dim_feedforward: 256          # Dimensión de la capa oculta en la FFN del Transformer (ej. 2*d_model).
+    dropout_rate: 0.1             # Tasa de dropout dentro del Transformer.
+  
+  # --- Parámetros de las Cabezas MLP (para Actor y Crítico después del Transformer) ---
+  # La entrada a estas MLP será la salida del Transformer (d_model) 
+  # concatenada con las características escalares del portafolio (asumimos 4: tipo_pos, pnl_norm, pasos_norm, entrada_norm).
+  # Input_dim_mlp = d_model (128) + num_portfolio_features (4) = 132
+  mlp_heads:
+    hidden_dims: [256, 256]       # Lista de dimensiones para las capas ocultas de las MLP del Actor y Crítico.
+                                  # Ej: [256, 256] significa dos capas ocultas de 256 neuronas cada una.
+
+  # --- Frecuencia de Entrenamiento ---
+  learning_frequency: 1         # Aprender cada N pasos
+  update_target_frequency: 1    # Actualizar redes objetivo cada N pasos de aprendizaje
+  
+  # --- Parámetros de Guardado y Carga ---
+  model_save_frequency: 10000   # Guardar modelo cada N pasos
+  models_directory: "models/agent"  # Directorio para guardar modelos

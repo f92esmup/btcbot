@@ -328,6 +328,132 @@ class Config:
         """Máximo pasos por episodio."""
         return self.environment_config.get('max_pasos_episodio', 1000)
 
+    # Propiedades para configuración del agente SAC
+    @property
+    def agent_config(self) -> Dict[str, Any]:
+        """Configuración completa del agente."""
+        return self._config.get('agent', {})
+    
+    @property
+    def algorithm(self) -> str:
+        """Algoritmo del agente."""
+        return self.agent_config.get('algorithm', 'SAC')
+    
+    @property
+    def replay_buffer_size(self) -> int:
+        """Tamaño del buffer de replay."""
+        return self.agent_config.get('replay_buffer_size', 1000000)
+    
+    @property
+    def batch_size(self) -> int:
+        """Tamaño del batch para entrenamiento."""
+        return self.agent_config.get('batch_size', 256)
+    
+    @property
+    def hiperparametros_sac(self) -> Dict[str, Any]:
+        """Hiperparámetros específicos de SAC."""
+        return self.agent_config.get('hiperparametros_sac', {})
+    
+    @property
+    def gamma(self) -> float:
+        """Factor de descuento."""
+        return self.hiperparametros_sac.get('gamma', 0.99)
+    
+    @property
+    def tau(self) -> float:
+        """Coeficiente para actualización suave de redes objetivo."""
+        return self.hiperparametros_sac.get('tau', 0.005)
+    
+    @property
+    def actor_learning_rate(self) -> float:
+        """Tasa de aprendizaje del actor."""
+        return self.hiperparametros_sac.get('actor_learning_rate', 0.0003)
+    
+    @property
+    def critic_learning_rate(self) -> float:
+        """Tasa de aprendizaje del crítico."""
+        return self.hiperparametros_sac.get('critic_learning_rate', 0.0003)
+    
+    @property
+    def learn_alpha(self) -> bool:
+        """Si alpha es aprendible."""
+        return self.hiperparametros_sac.get('learn_alpha', True)
+    
+    @property
+    def alpha_learning_rate(self) -> float:
+        """Tasa de aprendizaje de alpha."""
+        return self.hiperparametros_sac.get('alpha_learning_rate', 0.0003)
+    
+    @property
+    def target_entropy(self) -> float:
+        """Entropía objetivo."""
+        return self.hiperparametros_sac.get('target_entropy', -1.0)
+    
+    @property
+    def initial_log_alpha(self) -> float:
+        """Valor inicial de log alpha."""
+        return self.hiperparametros_sac.get('initial_log_alpha', 0.0)
+    
+    @property
+    def transformer_config(self) -> Dict[str, Any]:
+        """Configuración del Transformer."""
+        return self.agent_config.get('transformer', {})
+    
+    @property
+    def d_model(self) -> int:
+        """Dimensión interna del Transformer."""
+        return self.transformer_config.get('d_model', 128)
+    
+    @property
+    def n_head(self) -> int:
+        """Número de cabezales de atención."""
+        return self.transformer_config.get('n_head', 4)
+    
+    @property
+    def num_encoder_layers(self) -> int:
+        """Número de capas del encoder."""
+        return self.transformer_config.get('num_encoder_layers', 3)
+    
+    @property
+    def dim_feedforward(self) -> int:
+        """Dimensión de la capa feedforward."""
+        return self.transformer_config.get('dim_feedforward', 256)
+    
+    @property
+    def dropout_rate(self) -> float:
+        """Tasa de dropout."""
+        return self.transformer_config.get('dropout_rate', 0.1)
+    
+    @property
+    def mlp_heads_config(self) -> Dict[str, Any]:
+        """Configuración de las cabezas MLP."""
+        return self.agent_config.get('mlp_heads', {})
+    
+    @property
+    def hidden_dims(self) -> List[int]:
+        """Dimensiones de las capas ocultas del MLP."""
+        return self.mlp_heads_config.get('hidden_dims', [256, 256])
+    
+    @property
+    def learning_frequency(self) -> int:
+        """Frecuencia de aprendizaje."""
+        return self.agent_config.get('learning_frequency', 1)
+    
+    @property
+    def update_target_frequency(self) -> int:
+        """Frecuencia de actualización de redes objetivo."""
+        return self.agent_config.get('update_target_frequency', 1)
+    
+    @property
+    def model_save_frequency(self) -> int:
+        """Frecuencia de guardado de modelos."""
+        return self.agent_config.get('model_save_frequency', 10000)
+    
+    @property
+    def models_directory(self) -> str:
+        """Directorio para guardar modelos."""
+        return self.agent_config.get('models_directory', 'models/agent')
+
     # Métodos adicionales
     def refresh_api_keys(self):
         """Recarga las API keys desde Google Cloud Secret Manager."""
