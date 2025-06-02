@@ -1,0 +1,237 @@
+"""
+Utilidades para Google Cloud Storage.
+Maneja la subida y descarga de archivos del scaler a/desde un bucket de GCS.
+"""
+
+import os
+import logging
+from pathlib import Path
+from typing import Optional
+from google.cloud import storage
+from google.cloud.exceptions import NotFound
+import joblib
+import tempfile
+from .config import config
+
+
+class GCSUtils:
+    """Clase para manejar operaciones de Google Cloud Storage."""
+    
+    def __init__(self):
+        """Inicializa las utilidades de GCS."""
+        self.logger = logging.getLogger(__name__)
+        
+        # Obtener configuración de GCS
+        self.project_id = config.project_id
+        self.bucket_name = config.gcs_bucket_name
+        self.scaler_blob_name = config.gcs_scaler_blob_name
+        
+        # Cliente de GCS
+        self._client = None
+        
+        self.logger.info(f"GCSUtils inicializado para proyecto: {self.project_id}")
+        self.logger.info(f"Bucket: {self.bucket_name}")
+        self.logger.info(f"Archivo scaler: {self.scaler_blob_name}")
+    
+    @property
+    def client(self) -> storage.Client:
+        """Obtiene el cliente de GCS (lazy loading)."""
+        if self._client is None:
+            try:
+                self._client = storage.Client(project=self.project_id)
+                self.logger.info("Cliente de GCS inicializado exitosamente")
+            except Exception as e:
+                self.logger.error(f"Error al inicializar cliente de GCS: {e}")
+                raise
+        return self._client
+    
+    def _get_bucket(self) -> storage.Bucket:
+        """Obtiene el bucket de GCS."""
+        try:
+            bucket = self.client.bucket(self.bucket_name)
+            # Verificar que el bucket existe
+            if not bucket.exists():
+                raise ValueError(f"El bucket '{self.bucket_name}' no existe")
+            return bucket
+        except Exception as e:
+            self.logger.error(f"Error al acceder al bucket '{self.bucket_name}': {e}")
+            raise
+    
+    def upload_scaler(self, scaler_path: str) -> bool:
+        """
+        Sube el archivo scaler.pkl al bucket de GCS.
+        
+        Args:
+            scaler_path (str): Ruta local del archivo scaler.pkl
+            
+        Returns:
+            bool: True si la subida fue exitosa, False en caso contrario
+        """
+        self.logger.info(f"Subiendo scaler desde {scaler_path} a GCS...")
+        
+        try:
+            # Verificar que el archivo existe localmente
+            if not os.path.exists(scaler_path):
+                raise FileNotFoundError(f"Archivo scaler no encontrado: {scaler_path}")
+            
+            # Obtener bucket y blob
+            bucket = self._get_bucket()
+            blob = bucket.blob(self.scaler_blob_name)
+            
+            # Subir el archivo
+            blob.upload_from_filename(scaler_path)
+            
+            self.logger.info(f"Scaler subido exitosamente a gs://{self.bucket_name}/{self.scaler_blob_name}")
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"Error al subir scaler a GCS: {e}")
+            return False
+    
+    def download_scaler(self, local_path: str) -> bool:
+        """
+        Descarga el archivo scaler.pkl desde GCS al path local.
+        
+        Args:
+            local_path (str): Ruta local donde guardar el scaler
+            
+        Returns:
+            bool: True si la descarga fue exitosa, False en caso contrario
+        """
+        self.logger.info(f"Descargando scaler desde GCS a {local_path}...")
+        
+        try:
+            # Obtener bucket y blob
+            bucket = self._get_bucket()
+            blob = bucket.blob(self.scaler_blob_name)
+            
+            # Verificar que el blob existe
+            if not blob.exists():
+                self.logger.warning(f"Scaler no existe en GCS: gs://{self.bucket_name}/{self.scaler_blob_name}")
+                return False
+            
+            # Crear directorio local si no existe
+            local_dir = Path(local_path).parent
+            local_dir.mkdir(parents=True, exist_ok=True)
+            
+            # Descargar el archivo
+            blob.download_to_filename(local_path)
+            
+            self.logger.info(f"Scaler descargado exitosamente desde gs://{self.bucket_name}/{self.scaler_blob_name}")
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"Error al descargar scaler desde GCS: {e}")
+            return False
+    
+    def scaler_exists_in_gcs(self) -> bool:
+        """
+        Verifica si el scaler existe en GCS.
+        
+        Returns:
+            bool: True si el scaler existe en GCS, False en caso contrario
+        """
+        try:
+            bucket = self._get_bucket()
+            blob = bucket.blob(self.scaler_blob_name)
+            exists = blob.exists()
+            
+            self.logger.info(f"Scaler en GCS: {'existe' if exists else 'no existe'}")
+            return exists
+            
+        except Exception as e:
+            self.logger.error(f"Error al verificar existencia del scaler en GCS: {e}")
+            return False
+    
+    def get_scaler_info(self) -> Optional[dict]:
+        """
+        Obtiene información del scaler en GCS.
+        
+        Returns:
+            Optional[dict]: Información del scaler o None si no existe
+        """
+        try:
+            bucket = self._get_bucket()
+            blob = bucket.blob(self.scaler_blob_name)
+            
+            if not blob.exists():
+                return None
+            
+            # Recargar para obtener metadatos actualizados
+            blob.reload()
+            
+            info = {
+                'name': blob.name,
+                'size': blob.size,
+                'created': blob.time_created,
+                'updated': blob.updated,
+                'etag': blob.etag,
+                'content_type': blob.content_type
+            }
+            
+            self.logger.info(f"Información del scaler en GCS: {info}")
+            return info
+            
+        except Exception as e:
+            self.logger.error(f"Error al obtener información del scaler: {e}")
+            return None
+    
+    def load_scaler_from_gcs(self):
+        """
+        Carga el scaler directamente desde GCS sin guardarlo localmente.
+        
+        Returns:
+            scaler: Objeto scaler cargado desde GCS
+        """
+        self.logger.info("Cargando scaler directamente desde GCS...")
+        
+        try:
+            bucket = self._get_bucket()
+            blob = bucket.blob(self.scaler_blob_name)
+            
+            if not blob.exists():
+                raise FileNotFoundError(f"Scaler no existe en GCS: gs://{self.bucket_name}/{self.scaler_blob_name}")
+            
+            # Usar archivo temporal
+            with tempfile.NamedTemporaryFile() as temp_file:
+                blob.download_to_filename(temp_file.name)
+                scaler = joblib.load(temp_file.name)
+            
+            self.logger.info("Scaler cargado exitosamente desde GCS")
+            return scaler
+            
+        except Exception as e:
+            self.logger.error(f"Error al cargar scaler desde GCS: {e}")
+            raise
+    
+    def save_scaler_to_gcs(self, scaler) -> bool:
+        """
+        Guarda un objeto scaler directamente a GCS sin guardarlo localmente.
+        
+        Args:
+            scaler: Objeto scaler a guardar
+            
+        Returns:
+            bool: True si se guardó exitosamente, False en caso contrario
+        """
+        self.logger.info("Guardando scaler directamente a GCS...")
+        
+        try:
+            bucket = self._get_bucket()
+            blob = bucket.blob(self.scaler_blob_name)
+            
+            # Usar archivo temporal
+            with tempfile.NamedTemporaryFile() as temp_file:
+                joblib.dump(scaler, temp_file.name)
+                blob.upload_from_filename(temp_file.name)
+            
+            self.logger.info(f"Scaler guardado exitosamente en gs://{self.bucket_name}/{self.scaler_blob_name}")
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"Error al guardar scaler en GCS: {e}")
+            return False
+
+
+# Instancia global para facilitar el uso
+gcs_utils = GCSUtils()

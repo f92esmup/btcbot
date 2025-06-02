@@ -190,6 +190,27 @@ class Config:
         """Ruta donde guardar el scaler ajustado."""
         return self.normalization_config.get('scaler_path', 'models/scaler.pkl')
     
+    @property
+    def storage_mode(self) -> str:
+        """Modo de almacenamiento del scaler: 'local' o 'gcp'."""
+        return self.normalization_config.get('storage_mode', 'local')
+    
+    # Propiedades para Google Cloud Platform
+    @property
+    def project_id(self) -> str:
+        """Project ID de Google Cloud."""
+        return self._config.get('gcp', {}).get('project_id')
+    
+    @property
+    def gcs_bucket_name(self) -> str:
+        """Nombre del bucket de GCS para almacenar modelos."""
+        return self._config.get('gcp', {}).get('storage', {}).get('bucket_name', 'btcbot-models')
+    
+    @property
+    def gcs_scaler_blob_name(self) -> str:
+        """Nombre del archivo scaler en GCS."""
+        return self._config.get('gcp', {}).get('storage', {}).get('scaler_blob_name', 'scaler.pkl')
+    
     # Propiedades para indicadores técnicos
     @property
     def indicators_config(self) -> Dict[str, Any]:

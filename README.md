@@ -29,6 +29,8 @@ Este proyecto implementa un bot de trading automatizado que utiliza técnicas de
 
 - **Adquisición de datos**: Descarga automática de datos OHLCV desde la API de Binance con múltiples llamadas secuenciales
 - **Indicadores técnicos**: Cálculo de múltiples indicadores usando pandas-ta
+- **Almacenamiento de modelos**: Soporte para almacenamiento local o en Google Cloud Storage (GCS)
+- **Normalización avanzada**: Sistema de escalado de características con persistencia
 - **Normalización de datos**: Escalado MinMax para optimizar el entrenamiento del modelo
 - **Configuración centralizada**: Gestión unificada de parámetros en YAML
 - **Optimización de memoria**: Uso eficiente de RAM con tipos de datos optimizados
@@ -122,7 +124,15 @@ interpolation:
 normalization:
   scaler_type: "MinMaxScaler"  # Tipo de escalador a usar
   feature_range: [0, 1]        # Rango de normalización
-  scaler_path: "models/scaler.pkl"  # Ruta donde guardar el scaler
+  scaler_path: "models/scaler.pkl"  # Ruta donde guardar el scaler (modo local)
+  storage_mode: "local"        # Modo de almacenamiento: "local" o "gcp"
+
+# Google Cloud Storage (para storage_mode: "gcp")
+gcp:
+  project_id: "btcbot-461022"
+  storage:
+    bucket_name: "btcbot-models"     # Bucket para almacenar modelos
+    scaler_blob_name: "scaler.pkl"   # Nombre del archivo en GCS
 
 # Indicadores técnicos
 indicators:
@@ -152,6 +162,41 @@ indicators:
   volume:
     obv:
       enabled: true
+```
+
+### Almacenamiento de Modelos
+
+El sistema soporta dos modos de almacenamiento para el scaler de normalización:
+
+#### Modo Local (`storage_mode: "local"`)
+- El scaler se guarda en el sistema de archivos local
+- Ruta configurada en `normalization.scaler_path`
+- Ideal para desarrollo y pruebas
+
+#### Modo Google Cloud Storage (`storage_mode: "gcp"`)
+- El scaler se guarda en un bucket de Google Cloud Storage
+- Permite compartir modelos entre instancias
+- Ideal para producción y equipos distribuidos
+
+```python
+# Ejemplo de uso
+from src.data.normalization import Normalization
+from src.configuration.config import config
+
+# El modo se configura automáticamente desde config.yaml
+normalizer = Normalization(dataframe)
+
+# Verificar si existe un scaler previo
+if normalizer.scaler_exists():
+    print("Scaler encontrado")
+    info = normalizer.get_scaler_storage_info()
+    print(f"Información: {info}")
+
+# Ejecutar normalización (guarda automáticamente según el modo)
+normalized_df, scaler = normalizer.main()
+
+# Cargar scaler existente
+scaler = Normalization.load_scaler()
 ```
 
 ## 🚀 Instalación

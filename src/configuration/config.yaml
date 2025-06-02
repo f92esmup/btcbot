@@ -13,6 +13,9 @@ trading:
 # Configuración de Google Cloud
 gcp:
   project_id: "btcbot-461022"  # Tu project ID de Google Cloud
+  storage:
+    bucket_name: "btcbot-training-ew4"  # Nombre del bucket para almacenar modelos
+    scaler_blob_name: "scaler.pkl"  # Nombre del archivo scaler en GCS
 
 # Configuración de datos
 data:
@@ -46,7 +49,8 @@ interpolation:
 normalization:
   scaler_type: "MinMaxScaler"  # Tipo de escalador a usar
   feature_range: [0, 1]        # Rango de normalización
-  scaler_path: "models/scaler.pkl"  # Ruta donde guardar el scaler
+  scaler_path: "models/scaler.pkl"  # Ruta donde guardar el scaler (modo local)
+  storage_mode: "gcp"        # Modo de almacenamiento: "local" o "gcp"
 
 # Configuración de indicadores técnicos
 indicators:

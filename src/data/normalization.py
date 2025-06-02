@@ -12,6 +12,7 @@ from sklearn.preprocessing import MinMaxScaler
 from typing import Optional, Tuple, Dict, Any
 import logging
 from ..configuration.config import config
+from ..configuration.gcs_utils import gcs_utils
 
 
 class Normalization:
@@ -41,14 +42,17 @@ class Normalization:
         self.scaler_type = config.scaler_type
         self.feature_range = tuple(config.feature_range)
         self.scaler_path = config.scaler_path
+        self.storage_mode = config.storage_mode
         
-        # Crear directorio para el scaler si no existe
-        scaler_dir = Path(self.scaler_path).parent
-        scaler_dir.mkdir(parents=True, exist_ok=True)
+        # Crear directorio para el scaler si no existe (solo en modo local)
+        if self.storage_mode == "local":
+            scaler_dir = Path(self.scaler_path).parent
+            scaler_dir.mkdir(parents=True, exist_ok=True)
         
         self.logger.info(f"Inicializada clase Normalization con {len(self.dataframe)} filas")
         self.logger.info(f"Tipo de scaler: {self.scaler_type}")
         self.logger.info(f"Rango de características: {self.feature_range}")
+        self.logger.info(f"Modo de almacenamiento: {self.storage_mode}")
     
     def main(self) -> Tuple[pd.DataFrame, MinMaxScaler]:
         """
@@ -139,26 +143,41 @@ class Normalization:
     
     def _save_scaler(self):
         """Guardar el objeto scaler ajustado para uso futuro."""
-        self.logger.info(f"Guardando scaler en: {self.scaler_path}")
-        
-        try:
-            # Crear el directorio si no existe
-            scaler_dir = Path(self.scaler_path).parent
-            scaler_dir.mkdir(parents=True, exist_ok=True)
+        if self.storage_mode == "gcp":
+            self.logger.info("Guardando scaler en Google Cloud Storage...")
             
-            # Guardar el scaler usando joblib
-            joblib.dump(self.scaler, self.scaler_path)
+            try:
+                success = gcs_utils.save_scaler_to_gcs(self.scaler)
+                if success:
+                    self.logger.info("Scaler guardado exitosamente en GCS")
+                else:
+                    raise RuntimeError("Error al guardar scaler en GCS")
+                    
+            except Exception as e:
+                self.logger.error(f"Error al guardar el scaler en GCS: {str(e)}")
+                raise
+        else:
+            # Modo local
+            self.logger.info(f"Guardando scaler en: {self.scaler_path}")
             
-            # Verificar que el archivo se guardó correctamente
-            if os.path.exists(self.scaler_path):
-                file_size = os.path.getsize(self.scaler_path)
-                self.logger.info(f"Scaler guardado exitosamente. Tamaño del archivo: {file_size} bytes")
-            else:
-                raise FileNotFoundError("Error: el archivo del scaler no se creó")
+            try:
+                # Crear el directorio si no existe
+                scaler_dir = Path(self.scaler_path).parent
+                scaler_dir.mkdir(parents=True, exist_ok=True)
                 
-        except Exception as e:
-            self.logger.error(f"Error al guardar el scaler: {str(e)}")
-            raise
+                # Guardar el scaler usando joblib
+                joblib.dump(self.scaler, self.scaler_path)
+                
+                # Verificar que el archivo se guardó correctamente
+                if os.path.exists(self.scaler_path):
+                    file_size = os.path.getsize(self.scaler_path)
+                    self.logger.info(f"Scaler guardado exitosamente. Tamaño del archivo: {file_size} bytes")
+                else:
+                    raise FileNotFoundError("Error: el archivo del scaler no se creó")
+                    
+            except Exception as e:
+                self.logger.error(f"Error al guardar el scaler: {str(e)}")
+                raise
     
     def _transform_datasets(self) -> pd.DataFrame:
         """
@@ -237,18 +256,24 @@ class Normalization:
         Returns:
             MinMaxScaler: Scaler cargado
         """
-        if scaler_path is None:
-            scaler_path = config.scaler_path
-        
         logger = logging.getLogger(__name__)
         
         try:
-            if not os.path.exists(scaler_path):
-                raise FileNotFoundError(f"Archivo de scaler no encontrado: {scaler_path}")
-            
-            scaler = joblib.load(scaler_path)
-            logger.info(f"Scaler cargado exitosamente desde: {scaler_path}")
-            return scaler
+            if config.storage_mode == "gcp":
+                # Modo GCP: cargar desde Google Cloud Storage
+                logger.info("Cargando scaler desde Google Cloud Storage...")
+                return gcs_utils.load_scaler_from_gcs()
+            else:
+                # Modo local
+                if scaler_path is None:
+                    scaler_path = config.scaler_path
+                
+                if not os.path.exists(scaler_path):
+                    raise FileNotFoundError(f"Archivo de scaler no encontrado: {scaler_path}")
+                
+                scaler = joblib.load(scaler_path)
+                logger.info(f"Scaler cargado exitosamente desde: {scaler_path}")
+                return scaler
             
         except Exception as e:
             logger.error(f"Error al cargar el scaler: {str(e)}")
@@ -277,5 +302,44 @@ class Normalization:
                 'original_max_values': self.scaler.data_max_.tolist(),
                 'scale_factors': self.scaler.scale_.tolist() if hasattr(self.scaler, 'scale_') else None
             })
+        
+        return info
+    
+    def scaler_exists(self) -> bool:
+        """
+        Verifica si existe un scaler previamente entrenado.
+        
+        Returns:
+            bool: True si el scaler existe, False en caso contrario
+        """
+        if self.storage_mode == "gcp":
+            return gcs_utils.scaler_exists_in_gcs()
+        else:
+            return os.path.exists(self.scaler_path)
+    
+    def get_scaler_storage_info(self) -> Dict[str, Any]:
+        """
+        Obtiene información sobre el almacenamiento del scaler.
+        
+        Returns:
+            Dict[str, Any]: Información sobre el scaler almacenado
+        """
+        info = {
+            'storage_mode': self.storage_mode,
+            'exists': self.scaler_exists()
+        }
+        
+        if self.storage_mode == "gcp":
+            gcs_info = gcs_utils.get_scaler_info()
+            if gcs_info:
+                info.update(gcs_info)
+        else:
+            if os.path.exists(self.scaler_path):
+                stat = os.stat(self.scaler_path)
+                info.update({
+                    'path': self.scaler_path,
+                    'size': stat.st_size,
+                    'modified': stat.st_mtime
+                })
         
         return info
