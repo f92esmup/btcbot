@@ -237,6 +237,97 @@ class Config:
         """Configuración de indicadores de volumen."""
         return self.indicators_config.get('volume', {})
     
+    # Propiedades para configuración del entorno de trading
+    @property
+    def environment_config(self) -> Dict[str, Any]:
+        """Configuración completa del entorno de trading."""
+        return self._config.get('environment', {})
+    
+    @property
+    def capital_inicial(self) -> float:
+        """Capital inicial en USDT."""
+        return self.environment_config.get('capital_inicial', 10000.0)
+    
+    @property
+    def apalancamiento(self) -> int:
+        """Apalancamiento máximo."""
+        return self.environment_config.get('apalancamiento', 10)
+    
+    @property
+    def porcentaje_max_inversion_por_trade(self) -> float:
+        """Porcentaje máximo del balance a usar como margen por trade."""
+        return self.environment_config.get('porcentaje_max_inversion_por_trade', 0.05)
+    
+    @property
+    def max_drawdown_configurado_cuenta(self) -> float:
+        """Drawdown máximo antes de terminated."""
+        return self.environment_config.get('max_drawdown_configurado_cuenta', 0.5)
+    
+    @property
+    def comision_taker_porcentaje(self) -> float:
+        """Comisión taker en porcentaje."""
+        return self.environment_config.get('comision_taker_porcentaje', 0.0004)
+    
+    @property
+    def slippage_porcentaje(self) -> float:
+        """Slippage en porcentaje."""
+        return self.environment_config.get('slippage_porcentaje', 0.00005)
+    
+    @property
+    def ventana_observacion_size(self) -> int:
+        """Tamaño de la ventana de observación (L)."""
+        return self.environment_config.get('ventana_observacion_size', 24)
+    
+    @property
+    def max_pasos_en_posicion(self) -> int:
+        """Máximo pasos esperados en una posición."""
+        return self.environment_config.get('max_pasos_en_posicion', 100)
+    
+    @property
+    def min_clip_pnl_roe(self) -> float:
+        """ROE mínimo para clip."""
+        return self.environment_config.get('min_clip_pnl_roe', -0.50)
+    
+    @property
+    def max_clip_pnl_roe(self) -> float:
+        """ROE máximo para clip."""
+        return self.environment_config.get('max_clip_pnl_roe', 0.50)
+    
+    @property
+    def zona_muerta_mantener(self) -> float:
+        """Zona muerta para mantener posición."""
+        return self.environment_config.get('zona_muerta_mantener', 0.15)
+    
+    @property
+    def peso_recompensa_paso(self) -> float:
+        """Peso para recompensa por paso."""
+        return self.environment_config.get('peso_recompensa_paso', 1.0)
+    
+    @property
+    def peso_recompensa_cierre(self) -> float:
+        """Peso para recompensa al cerrar operación."""
+        return self.environment_config.get('peso_recompensa_cierre', 1.0)
+    
+    @property
+    def peso_recompensa_episodio(self) -> float:
+        """Peso para Sortino ratio."""
+        return self.environment_config.get('peso_recompensa_episodio', 0.0)
+    
+    @property
+    def usar_log1p_en_pnl(self) -> bool:
+        """Si aplicar log1p al PNL para suavizar."""
+        return self.environment_config.get('usar_log1p_en_pnl', True)
+    
+    @property
+    def usar_max_pasos_episodio(self) -> bool:
+        """Si limitar pasos por episodio."""
+        return self.environment_config.get('usar_max_pasos_episodio', True)
+    
+    @property
+    def max_pasos_episodio(self) -> int:
+        """Máximo pasos por episodio."""
+        return self.environment_config.get('max_pasos_episodio', 1000)
+
     # Métodos adicionales
     def refresh_api_keys(self):
         """Recarga las API keys desde Google Cloud Secret Manager."""

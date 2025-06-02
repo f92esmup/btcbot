@@ -87,3 +87,36 @@ indicators:
   volume:
     obv:
       enabled: true
+
+# Configuración del entorno de trading (Environment)
+environment:
+  # Capital y riesgo
+  capital_inicial: 10000.0  # Capital inicial en USDT
+  apalancamiento: 10        # Apalancamiento máximo (ej. 10x)
+  porcentaje_max_inversion_por_trade: 0.05  # 5% del balance como margen por trade
+  max_drawdown_configurado_cuenta: 0.5      # 50% de drawdown máximo antes de terminated
+  
+  # Costos de trading
+  comision_taker_porcentaje: 0.0004    # 0.04% sobre valor nocional
+  slippage_porcentaje: 0.00005         # 0.005% sobre precio de ejecución
+  
+  # Observación
+  ventana_observacion_size: 24         # Número de velas pasadas en la observación (L)
+  
+  # Normalización de portfolio para observación
+  max_pasos_en_posicion: 100          # Máximo esperado de pasos en una posición
+  min_clip_pnl_roe: -0.50             # ROE mínimo para clip (-50%)
+  max_clip_pnl_roe: 0.50              # ROE máximo para clip (+50%)
+  
+  # Zona muerta para acciones
+  zona_muerta_mantener: 0.15          # ±0.15 para mantener posición
+  
+  # Función de recompensa
+  peso_recompensa_paso: 1.0           # Peso para recompensa por paso
+  peso_recompensa_cierre: 1.0         # Peso para recompensa al cerrar operación
+  peso_recompensa_episodio: 0.0       # Peso para Sortino (0 = no se usa por ahora)
+  usar_log1p_en_pnl: true            # Si aplicar log1p al PNL para suavizar
+  
+  # Condiciones de finalización
+  usar_max_pasos_episodio: true       # Si limitar pasos por episodio
+  max_pasos_episodio: 1000           # Máximo pasos por episodio (si se usa)
