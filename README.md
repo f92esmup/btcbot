@@ -27,8 +27,9 @@ Este proyecto implementa un bot de trading automatizado que utiliza técnicas de
 
 ### Características Principales
 
-- **Adquisición de datos**: Descarga automática de datos OHLCV desde la API de Binance
+- **Adquisición de datos**: Descarga automática de datos OHLCV desde la API de Binance con múltiples llamadas secuenciales
 - **Indicadores técnicos**: Cálculo de múltiples indicadores usando pandas-ta
+- **Normalización de datos**: Escalado MinMax para optimizar el entrenamiento del modelo
 - **Configuración centralizada**: Gestión unificada de parámetros en YAML
 - **Optimización de memoria**: Uso eficiente de RAM con tipos de datos optimizados
 - **Logging completo**: Seguimiento detallado de todas las operaciones
@@ -52,7 +53,7 @@ btcbot/
 │       ├── __init__.py
 │       ├── Adquisicion.py   # Adquisición de datos de Binance
 │       ├── indicadores.py   # Cálculo de indicadores técnicos
-│       └── normalization.py # Normalización (futuro)
+│       └── normalization.py # Normalización de datos
 └── tests/                   # Tests unitarios
     ├── __init__.py
     ├── configuration/
@@ -116,6 +117,12 @@ timezone:
 interpolation:
   method: "linear"
   limit_direction: "both"
+
+# Configuración de normalización
+normalization:
+  scaler_type: "MinMaxScaler"  # Tipo de escalador a usar
+  feature_range: [0, 1]        # Rango de normalización
+  scaler_path: "models/scaler.pkl"  # Ruta donde guardar el scaler
 
 # Indicadores técnicos
 indicators:
@@ -225,7 +232,8 @@ python train.py --symbol ETHUSDT --interval 1h --start-date 2024-03-01
 1. Configuración inicial y validación
 2. Fase 1: Adquisición de datos
 3. Fase 2: Cálculo de indicadores técnicos
-4. Fase 3: Entrenamiento del modelo (futuro)
+4. Fase 3: Normalización de datos
+5. Fase 4: Entrenamiento del modelo (futuro)
 
 ### 📊 Configuración (`src/configuration/`)
 
@@ -242,6 +250,8 @@ python train.py --symbol ETHUSDT --interval 1h --start-date 2024-03-01
 **Métodos Principales**:
 - `binance_api_key`, `binance_api_secret`: Acceso a credenciales
 - `data_columns`, `data_dtypes`: Configuración de datos
+- `scaler_type`, `feature_range`, `scaler_path`: Configuración de normalización
+- `trend_indicators`, `momentum_indicators`: Configuración de indicadores
 - `trend_indicators`, `momentum_indicators`: Configuración de indicadores
 
 #### `config.yaml`
@@ -250,31 +260,34 @@ python train.py --symbol ETHUSDT --interval 1h --start-date 2024-03-01
 ### 📈 Procesamiento de Datos (`src/data/`)
 
 #### `Adquisicion.py`
-**Función**: Descarga y procesamiento de datos OHLCV desde Binance.
+**Función**: Descarga y procesamiento de datos OHLCV desde Binance con múltiples llamadas secuenciales.
 
 **Características**:
-- Descarga secuencial de datos históricos
-- Gestión automática de límites de API
-- Procesamiento eficiente en memoria
-- Validación y limpieza de datos
-- Interpolación de valores faltantes
+- **Descarga completa**: Múltiples llamadas secuenciales para obtener todos los datos desde fecha inicio hasta presente
+- **Gestión automática de paginación**: Control manual de timestamps para llamadas precisas
+- **Límites de API respetados**: Uso del `call_limit` configurado en cada llamada
+- **Reintentos robustos**: Backoff exponencial para errores temporales de red
+- **Procesamiento eficiente**: Datos mantenidos en RAM durante todo el pipeline
+- **Validación y limpieza**: Eliminación de duplicados e interpolación de valores faltantes
 
 **Métodos Principales**:
 - `main()`: Orquesta todo el proceso
-- `_download_klines_from_api()`: Descarga datos de la API
+- `_download_klines_from_api()`: **MEJORADO** - Realiza múltiples llamadas secuenciales hasta obtener todos los datos
 - `_create_and_structure_dataframe()`: Crea DataFrame estructurado
 - `_remove_duplicates()`: Elimina timestamps duplicados
-- `_interpolate_partial_NaNs()`: Interpola valores faltantes
+- `_interpolate_partial_nans()`: Interpola valores faltantes esporádicos
 - `_reconstruct_full_sequence()`: Reconstruye secuencia temporal completa
-- `_final_NaN_cleanup()`: Limpieza final de NaNs
+- `_reconstruct_missing_candles()`: Interpola velas completamente faltantes
+- `_final_nan_cleanup()`: Limpieza final de NaNs
 
 **Flujo de Procesamiento**:
-1. Descarga de datos crudos en listas (optimización RAM)
+1. **Descarga secuencial**: Múltiples llamadas a la API hasta obtener todos los datos históricos
 2. Conversión a DataFrame con tipos optimizados
 3. Eliminación de duplicados y establecimiento de índice temporal
 4. Interpolación de valores NaN esporádicos
 5. Reconstrucción de secuencia temporal completa
-6. Limpieza final de NaNs restantes
+6. Interpolación de velas completamente faltantes
+7. Limpieza final de NaNs restantes
 
 #### `indicadores.py`
 **Función**: Cálculo de indicadores técnicos usando pandas-ta.
@@ -308,35 +321,69 @@ python train.py --symbol ETHUSDT --interval 1h --start-date 2024-03-01
 - `_calculate_technical_indicators()`: Calcula todos los indicadores
 - `_handle_initial_indicator_NaNs()`: Elimina filas con NaNs
 
+#### `normalization.py`
+**Función**: Normalización de datos usando MinMaxScaler para optimizar el entrenamiento del modelo.
+
+**Características**:
+- **Normalización completa**: Todas las características numéricas escaladas al rango [0, 1]
+- **Scaler persistente**: El MinMaxScaler se guarda para uso futuro en producción
+- **Validación robusta**: Verificación de rangos y eliminación de valores infinitos/NaN
+- **Configuración flexible**: Tipo de scaler y rango configurables desde YAML
+- **Información detallada**: Logging completo del proceso y estadísticas del scaler
+
+**Métodos Principales**:
+- `main()`: Orquesta todo el proceso de normalización
+- `_prepare_features()`: Prepara y valida las características para normalización
+- `_fit_scaler()`: Crea y ajusta el objeto MinMaxScaler
+- `_save_scaler()`: Guarda el scaler ajustado en archivo .pkl
+- `_transform_datasets()`: Aplica la transformación de escalado
+- `_validate_normalization()`: Valida que la normalización se aplicó correctamente
+- `load_scaler()`: Método estático para cargar scaler previamente guardado
+- `get_feature_info()`: Obtiene información detallada sobre el proceso
+
+**Flujo de Normalización**:
+1. Preparación y validación de características numéricas
+2. Creación y ajuste del MinMaxScaler con los datos
+3. Guardado del scaler ajustado para uso futuro
+4. Transformación de todas las características al rango [0, 1]
+5. Validación de rangos y verificación de calidad
+
 ## 🔄 Flujo de Datos
 
 ```mermaid
 graph TD
     A[train.py] --> B[Adquisicion.py]
-    B --> C[API Binance]
-    C --> D[Datos OHLCV]
+    B --> C[API Binance - Múltiples Llamadas]
+    C --> D[Datos OHLCV Completos]
     D --> E[DataFrame Procesado]
     E --> F[indicadores.py]
     F --> G[pandas-ta]
     G --> H[DataFrame + Indicadores]
-    H --> I[Normalización - Futuro]
-    I --> J[Entrenamiento - Futuro]
+    H --> I[normalization.py]
+    I --> J[MinMaxScaler]
+    J --> K[DataFrame Normalizado]
+    K --> L[Entrenamiento - Futuro]
     
-    K[config.yaml] --> L[config.py]
-    L --> B
-    L --> F
+    M[config.yaml] --> N[config.py]
+    N --> B
+    N --> F
+    N --> I
     
-    M[Google Cloud Secret Manager] --> L
+    O[Google Cloud Secret Manager] --> N
+    
+    I --> P[models/scaler.pkl]
 ```
 
 ### Transformaciones de Datos
 
-1. **Datos Crudos → Lista de Listas**: Optimización inicial de memoria
-2. **Lista → DataFrame**: Estructura pandas con tipos optimizados
-3. **DataFrame → DataFrame + Índice Temporal**: Establecimiento de timestamps
-4. **DataFrame → DataFrame Limpio**: Eliminación de duplicados y NaNs
-5. **DataFrame → DataFrame + Indicadores**: Adición de indicadores técnicos
-6. **DataFrame + Indicadores → DataFrame Final**: Eliminación de NaNs de indicadores
+1. **Datos Crudos → Lista de Listas**: Optimización inicial de memoria durante descarga secuencial
+2. **Lista → DataFrame**: Estructura pandas con tipos optimizados (`float32`)
+3. **DataFrame → DataFrame + Índice Temporal**: Establecimiento de timestamps con zona horaria
+4. **DataFrame → DataFrame Limpio**: Eliminación de duplicados, interpolación de NaNs
+5. **DataFrame → DataFrame + Indicadores**: Adición de indicadores técnicos (EMA, RSI, ATR, etc.)
+6. **DataFrame + Indicadores → DataFrame Sin NaNs**: Eliminación de NaNs iniciales de indicadores
+7. **DataFrame → DataFrame Normalizado**: Escalado MinMax de todas las características al rango [0, 1]
+8. **Scaler → Archivo Persistente**: Guardado del scaler para uso futuro en producción
 
 ## 🔧 Consideraciones Técnicas
 

@@ -169,6 +169,27 @@ class Config:
         """Dirección límite para interpolación."""
         return self._config['interpolation']['limit_direction']
     
+    # Propiedades para normalización
+    @property
+    def normalization_config(self) -> Dict[str, Any]:
+        """Configuración completa de normalización."""
+        return self._config.get('normalization', {})
+    
+    @property
+    def scaler_type(self) -> str:
+        """Tipo de escalador a usar para normalización."""
+        return self.normalization_config.get('scaler_type', 'MinMaxScaler')
+    
+    @property
+    def feature_range(self) -> List[float]:
+        """Rango de características para normalización."""
+        return self.normalization_config.get('feature_range', [0, 1])
+    
+    @property
+    def scaler_path(self) -> str:
+        """Ruta donde guardar el scaler ajustado."""
+        return self.normalization_config.get('scaler_path', 'models/scaler.pkl')
+    
     # Propiedades para indicadores técnicos
     @property
     def indicators_config(self) -> Dict[str, Any]:

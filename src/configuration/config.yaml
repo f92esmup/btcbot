@@ -42,6 +42,12 @@ interpolation:
   method: "linear"  # Método de interpolación para NaNs
   limit_direction: "both"  # Dirección para fill
 
+# Configuración de normalización
+normalization:
+  scaler_type: "MinMaxScaler"  # Tipo de escalador a usar
+  feature_range: [0, 1]        # Rango de normalización
+  scaler_path: "models/scaler.pkl"  # Ruta donde guardar el scaler
+
 # Configuración de indicadores técnicos
 indicators:
   # Indicadores de tendencia

@@ -9,6 +9,7 @@ import logging
 from datetime import datetime
 from src.data.Adquisicion import Adquisicion
 from src.data.indicadores import Indicadores
+from src.data.normalization import Normalization
 
 
 def setup_logging():
@@ -132,8 +133,30 @@ def main():
         # Actualizar referencia al dataframe
         dataframe = dataframe_with_indicators
         
-        # 3. TODO: Aquí se agregará el entrenamiento del modelo
-        logger.info("=== FASE 3: Entrenamiento del Modelo (Pendiente) ===")
+        # 3. Normalización de Datos
+        logger.info("=== FASE 3: Normalización de Datos ===")
+        normalization = Normalization(dataframe)
+        
+        # Ejecutar proceso de normalización
+        normalized_dataframe, scaler = normalization.main()
+        
+        logger.info(f"Normalización completada exitosamente:")
+        logger.info(f"  - Forma del DataFrame normalizado: {normalized_dataframe.shape}")
+        logger.info(f"  - Rango de valores: [{normalized_dataframe.min().min():.6f}, {normalized_dataframe.max().max():.6f}]")
+        logger.info(f"  - Scaler guardado en: {normalization.scaler_path}")
+        logger.info(f"  - Memoria utilizada: {normalized_dataframe.memory_usage(deep=True).sum() / 1024**2:.2f} MB")
+        
+        # Mostrar información del scaler
+        feature_info = normalization.get_feature_info()
+        logger.info(f"  - Características normalizadas: {feature_info['num_features']}")
+        logger.info(f"  - Tipo de scaler: {feature_info['scaler_type']}")
+        logger.info(f"  - Rango de normalización: {feature_info['feature_range']}")
+        
+        # Actualizar referencia al dataframe
+        dataframe = normalized_dataframe
+        
+        # 4. TODO: Aquí se agregará el entrenamiento del modelo
+        logger.info("=== FASE 4: Entrenamiento del Modelo (Pendiente) ===")
         logger.info("Esta fase se implementará más adelante...")
         
         logger.info("=== Proceso Completado Exitosamente ===")

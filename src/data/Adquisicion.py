@@ -96,36 +96,100 @@ class Adquisicion:
         return self.dataframe
     
     def _download_klines_from_api(self) -> None:
-        """Descarga datos de velas de la API de Binance usando python-binance."""
+        """Descarga datos de velas de la API de Binance usando múltiples llamadas secuenciales."""
         self.logger.info("Descargando datos de la API de Binance...")
         
-        # Convertir fecha de inicio a string compatible con python-binance
-        start_str = self.start_date
+        # Convertir fecha de inicio a timestamp en milisegundos
+        start_date_obj = datetime.strptime(self.start_date, '%Y-%m-%d')
+        start_timestamp = int(start_date_obj.replace(tzinfo=timezone.utc).timestamp() * 1000)
+        current_timestamp = int(datetime.now(timezone.utc).timestamp() * 1000)
         
-        try:
-            # Usar el método de python-binance para obtener futures klines
-            # El método get_historical_klines automáticamente maneja la paginación
-            self.logger.info(f"Descargando datos desde {start_str} hasta ahora...")
+        all_klines = []
+        current_start = start_timestamp
+        call_count = 0
+        
+        self.logger.info(f"Descargando datos desde {self.start_date} hasta ahora...")
+        self.logger.info(f"Límite por llamada: {config.api_call_limit} velas")
+        
+        while current_start < current_timestamp:
+            call_count += 1
+            retry_count = 0
+            max_retries = config.max_api_retries
+            klines = []  # Inicializar klines para cada iteración
             
-            klines = self.client.futures_historical_klines(
-                symbol=self.symbol,
-                interval=self.interval,
-                start_str=start_str,
-                limit=config.api_call_limit
-            )
+            while retry_count <= max_retries:
+                try:
+                    self.logger.info(f"Llamada #{call_count} - Descargando desde timestamp: {current_start}")
+                    
+                    # Hacer llamada a la API con límite configurado
+                    klines = self.client.futures_klines(
+                        symbol=self.symbol,
+                        interval=self.interval,
+                        startTime=current_start,
+                        limit=config.api_call_limit
+                    )
+                    
+                    if not klines:
+                        self.logger.info("No se recibieron más datos de la API")
+                        break
+                    
+                    # Añadir las velas recibidas a la lista total
+                    all_klines.extend(klines)
+                    
+                    # Actualizar el timestamp de inicio para la siguiente llamada
+                    # Usar el timestamp de cierre de la última vela + 1ms
+                    last_close_time = int(klines[-1][6])  # close_time está en índice 6
+                    current_start = last_close_time + 1
+                    
+                    self.logger.info(f"Descargadas {len(klines)} velas. Total acumulado: {len(all_klines)}")
+                    
+                    # Delay entre llamadas para respetar rate limits
+                    if config.retry_delay > 0:
+                        time.sleep(config.retry_delay)
+                    
+                    break  # Salir del bucle de reintentos si fue exitoso
+                    
+                except BinanceAPIException as e:
+                    retry_count += 1
+                    if retry_count > max_retries:
+                        self.logger.error(f"Error de API de Binance después de {max_retries} reintentos: {e}")
+                        raise
+                    else:
+                        self.logger.warning(f"Error de API (intento {retry_count}/{max_retries}): {e}")
+                        time.sleep(config.retry_delay * retry_count)  # Delay incremental
+                        
+                except BinanceRequestException as e:
+                    retry_count += 1
+                    if retry_count > max_retries:
+                        self.logger.error(f"Error de petición a Binance después de {max_retries} reintentos: {e}")
+                        raise
+                    else:
+                        self.logger.warning(f"Error de petición (intento {retry_count}/{max_retries}): {e}")
+                        time.sleep(config.retry_delay * retry_count)  # Delay incremental
+                        
+                except Exception as e:
+                    retry_count += 1
+                    if retry_count > max_retries:
+                        self.logger.error(f"Error inesperado después de {max_retries} reintentos: {e}")
+                        raise
+                    else:
+                        self.logger.warning(f"Error inesperado (intento {retry_count}/{max_retries}): {e}")
+                        time.sleep(config.retry_delay * retry_count)  # Delay incremental
             
-            self.raw_data = klines
-            self.logger.info(f"Descargadas {len(self.raw_data)} velas de la API")
-            
-        except BinanceAPIException as e:
-            self.logger.error(f"Error de API de Binance: {e}")
-            raise
-        except BinanceRequestException as e:
-            self.logger.error(f"Error de petición a Binance: {e}")
-            raise
-        except Exception as e:
-            self.logger.error(f"Error inesperado: {e}")
-            raise
+            # Si no obtuvimos datos en esta iteración, salir del bucle principal
+            if not klines:
+                break
+                
+            # Verificar si ya llegamos al presente para evitar llamadas innecesarias
+            if len(klines) < config.api_call_limit:
+                self.logger.info("Recibidas menos velas que el límite, probablemente llegamos al presente")
+                break
+        
+        self.raw_data = all_klines
+        self.logger.info(f"Descarga completada: {len(self.raw_data)} velas totales en {call_count} llamadas")
+        
+        if not self.raw_data:
+            raise ValueError("No se pudieron descargar datos de la API de Binance")
     
     def _create_and_structure_dataframe(self) -> None:
         """Convierte los datos crudos en un DataFrame estructurado."""
