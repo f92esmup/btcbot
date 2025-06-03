@@ -6,7 +6,8 @@ Maneja la subida y descarga de archivos del scaler a/desde un bucket de GCS.
 import os
 import logging
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Tuple
+import re
 from google.cloud import storage
 from google.cloud.exceptions import NotFound
 import joblib
@@ -372,6 +373,74 @@ class GCSUtils:
         except Exception as e:
             self.logger.error(f"Error durante la sincronización de directorio a GCS: {e}")
             return False
+    
+    def find_latest_checkpoint_gcs_info(self, gcs_checkpoint_folder_prefix: str) -> Optional[Tuple[str, int]]:
+        """
+        Buscar en la carpeta especificada en GCS el conjunto de archivos de checkpoint 
+        con el número de episodio más alto.
+        
+        Args:
+            gcs_checkpoint_folder_prefix (str): Prefijo de la carpeta en GCS donde buscar checkpoints
+                                              (ej: "experiments/RUN_ID/checkpoints/")
+        
+        Returns:
+            Optional[Tuple[str, int]]: Tupla con el prefijo completo del checkpoint más reciente
+                                     y el número de episodio, o None si no se encuentra ningún checkpoint
+        """
+        self.logger.info(f"Buscando checkpoints en GCS bajo el prefijo: {gcs_checkpoint_folder_prefix}")
+        
+        try:
+            # Asegurar que el prefijo termine con '/'
+            if not gcs_checkpoint_folder_prefix.endswith('/'):
+                gcs_checkpoint_folder_prefix += '/'
+            
+            # Obtener bucket y listar blobs
+            bucket = self._get_bucket()
+            blobs = list(bucket.list_blobs(prefix=gcs_checkpoint_folder_prefix))
+            
+            if not blobs:
+                self.logger.info(f"No se encontraron archivos bajo el prefijo: {gcs_checkpoint_folder_prefix}")
+                return None
+            
+            # Patrón regex para extraer el nombre base del checkpoint y el número de episodio
+            # Buscaremos archivos como "checkpoint_episode_123_metadata.pkl"
+            metadata_pattern = re.compile(r"(checkpoint_episode_(\d+))_metadata\.pkl$")
+            
+            latest_episode_number = -1
+            latest_checkpoint_base_name = None
+            
+            # Iterar sobre los blobs buscando archivos de metadata
+            for blob in blobs:
+                blob_name = blob.name
+                # Obtener solo el nombre del archivo (sin el prefijo de carpeta)
+                filename = blob_name.replace(gcs_checkpoint_folder_prefix, '')
+                
+                match = metadata_pattern.search(filename)
+                if match:
+                    checkpoint_base_name = match.group(1)  # "checkpoint_episode_123"
+                    episode_number = int(match.group(2))    # 123
+                    
+                    self.logger.debug(f"Encontrado checkpoint: {checkpoint_base_name} (episodio {episode_number})")
+                    
+                    if episode_number > latest_episode_number:
+                        latest_episode_number = episode_number
+                        latest_checkpoint_base_name = checkpoint_base_name
+            
+            if latest_checkpoint_base_name is None:
+                self.logger.info("No se encontraron checkpoints válidos en GCS")
+                return None
+            
+            # Construir el prefijo completo del checkpoint más reciente
+            latest_checkpoint_full_prefix = f"{gcs_checkpoint_folder_prefix}{latest_checkpoint_base_name}"
+            
+            self.logger.info(f"Checkpoint más reciente encontrado: {latest_checkpoint_base_name} (episodio {latest_episode_number})")
+            self.logger.info(f"Prefijo completo: {latest_checkpoint_full_prefix}")
+            
+            return (latest_checkpoint_full_prefix, latest_episode_number)
+            
+        except Exception as e:
+            self.logger.error(f"Error al buscar checkpoints en GCS: {e}")
+            return None
 
 
 # Instancia global para facilitar el uso

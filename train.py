@@ -10,8 +10,9 @@ from datetime import datetime
 import numpy as np
 import torch
 from pathlib import Path
-from typing import Dict, Any
+from typing import Dict, Any, Optional, Tuple
 import time
+import re
 from torch.utils.tensorboard import SummaryWriter
 
 from src.data.Adquisicion import Adquisicion
@@ -311,7 +312,8 @@ def evaluate_agent(agent: TransformerSACAgent, env: FuturesTradingEnv,
 def train_agent(agent: TransformerSACAgent, env: FuturesTradingEnv, 
                num_episodes: int, eval_frequency: int, eval_episodes: int,
                save_frequency: int, logger, writer: SummaryWriter,
-               model_prefix: str = "models", log_dir: Path = None):
+               model_prefix: str = "models", log_dir: Path = None,
+               start_episode: int = 0, model_save_base_prefix_arg: str = None):
     """
     Entrena el agente SAC.
     
@@ -326,8 +328,13 @@ def train_agent(agent: TransformerSACAgent, env: FuturesTradingEnv,
         writer: TensorBoard SummaryWriter
         model_prefix: Prefijo para nombres de modelo (usado en GCS)
         log_dir: Directorio de logs de TensorBoard para sync a GCS
+        start_episode: Episodio inicial (para resumir entrenamiento)
+        model_save_base_prefix_arg: Prefijo base para guardar checkpoints
     """
-    logger.info(f"Iniciando entrenamiento por {num_episodes} episodios...")
+    logger.info(f"Iniciando entrenamiento por {num_episodes} episodios (desde episodio {start_episode})...")
+    
+    # Determinar el prefijo base para guardado de checkpoints
+    checkpoint_save_prefix = model_save_base_prefix_arg or model_prefix
     
     # Métricas de entrenamiento
     episode_returns = []
@@ -348,7 +355,7 @@ def train_agent(agent: TransformerSACAgent, env: FuturesTradingEnv,
     start_time = time.time()
     global_trade_counter = 0
     
-    for episode in range(num_episodes):
+    for episode in range(start_episode, num_episodes):
         episode_start_time = time.time()
         
         # Reset del entorno
@@ -541,10 +548,11 @@ def train_agent(agent: TransformerSACAgent, env: FuturesTradingEnv,
         # Guardado periódico
         if (episode + 1) % save_frequency == 0:
             if config.storage_mode == "gcp":
-                checkpoint_path = f"{model_prefix}/checkpoint_episode_{episode + 1}.pth"
+                checkpoint_path = f"{checkpoint_save_prefix}/checkpoint_episode_{episode + 1}"
+                agent.save_models(checkpoint_path)
             else:
-                checkpoint_path = models_dir / f"checkpoint_episode_{episode + 1}.pth"
-            agent.save(checkpoint_path)
+                checkpoint_path = models_dir / f"checkpoint_episode_{episode + 1}"
+                agent.save_models(str(checkpoint_path))
             logger.info(f"Checkpoint guardado: {checkpoint_path}")
     
     # Guardado final
@@ -596,6 +604,80 @@ def validate_start_date(date_string: str) -> bool:
         return True
     except ValueError:
         return False
+
+
+def find_latest_checkpoint_info(checkpoint_search_base: str, logger: logging.Logger) -> Optional[Tuple[str, int]]:
+    """
+    Orquestar la búsqueda del último checkpoint, ya sea localmente o en GCS.
+    
+    Args:
+        checkpoint_search_base (str): Si es local, es la ruta al directorio base de modelos.
+                                    Si es GCS, es el prefijo de la carpeta de checkpoints en GCS.
+        logger (logging.Logger): Logger para mensajes
+    
+    Returns:
+        Optional[Tuple[str, int]]: Tupla con el prefijo completo para cargar el checkpoint
+                                 y el número de episodio, o None si no se encuentra ningún checkpoint
+    """
+    logger.info(f"Buscando checkpoints en: {checkpoint_search_base}")
+    
+    try:
+        if config.storage_mode == "gcp":
+            # Modo GCS: usar GCSUtils para buscar
+            from src.configuration.gcs_utils import gcs_utils
+            return gcs_utils.find_latest_checkpoint_gcs_info(checkpoint_search_base)
+            
+        else:
+            # Modo local: buscar en directorio local
+            checkpoint_dir = Path(checkpoint_search_base)
+            
+            if not checkpoint_dir.exists():
+                logger.info(f"Directorio de checkpoints no existe: {checkpoint_search_base}")
+                return None
+            
+            # Buscar archivos de metadata de checkpoint usando glob
+            metadata_files = list(checkpoint_dir.glob("checkpoint_episode_*_metadata.pkl"))
+            
+            if not metadata_files:
+                logger.info(f"No se encontraron checkpoints en: {checkpoint_search_base}")
+                return None
+            
+            # Patrón regex para extraer el nombre base del checkpoint y el número de episodio
+            metadata_pattern = re.compile(r"(checkpoint_episode_(\d+))_metadata\.pkl$")
+            
+            latest_episode_number = -1
+            latest_checkpoint_base_name = None
+            
+            # Iterar sobre los archivos encontrados
+            for metadata_file in metadata_files:
+                filename = metadata_file.name
+                match = metadata_pattern.search(filename)
+                
+                if match:
+                    checkpoint_base_name = match.group(1)  # "checkpoint_episode_123"
+                    episode_number = int(match.group(2))    # 123
+                    
+                    logger.debug(f"Encontrado checkpoint local: {checkpoint_base_name} (episodio {episode_number})")
+                    
+                    if episode_number > latest_episode_number:
+                        latest_episode_number = episode_number
+                        latest_checkpoint_base_name = checkpoint_base_name
+            
+            if latest_checkpoint_base_name is None:
+                logger.info("No se encontraron checkpoints válidos localmente")
+                return None
+            
+            # Construir el prefijo completo del checkpoint más reciente
+            latest_checkpoint_full_prefix = str(checkpoint_dir / latest_checkpoint_base_name)
+            
+            logger.info(f"Checkpoint local más reciente: {latest_checkpoint_base_name} (episodio {latest_episode_number})")
+            logger.info(f"Prefijo completo: {latest_checkpoint_full_prefix}")
+            
+            return (latest_checkpoint_full_prefix, latest_episode_number)
+            
+    except Exception as e:
+        logger.error(f"Error al buscar checkpoints: {e}")
+        return None
 
 
 def main():
@@ -728,8 +810,63 @@ def main():
         # Crear y entrenar agente
         agent = create_sac_agent(env, device, logger)
         
-        # Generar nombre de modelo basado en los parámetros de entrenamiento
-        model_prefix = f"models/{args.symbol}_{args.interval}_{current_time}"
+        # Variables para resumir entrenamiento
+        start_episode = 0
+        model_save_base_prefix = f"models/{args.symbol}_{args.interval}_{current_time}"
+        
+        # Buscar checkpoint previo para resumir entrenamiento
+        logger.info("\n=== BÚSQUEDA DE CHECKPOINT PARA RESUMIR ENTRENAMIENTO ===")
+        
+        if config.storage_mode == "gcp":
+            checkpoint_search_base = "models"  # Buscar en la carpeta de modelos en GCS
+        else:
+            checkpoint_search_base = "models"  # Buscar en directorio local models/
+        
+        checkpoint_info = find_latest_checkpoint_info(checkpoint_search_base, logger)
+        
+        if checkpoint_info:
+            checkpoint_prefix, latest_episode = checkpoint_info
+            
+            logger.info(f"Se encontró checkpoint del episodio {latest_episode}")
+            logger.info(f"Ubicación: {checkpoint_prefix}")
+            
+            # Preguntar al usuario si desea resumir
+            response = input(f"\n¿Desea resumir el entrenamiento desde el episodio {latest_episode}? (y/n): ").strip().lower()
+            
+            if response in ['y', 'yes', 'sí', 'si', 's']:
+                try:
+                    logger.info(f"Cargando checkpoint desde: {checkpoint_prefix}")
+                    agent.load_models(checkpoint_prefix)
+                    
+                    start_episode = latest_episode
+                    model_save_base_prefix = checkpoint_prefix.rsplit('_episode_', 1)[0] if '_episode_' in checkpoint_prefix else model_save_base_prefix
+                    
+                    logger.info(f"✅ Checkpoint cargado exitosamente")
+                    logger.info(f"  - Episodio inicial: {start_episode}")
+                    logger.info(f"  - Total steps: {agent.total_steps}")
+                    logger.info(f"  - Learning steps: {agent.learning_steps}")
+                    logger.info(f"  - Prefijo de guardado: {model_save_base_prefix}")
+                    
+                except Exception as e:
+                    logger.error(f"❌ Error al cargar checkpoint: {e}")
+                    logger.info("Continuando con entrenamiento desde cero...")
+                    start_episode = 0
+            else:
+                logger.info("Iniciando entrenamiento desde cero (no se cargó checkpoint)")
+        else:
+            logger.info("No se encontraron checkpoints previos. Iniciando entrenamiento desde cero.")
+        
+        logger.info(f"\n=== CONFIGURACIÓN FINAL DE ENTRENAMIENTO ===")
+        logger.info(f"  - Episodio inicial: {start_episode}")
+        logger.info(f"  - Episodios totales: {args.episodes}")
+        logger.info(f"  - Episodios por entrenar: {args.episodes - start_episode}")
+        logger.info(f"  - Prefijo de guardado: {model_save_base_prefix}")
+        
+        # Verificar que queden episodios por entrenar
+        if start_episode >= args.episodes:
+            logger.warning(f"El checkpoint ya alcanzó o superó el número de episodios objetivo ({args.episodes})")
+            logger.info("No hay episodios adicionales para entrenar. Terminando...")
+            return
         
         # Ejecutar entrenamiento
         train_agent(
@@ -741,8 +878,10 @@ def main():
             save_frequency=args.save_frequency,
             logger=logger,
             writer=writer,
-            model_prefix=model_prefix,
-            log_dir=log_dir
+            model_prefix=f"models/{args.symbol}_{args.interval}_{current_time}",
+            log_dir=log_dir,
+            start_episode=start_episode,
+            model_save_base_prefix_arg=model_save_base_prefix
         )
         
         logger.info("=== Proceso Completado Exitosamente ===")
