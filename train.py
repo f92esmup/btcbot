@@ -20,6 +20,7 @@ from src.data.normalization import Normalization
 from src.entorno.environment import FuturesTradingEnv
 from src.agente.agent import TransformerSACAgent
 from src.configuration.config import config
+from src.configuration.gcs_utils import GCSUtils
 
 
 def setup_logging():
@@ -309,7 +310,8 @@ def evaluate_agent(agent: TransformerSACAgent, env: FuturesTradingEnv,
 
 def train_agent(agent: TransformerSACAgent, env: FuturesTradingEnv, 
                num_episodes: int, eval_frequency: int, eval_episodes: int,
-               save_frequency: int, logger, writer: SummaryWriter):
+               save_frequency: int, logger, writer: SummaryWriter,
+               model_prefix: str = "models", log_dir: Path = None):
     """
     Entrena el agente SAC.
     
@@ -322,6 +324,8 @@ def train_agent(agent: TransformerSACAgent, env: FuturesTradingEnv,
         save_frequency: Frecuencia de guardado
         logger: Logger para mensajes
         writer: TensorBoard SummaryWriter
+        model_prefix: Prefijo para nombres de modelo (usado en GCS)
+        log_dir: Directorio de logs de TensorBoard para sync a GCS
     """
     logger.info(f"Iniciando entrenamiento por {num_episodes} episodios...")
     
@@ -334,9 +338,10 @@ def train_agent(agent: TransformerSACAgent, env: FuturesTradingEnv,
     alpha_losses = []
     alpha_values = []
     
-    # Crear directorio para modelos
-    models_dir = Path("models")
-    models_dir.mkdir(exist_ok=True)
+    # Crear directorio para modelos (solo si no es GCS)
+    if config.storage_mode != "gcp":
+        models_dir = Path("models")
+        models_dir.mkdir(exist_ok=True)
     
     # Variables para tracking
     best_eval_return = float('-inf')
@@ -526,18 +531,27 @@ def train_agent(agent: TransformerSACAgent, env: FuturesTradingEnv,
             # Guardar mejor modelo
             if eval_metrics['mean_return'] > best_eval_return:
                 best_eval_return = eval_metrics['mean_return']
-                best_model_path = models_dir / "best_model.pth"
+                if config.storage_mode == "gcp":
+                    best_model_path = f"{model_prefix}/best_model.pth"
+                else:
+                    best_model_path = models_dir / "best_model.pth"
                 agent.save(best_model_path)
                 logger.info(f"  - Nuevo mejor modelo guardado: {best_model_path}")
         
         # Guardado periódico
         if (episode + 1) % save_frequency == 0:
-            checkpoint_path = models_dir / f"checkpoint_episode_{episode + 1}.pth"
+            if config.storage_mode == "gcp":
+                checkpoint_path = f"{model_prefix}/checkpoint_episode_{episode + 1}.pth"
+            else:
+                checkpoint_path = models_dir / f"checkpoint_episode_{episode + 1}.pth"
             agent.save(checkpoint_path)
             logger.info(f"Checkpoint guardado: {checkpoint_path}")
     
     # Guardado final
-    final_model_path = models_dir / "final_model.pth"
+    if config.storage_mode == "gcp":
+        final_model_path = f"{model_prefix}/final_model.pth"
+    else:
+        final_model_path = models_dir / "final_model.pth"
     agent.save(final_model_path)
     
     total_time = time.time() - start_time
@@ -550,6 +564,21 @@ def train_agent(agent: TransformerSACAgent, env: FuturesTradingEnv,
     
     # Cerrar TensorBoard writer
     writer.close()
+    
+    # Sincronizar logs de TensorBoard a GCS si está configurado
+    if config.storage_mode == "gcp" and log_dir:
+        try:
+            logger.info(f"Sincronizando logs de TensorBoard a GCS...")
+            gcs_utils = GCSUtils()
+            tensorboard_prefix = f"tensorboard_logs/{log_dir.name}"
+            gcs_utils.upload_directory_to_gcs(
+                local_directory=str(log_dir),
+                gcs_prefix=tensorboard_prefix
+            )
+            logger.info(f"Logs de TensorBoard sincronizados exitosamente a gs://{config.gcs_bucket_name}/{tensorboard_prefix}")
+        except Exception as e:
+            logger.error(f"Error al sincronizar logs de TensorBoard a GCS: {e}")
+            logger.warning("El entrenamiento se completó correctamente, pero los logs no se pudieron sincronizar")
 
 
 def validate_start_date(date_string: str) -> bool:
@@ -699,6 +728,9 @@ def main():
         # Crear y entrenar agente
         agent = create_sac_agent(env, device, logger)
         
+        # Generar nombre de modelo basado en los parámetros de entrenamiento
+        model_prefix = f"models/{args.symbol}_{args.interval}_{current_time}"
+        
         # Ejecutar entrenamiento
         train_agent(
             agent=agent,
@@ -708,7 +740,9 @@ def main():
             eval_episodes=args.eval_episodes,
             save_frequency=args.save_frequency,
             logger=logger,
-            writer=writer
+            writer=writer,
+            model_prefix=model_prefix,
+            log_dir=log_dir
         )
         
         logger.info("=== Proceso Completado Exitosamente ===")

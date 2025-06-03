@@ -231,6 +231,147 @@ class GCSUtils:
         except Exception as e:
             self.logger.error(f"Error al guardar scaler en GCS: {e}")
             return False
+    
+    def upload_file_to_gcs(self, local_path: str, gcs_blob_name: str) -> bool:
+        """
+        Subir un archivo local genérico al bucket de GCS.
+        
+        Args:
+            local_path (str): Ruta local del archivo a subir
+            gcs_blob_name (str): Ruta completa del blob en GCS (ej: experiments/RUN_ID/checkpoints/actor.pth)
+            
+        Returns:
+            bool: True si la subida fue exitosa, False en caso contrario
+        """
+        self.logger.info(f"Subiendo archivo {local_path} a GCS como {gcs_blob_name}...")
+        
+        try:
+            # Verificar que el archivo local existe
+            if not os.path.exists(local_path):
+                self.logger.error(f"Archivo local no encontrado: {local_path}")
+                return False
+            
+            # Obtener bucket y blob
+            bucket = self._get_bucket()
+            blob = bucket.blob(gcs_blob_name)
+            
+            # Subir el archivo
+            blob.upload_from_filename(local_path)
+            
+            self.logger.info(f"Archivo subido exitosamente a gs://{self.bucket_name}/{gcs_blob_name}")
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"Error al subir archivo a GCS: {e}")
+            return False
+    
+    def download_file_from_gcs(self, gcs_blob_name: str, local_path: str) -> bool:
+        """
+        Descargar un archivo desde GCS a una ruta local.
+        
+        Args:
+            gcs_blob_name (str): Ruta completa del blob en GCS
+            local_path (str): Ruta local donde guardar el archivo
+            
+        Returns:
+            bool: True si la descarga fue exitosa, False en caso contrario
+        """
+        self.logger.info(f"Descargando archivo desde GCS {gcs_blob_name} a {local_path}...")
+        
+        try:
+            # Obtener bucket y blob
+            bucket = self._get_bucket()
+            blob = bucket.blob(gcs_blob_name)
+            
+            # Verificar que el blob existe
+            if not blob.exists():
+                self.logger.warning(f"Archivo no existe en GCS: gs://{self.bucket_name}/{gcs_blob_name}")
+                return False
+            
+            # Crear directorio local si no existe
+            local_dir = Path(local_path).parent
+            local_dir.mkdir(parents=True, exist_ok=True)
+            
+            # Descargar el archivo
+            blob.download_to_filename(local_path)
+            
+            self.logger.info(f"Archivo descargado exitosamente desde gs://{self.bucket_name}/{gcs_blob_name}")
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"Error al descargar archivo desde GCS: {e}")
+            return False
+    
+    def file_exists_in_gcs(self, gcs_blob_name: str) -> bool:
+        """
+        Verificar si un archivo específico (blob) existe en GCS.
+        
+        Args:
+            gcs_blob_name (str): Ruta completa del blob en GCS
+            
+        Returns:
+            bool: True si el archivo existe, False en caso contrario
+        """
+        try:
+            bucket = self._get_bucket()
+            blob = bucket.blob(gcs_blob_name)
+            return blob.exists()
+            
+        except Exception as e:
+            self.logger.error(f"Error al verificar existencia de archivo en GCS: {e}")
+            return False
+    
+    def upload_directory_to_gcs(self, local_directory_path: str, gcs_prefix: str) -> bool:
+        """
+        Subir recursivamente el contenido de un directorio local a un prefijo específico en GCS.
+        
+        Args:
+            local_directory_path (str): Ruta del directorio local a subir
+            gcs_prefix (str): Prefijo en GCS donde subir los archivos (ej: experiments/RUN_ID/tensorboard_logs)
+            
+        Returns:
+            bool: True si la sincronización fue exitosa, False en caso contrario
+        """
+        self.logger.info(f"Iniciando sincronización de directorio {local_directory_path} a GCS bajo el prefijo {gcs_prefix}...")
+        
+        try:
+            local_path = Path(local_directory_path)
+            
+            # Verificar que el directorio local existe
+            if not local_path.exists():
+                self.logger.error(f"Directorio local no encontrado: {local_directory_path}")
+                return False
+            
+            if not local_path.is_dir():
+                self.logger.error(f"La ruta especificada no es un directorio: {local_directory_path}")
+                return False
+            
+            files_uploaded = 0
+            files_failed = 0
+            
+            # Iterar sobre todos los archivos recursivamente
+            for file_path in local_path.rglob('*'):
+                if file_path.is_file():
+                    # Construir la ruta relativa desde el directorio base
+                    relative_path = file_path.relative_to(local_path)
+                    
+                    # Construir el nombre del blob en GCS
+                    gcs_blob_name = f"{gcs_prefix}/{relative_path.as_posix()}"
+                    
+                    # Subir el archivo
+                    if self.upload_file_to_gcs(str(file_path), gcs_blob_name):
+                        files_uploaded += 1
+                    else:
+                        files_failed += 1
+                        self.logger.warning(f"Fallo al subir archivo: {file_path}")
+            
+            self.logger.info(f"Sincronización completada. Archivos subidos: {files_uploaded}, Fallos: {files_failed}")
+            
+            return files_failed == 0
+            
+        except Exception as e:
+            self.logger.error(f"Error durante la sincronización de directorio a GCS: {e}")
+            return False
 
 
 # Instancia global para facilitar el uso

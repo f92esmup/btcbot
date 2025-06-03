@@ -11,6 +11,8 @@ from typing import Dict, Any, Tuple, Optional, Union
 from pathlib import Path
 import pickle
 import logging
+import tempfile
+import os
 
 from .networks import ActorNetwork, CriticNetwork
 from .replay_buffer import ReplayBuffer
@@ -503,6 +505,147 @@ class TransformerSACAgent:
             self.alpha_optimizer.load_state_dict(torch.load(f"{filepath_prefix}_alpha_optimizer.pth", map_location=self.device))
         
         logger.info(f"Modelos cargados desde {filepath_prefix}")
+    
+    def save(self, filepath: Union[str, Path]) -> None:
+        """
+        Guarda el modelo usando el modo de storage configurado.
+        Wrapper que maneja tanto almacenamiento local como GCS.
+        
+        Args:
+            filepath: Ruta del archivo donde guardar (Path o string)
+        """
+        filepath_str = str(filepath)
+        
+        # Verificar modo de storage
+        if config.storage_mode == "gcp":
+            # Modo GCS: usar archivos temporales y subir a GCS
+            from ..configuration.gcs_utils import GCSUtils
+            gcs_utils = GCSUtils()
+            
+            with tempfile.TemporaryDirectory() as temp_dir:
+                # Generar prefijo temporal para archivos
+                temp_prefix = os.path.join(temp_dir, "model")
+                
+                # Guardar modelos localmente en directorio temporal
+                self.save_models(temp_prefix)
+                
+                # Subir cada archivo a GCS
+                # Extraer nombre base del archivo para usar como prefijo en GCS
+                base_name = Path(filepath).stem
+                gcs_prefix = f"models/{base_name}"
+                
+                # Lista de archivos que se generan en save_models
+                model_files = [
+                    f"{temp_prefix}_actor.pth",
+                    f"{temp_prefix}_critic_1.pth", 
+                    f"{temp_prefix}_critic_2.pth",
+                    f"{temp_prefix}_critic_target_1.pth",
+                    f"{temp_prefix}_critic_target_2.pth",
+                    f"{temp_prefix}_actor_optimizer.pth",
+                    f"{temp_prefix}_critic_1_optimizer.pth",
+                    f"{temp_prefix}_critic_2_optimizer.pth",
+                    f"{temp_prefix}_log_alpha.pth",
+                    f"{temp_prefix}_metadata.pkl"
+                ]
+                
+                # Agregar archivo del optimizador de alpha si aplica
+                if self.learn_alpha:
+                    model_files.append(f"{temp_prefix}_alpha_optimizer.pth")
+                
+                # Subir cada archivo a GCS
+                success_count = 0
+                for local_file in model_files:
+                    if os.path.exists(local_file):
+                        # Generar nombre del blob en GCS
+                        file_suffix = os.path.basename(local_file).replace("model", "")
+                        gcs_blob_name = f"{gcs_prefix}{file_suffix}"
+                        
+                        if gcs_utils.upload_file_to_gcs(local_file, gcs_blob_name):
+                            success_count += 1
+                        else:
+                            logger.error(f"Error al subir {local_file} a GCS como {gcs_blob_name}")
+                
+                if success_count == len([f for f in model_files if os.path.exists(f)]):
+                    logger.info(f"Modelo guardado exitosamente en GCS: {gcs_prefix}")
+                else:
+                    logger.error(f"Error al guardar modelo en GCS. Solo {success_count} de {len(model_files)} archivos subidos.")
+        else:
+            # Modo local: usar save_models directamente
+            # Remover extensión .pth si existe para que save_models funcione correctamente
+            filepath_prefix = str(filepath).replace('.pth', '')
+            self.save_models(filepath_prefix)
+    
+    def load(self, filepath: Union[str, Path]) -> None:
+        """
+        Carga el modelo usando el modo de storage configurado.
+        Wrapper que maneja tanto almacenamiento local como GCS.
+        
+        Args:
+            filepath: Ruta del archivo desde donde cargar (Path o string)
+        """
+        filepath_str = str(filepath)
+        
+        # Verificar modo de storage  
+        if config.storage_mode == "gcp":
+            # Modo GCS: descargar archivos de GCS a directorio temporal
+            from ..configuration.gcs_utils import GCSUtils
+            gcs_utils = GCSUtils()
+            
+            with tempfile.TemporaryDirectory() as temp_dir:
+                # Generar prefijo temporal para archivos
+                temp_prefix = os.path.join(temp_dir, "model")
+                
+                # Extraer nombre base del archivo para usar como prefijo en GCS
+                base_name = Path(filepath).stem
+                gcs_prefix = f"models/{base_name}"
+                
+                # Lista de archivos que necesitamos descargar
+                model_files = [
+                    ("_actor.pth", f"{temp_prefix}_actor.pth"),
+                    ("_critic_1.pth", f"{temp_prefix}_critic_1.pth"),
+                    ("_critic_2.pth", f"{temp_prefix}_critic_2.pth"), 
+                    ("_critic_target_1.pth", f"{temp_prefix}_critic_target_1.pth"),
+                    ("_critic_target_2.pth", f"{temp_prefix}_critic_target_2.pth"),
+                    ("_actor_optimizer.pth", f"{temp_prefix}_actor_optimizer.pth"),
+                    ("_critic_1_optimizer.pth", f"{temp_prefix}_critic_1_optimizer.pth"),
+                    ("_critic_2_optimizer.pth", f"{temp_prefix}_critic_2_optimizer.pth"),
+                    ("_log_alpha.pth", f"{temp_prefix}_log_alpha.pth"),
+                    ("_metadata.pkl", f"{temp_prefix}_metadata.pkl")
+                ]
+                
+                # Agregar archivo del optimizador de alpha si aplica
+                if self.learn_alpha:
+                    model_files.append(("_alpha_optimizer.pth", f"{temp_prefix}_alpha_optimizer.pth"))
+                
+                # Descargar cada archivo de GCS
+                success_count = 0
+                for file_suffix, local_file in model_files:
+                    gcs_blob_name = f"{gcs_prefix}{file_suffix}"
+                    
+                    # Verificar si el archivo existe en GCS antes de intentar descargarlo
+                    if gcs_utils.file_exists_in_gcs(gcs_blob_name):
+                        if gcs_utils.download_file_from_gcs(gcs_blob_name, local_file):
+                            success_count += 1
+                        else:
+                            logger.error(f"Error al descargar {gcs_blob_name} de GCS a {local_file}")
+                    else:
+                        # Para archivos opcionales como alpha_optimizer, no es un error si no existe
+                        if file_suffix == "_alpha_optimizer.pth" and not self.learn_alpha:
+                            continue
+                        logger.error(f"Archivo {gcs_blob_name} no existe en GCS")
+                
+                if success_count >= len(model_files) - (0 if self.learn_alpha else 1):  # Ajustar por alpha_optimizer opcional
+                    # Cargar modelos desde archivos temporales
+                    self.load_models(temp_prefix)
+                    logger.info(f"Modelo cargado exitosamente desde GCS: {gcs_prefix}")
+                else:
+                    logger.error(f"Error al cargar modelo desde GCS. Solo {success_count} de {len(model_files)} archivos descargados.")
+                    raise FileNotFoundError(f"No se pudo cargar el modelo completo desde GCS: {gcs_prefix}")
+        else:
+            # Modo local: usar load_models directamente
+            # Remover extensión .pth si existe para que load_models funcione correctamente  
+            filepath_prefix = str(filepath).replace('.pth', '')
+            self.load_models(filepath_prefix)
     
     def get_stats(self) -> Dict[str, Any]:
         """
