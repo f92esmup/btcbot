@@ -1,0 +1,88 @@
+# Dockerfile.train
+
+# -----------------------------------------------------------------------------
+# Etapa Base: Imagen de PyTorch con CUDA y cuDNN
+# -----------------------------------------------------------------------------
+# Selecciona una imagen base de PyTorch que coincida con tu versión de torch
+# y que incluya CUDA y cuDNN.
+# Ejemplo: PyTorch 2.2.0 con CUDA 12.1 y cuDNN 8.
+# Puedes encontrar más tags en: https://hub.docker.com/r/pytorch/pytorch/tags
+FROM pytorch/pytorch:2.2.0-cuda12.1-cudnn8-devel
+
+# -----------------------------------------------------------------------------
+# Variables de Entorno
+# -----------------------------------------------------------------------------
+# Previene que Python genere archivos .pyc y __pycache__
+ENV PYTHONDONTWRITEBYTECODE=1
+# Asegura que la salida de Python se muestre inmediatamente
+ENV PYTHONUNBUFFERED=1
+
+# Establece la codificación por defecto para evitar problemas con caracteres especiales
+ENV LANG=C.UTF-8
+ENV LC_ALL=C.UTF-8
+
+# Configuración de timezone (opcional)
+ENV TZ=UTC
+
+# -----------------------------------------------------------------------------
+# Instalación de Dependencias del Sistema
+# -----------------------------------------------------------------------------
+# Actualiza los paquetes y instala dependencias necesarias
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    curl \
+    git \
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean
+
+# -----------------------------------------------------------------------------
+# Directorio de Trabajo
+# -----------------------------------------------------------------------------
+WORKDIR /app
+
+# -----------------------------------------------------------------------------
+# Instalación de Dependencias de Python
+# -----------------------------------------------------------------------------
+# Copia primero el archivo de requerimientos para aprovechar el cache de Docker
+COPY requirements.txt .
+
+# Actualiza pip e instala las dependencias
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt
+
+# -----------------------------------------------------------------------------
+# Copia del Código Fuente del Proyecto
+# -----------------------------------------------------------------------------
+# Copia todo el contenido del directorio actual (donde está el Dockerfile)
+# al directorio de trabajo /app en el contenedor.
+COPY . .
+
+# -----------------------------------------------------------------------------
+# Creación de Directorios para Persistencia
+# -----------------------------------------------------------------------------
+# Crea directorios que serán montados desde el host
+RUN mkdir -p /app/runs /app/models /app/logs
+
+# -----------------------------------------------------------------------------
+# Configuración de Permisos
+# -----------------------------------------------------------------------------
+# Asegura que el directorio de trabajo tenga los permisos correctos
+RUN chmod -R 755 /app
+
+# -----------------------------------------------------------------------------
+# Health Check (Opcional)
+# -----------------------------------------------------------------------------
+# Verifica que PyTorch puede detectar CUDA
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD python -c "import torch; print(f'CUDA available: {torch.cuda.is_available()}'); print(f'Device count: {torch.cuda.device_count()}')" || exit 1
+
+# -----------------------------------------------------------------------------
+# Punto de Entrada y Comando por Defecto
+# -----------------------------------------------------------------------------
+# Hace que el script train.py sea el ejecutable por defecto.
+ENTRYPOINT ["python", "train.py"]
+
+# Argumentos por defecto para train.py.
+# Estos pueden ser sobrescritos al ejecutar 'docker run'.
+# Dejamos vacío para que el usuario proporcione todos los parámetros necesarios.
+CMD []

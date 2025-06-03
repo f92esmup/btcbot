@@ -118,8 +118,8 @@ environment:
   usar_log1p_en_pnl: true            # Si aplicar log1p al PNL para suavizar
   
   # Condiciones de finalización
-  usar_max_pasos_episodio: true       # Si limitar pasos por episodio
-  max_pasos_episodio: 1000           # Máximo pasos por episodio (si se usa)
+  usar_max_pasos_episodio: false      # Si limitar pasos por episodio
+  max_pasos_episodio: 2000           # Máximo pasos por episodio (si se usa)
 
 # Configuración del Agente SAC con Transformer
 agent:
