@@ -398,6 +398,7 @@ class FuturesTradingEnv(gym.Env):
             'precio_entrada': self.posicion_actual['precio_entrada'],
             'precio_salida': precio_ejecucion,
             'tamaño_activo': self.posicion_actual['tamaño_activo'],
+            'margen_usado': self.posicion_actual['margen_usado'],
             'pnl_abs': pnl_neto,
             'roe': roe_operacion,
             'pasos_duracion': self.posicion_actual['pasos_en_posicion'],

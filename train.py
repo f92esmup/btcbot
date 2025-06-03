@@ -12,6 +12,7 @@ import torch
 from pathlib import Path
 from typing import Dict, Any
 import time
+from torch.utils.tensorboard import SummaryWriter
 
 from src.data.Adquisicion import Adquisicion
 from src.data.indicadores import Indicadores
@@ -232,7 +233,7 @@ def create_sac_agent(env: FuturesTradingEnv, device: torch.device, logger) -> Tr
 
 
 def evaluate_agent(agent: TransformerSACAgent, env: FuturesTradingEnv, 
-                  num_episodes: int, logger) -> Dict[str, float]:
+                  num_episodes: int, logger, writer: SummaryWriter = None, global_step: int = None) -> Dict[str, float]:
     """
     Evalúa el rendimiento del agente.
     
@@ -293,12 +294,22 @@ def evaluate_agent(agent: TransformerSACAgent, env: FuturesTradingEnv,
         'total_trades': total_trades / num_episodes
     }
     
+    # Log to TensorBoard if writer provided
+    if writer and global_step is not None:
+        writer.add_scalar('Evaluation/Mean_Return', metrics['mean_return'], global_step)
+        writer.add_scalar('Evaluation/Std_Return', metrics['std_return'], global_step)
+        writer.add_scalar('Evaluation/Mean_Profit_Pct', metrics['mean_profit_pct'], global_step)
+        writer.add_scalar('Evaluation/Std_Profit_Pct', metrics['std_profit_pct'], global_step)
+        writer.add_scalar('Evaluation/Mean_Episode_Length', metrics['mean_episode_length'], global_step)
+        writer.add_scalar('Evaluation/Win_Rate', metrics['win_rate'] * 100, global_step)
+        writer.add_scalar('Evaluation/Avg_Trades_per_Episode', metrics['total_trades'], global_step)
+    
     return metrics
 
 
 def train_agent(agent: TransformerSACAgent, env: FuturesTradingEnv, 
                num_episodes: int, eval_frequency: int, eval_episodes: int,
-               save_frequency: int, logger):
+               save_frequency: int, logger, writer: SummaryWriter):
     """
     Entrena el agente SAC.
     
@@ -310,6 +321,7 @@ def train_agent(agent: TransformerSACAgent, env: FuturesTradingEnv,
         eval_episodes: Episodios para evaluación
         save_frequency: Frecuencia de guardado
         logger: Logger para mensajes
+        writer: TensorBoard SummaryWriter
     """
     logger.info(f"Iniciando entrenamiento por {num_episodes} episodios...")
     
@@ -329,6 +341,7 @@ def train_agent(agent: TransformerSACAgent, env: FuturesTradingEnv,
     # Variables para tracking
     best_eval_return = float('-inf')
     start_time = time.time()
+    global_trade_counter = 0
     
     for episode in range(num_episodes):
         episode_start_time = time.time()
@@ -338,6 +351,19 @@ def train_agent(agent: TransformerSACAgent, env: FuturesTradingEnv,
         episode_return = 0
         episode_length = 0
         initial_balance = env.balance_actual
+        initial_equity = env.equity_actual
+        max_equity_episode = env.equity_actual
+        
+        # Métricas de trading para el episodio actual
+        episode_trades_count = 0
+        episode_long_trades = 0
+        episode_short_trades = 0
+        episode_winning_trades = 0
+        episode_total_pnl_realized_abs = 0.0
+        episode_total_roe_realized = 0.0
+        episode_margins_used = []
+        
+        num_trades_inicio_episodio = len(env.historial_trades)
         
         # Variables para losses del episodio
         ep_actor_losses = []
@@ -365,10 +391,53 @@ def train_agent(agent: TransformerSACAgent, env: FuturesTradingEnv,
                     ep_critic1_losses.append(losses['critic_1_loss'])
                     ep_critic2_losses.append(losses['critic_2_loss'])
                     ep_alpha_losses.append(losses['alpha_loss'])
+                    
+                    # Log losses por cada paso de aprendizaje
+                    writer.add_scalar('Agent/Actor_Loss_step', losses['actor_loss'], agent.learning_steps)
+                    writer.add_scalar('Agent/Critic_1_Loss_step', losses['critic_1_loss'], agent.learning_steps)
+                    writer.add_scalar('Agent/Critic_2_Loss_step', losses['critic_2_loss'], agent.learning_steps)
+                    writer.add_scalar('Agent/Alpha_Loss_step', losses['alpha_loss'], agent.learning_steps)
+                    writer.add_scalar('Agent/Alpha_Value_step', agent.alpha.item(), agent.learning_steps)
             
             obs = next_obs
             episode_return += reward
             episode_length += 1
+            
+            # Actualizar max equity para drawdown del episodio
+            max_equity_episode = max(max_equity_episode, env.equity_actual)
+            
+            # Tracking de trades individuales
+            if info.get('trade_ejecutado') and info.get('pnl_realizado', 0) != 0:
+                global_trade_counter += 1
+                episode_trades_count += 1
+                
+                ultimo_trade = env.historial_trades[-1]
+                
+                pnl_abs_trade = ultimo_trade.get('pnl_abs', 0.0)
+                roe_trade = ultimo_trade.get('roe', 0.0)
+                margen_usado_trade = ultimo_trade.get('margen_usado', 0.0)
+                
+                episode_total_pnl_realized_abs += pnl_abs_trade
+                episode_total_roe_realized += roe_trade
+                if margen_usado_trade > 0:
+                    episode_margins_used.append(margen_usado_trade)
+                
+                if pnl_abs_trade > 0:
+                    episode_winning_trades += 1
+                
+                if ultimo_trade['tipo'] == 'LARGO':
+                    episode_long_trades += 1
+                elif ultimo_trade['tipo'] == 'CORTO':
+                    episode_short_trades += 1
+                
+                # Log métricas por trade individual
+                writer.add_scalar('Per_Trade/PNL_Realized_ROE', roe_trade, global_trade_counter)
+                writer.add_scalar('Per_Trade/PNL_Realized_Absolute', pnl_abs_trade, global_trade_counter)
+                writer.add_scalar('Per_Trade/Duration_Steps', ultimo_trade.get('pasos_duracion', 0), global_trade_counter)
+                writer.add_scalar('Per_Trade/Margin_Used', margen_usado_trade, global_trade_counter)
+                
+                direction_val = 1 if ultimo_trade['tipo'] == 'LARGO' else (-1 if ultimo_trade['tipo'] == 'CORTO' else 0)
+                writer.add_scalar('Per_Trade/Direction', direction_val, global_trade_counter)
         
         # Calcular profit del episodio
         final_balance = env.balance_actual
@@ -379,12 +448,47 @@ def train_agent(agent: TransformerSACAgent, env: FuturesTradingEnv,
         episode_profits.append(profit_pct)
         episode_lengths.append(episode_length)
         
+        # Log losses medias del episodio a TensorBoard
         if ep_actor_losses:
             actor_losses.append(np.mean(ep_actor_losses))
             # Promedio de ambos critic losses
             critic_losses.append((np.mean(ep_critic1_losses) + np.mean(ep_critic2_losses)) / 2)
             alpha_losses.append(np.mean(ep_alpha_losses))
             alpha_values.append(agent.alpha.item())
+            
+            # TensorBoard logging por episodio - Agent metrics
+            writer.add_scalar('Agent_Episode/Mean_Actor_Loss', np.mean(ep_actor_losses), episode)
+            writer.add_scalar('Agent_Episode/Mean_Critic_Loss', (np.mean(ep_critic1_losses) + np.mean(ep_critic2_losses)) / 2, episode)
+            writer.add_scalar('Agent_Episode/Mean_Alpha_Loss', np.mean(ep_alpha_losses), episode)
+            writer.add_scalar('Agent_Episode/Alpha_Value_at_End', agent.alpha.item(), episode)
+        
+        # TensorBoard logging por episodio - Episode metrics
+        writer.add_scalar('Episode_Metrics/Return', episode_return, episode)
+        writer.add_scalar('Episode_Metrics/Profit_Percentage_Initial_Capital', profit_pct, episode)
+        writer.add_scalar('Episode_Metrics/Length', episode_length, episode)
+        
+        # TensorBoard logging por episodio - Environment metrics
+        writer.add_scalar('Environment_Episode/Final_Balance', env.balance_actual, episode)
+        writer.add_scalar('Environment_Episode/Final_Equity', env.equity_actual, episode)
+        writer.add_scalar('Environment_Episode/Max_Equity_Reached', max_equity_episode, episode)
+        drawdown_episode = (max_equity_episode - env.equity_actual) / max_equity_episode if max_equity_episode > 0 else 0
+        writer.add_scalar('Environment_Episode/Drawdown_Percentage', drawdown_episode * 100, episode)
+        
+        # TensorBoard logging por episodio - Trading metrics
+        writer.add_scalar('Trading_Episode/Total_Trades_Executed', episode_trades_count, episode)
+        writer.add_scalar('Trading_Episode/Number_Long_Trades', episode_long_trades, episode)
+        writer.add_scalar('Trading_Episode/Number_Short_Trades', episode_short_trades, episode)
+        win_rate_episode = (episode_winning_trades / episode_trades_count) * 100 if episode_trades_count > 0 else 0
+        writer.add_scalar('Trading_Episode/Win_Rate_Percentage', win_rate_episode, episode)
+        
+        avg_roe_episode = (episode_total_roe_realized / episode_trades_count) if episode_trades_count > 0 else 0.0
+        writer.add_scalar('Trading_Episode/Average_ROE_per_Trade', avg_roe_episode, episode)
+        writer.add_scalar('Trading_Episode/Total_PNL_Realized_Absolute', episode_total_pnl_realized_abs, episode)
+        avg_margin_used_episode = np.mean(episode_margins_used) if episode_margins_used else 0.0
+        writer.add_scalar('Trading_Episode/Average_Margin_Used_per_Trade', avg_margin_used_episode, episode)
+        
+        # Buffer size
+        writer.add_scalar('Agent_Stats/Replay_Buffer_Size', len(agent.replay_buffer), episode)
         
         episode_time = time.time() - episode_start_time
         
@@ -410,7 +514,7 @@ def train_agent(agent: TransformerSACAgent, env: FuturesTradingEnv,
         # Evaluación periódica
         if (episode + 1) % eval_frequency == 0:
             logger.info(f"\n=== Evaluación en episodio {episode + 1} ===")
-            eval_metrics = evaluate_agent(agent, env, eval_episodes, logger)
+            eval_metrics = evaluate_agent(agent, env, eval_episodes, logger, writer, episode + 1)
             
             logger.info(f"Métricas de evaluación:")
             logger.info(f"  - Return promedio: {eval_metrics['mean_return']:.2f} ± {eval_metrics['std_return']:.2f}")
@@ -443,6 +547,9 @@ def train_agent(agent: TransformerSACAgent, env: FuturesTradingEnv,
     logger.info(f"Profit promedio: {np.mean(episode_profits):.2f}%")
     logger.info(f"Mejor evaluación: {best_eval_return:.2f}")
     logger.info(f"Modelo final guardado: {final_model_path}")
+    
+    # Cerrar TensorBoard writer
+    writer.close()
 
 
 def validate_start_date(date_string: str) -> bool:
@@ -479,6 +586,39 @@ def main():
         sys.exit(1)
     
     logger.info(f"Parámetros: Symbol={args.symbol}, Interval={args.interval}, Start Date={args.start_date}")
+
+    # Inicializar TensorBoard Writer
+    current_time = datetime.now().strftime('%Y%m%d-%H%M%S')
+    experiment_name = f"SAC_Transformer_{args.symbol}_{args.interval}_{current_time}"
+    log_dir = Path("runs") / experiment_name
+    log_dir.mkdir(parents=True, exist_ok=True)
+    writer = SummaryWriter(log_dir=str(log_dir))
+    logger.info(f"TensorBoard logs se guardarán en: {log_dir}")
+
+    # Registrar Hiperparámetros
+    hparams = {
+        'symbol': args.symbol,
+        'interval': args.interval,
+        'start_date': args.start_date,
+        'episodes': args.episodes,
+        'eval_frequency': args.eval_frequency,
+        'save_frequency': args.save_frequency,
+        'actor_lr': config.actor_learning_rate,
+        'critic_lr': config.critic_learning_rate,
+        'alpha_lr': config.alpha_learning_rate,
+        'gamma': config.gamma,
+        'tau': config.tau,
+        'batch_size': config.batch_size,
+        'buffer_size': config.replay_buffer_size,
+        'd_model': config.d_model,
+        'n_head': config.n_head,
+        'num_encoder_layers': config.num_encoder_layers,
+        'ventana_observacion': config.ventana_observacion_size,
+        'capital_inicial': config.capital_inicial,
+        'apalancamiento': config.apalancamiento
+    }
+    # Log hyperparameters as text for now (we'll link to metrics later)
+    writer.add_text('Hyperparameters', str(hparams), 0)
     
     try:
         # 1. Adquisición de datos
@@ -567,19 +707,27 @@ def main():
             eval_frequency=args.eval_frequency,
             eval_episodes=args.eval_episodes,
             save_frequency=args.save_frequency,
-            logger=logger
+            logger=logger,
+            writer=writer
         )
         
         logger.info("=== Proceso Completado Exitosamente ===")
         
     except KeyboardInterrupt:
         logger.info("Proceso interrumpido por el usuario")
+        writer.close()
         sys.exit(0)
         
     except Exception as e:
         logger.error(f"Error durante la ejecución: {e}")
         logger.exception("Detalles del error:")
+        writer.close()
         sys.exit(1)
+    
+    finally:
+        # Asegurar que el writer se cierre
+        if 'writer' in locals():
+            writer.close()
 
 
 if __name__ == "__main__":
