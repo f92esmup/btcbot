@@ -260,7 +260,7 @@ def evaluate_agent(agent: TransformerSACAgent, env: FuturesTradingEnv,
         obs, _ = env.reset()
         episode_return = 0
         episode_length = 0
-        initial_balance = env.balance
+        initial_balance = env.balance_actual
         
         done = False
         while not done:
@@ -277,7 +277,7 @@ def evaluate_agent(agent: TransformerSACAgent, env: FuturesTradingEnv,
                 if reward > 0:
                     successful_trades += 1
         
-        final_balance = env.balance
+        final_balance = env.balance_actual
         profit_pct = ((final_balance - initial_balance) / initial_balance) * 100
         
         episode_returns.append(episode_return)
@@ -580,7 +580,7 @@ def train_agent(agent: TransformerSACAgent, env: FuturesTradingEnv,
             gcs_utils = GCSUtils()
             tensorboard_prefix = f"tensorboard_logs/{log_dir.name}"
             gcs_utils.upload_directory_to_gcs(
-                local_directory=str(log_dir),
+                local_directory_path=str(log_dir),
                 gcs_prefix=tensorboard_prefix
             )
             logger.info(f"Logs de TensorBoard sincronizados exitosamente a gs://{config.gcs_bucket_name}/{tensorboard_prefix}")
