@@ -647,6 +647,29 @@ class TransformerSACAgent:
             filepath_prefix = str(filepath).replace('.pth', '')
             self.load_models(filepath_prefix)
     
+    def eval_mode(self) -> None:
+        """
+        Pone todas las redes neuronales en modo evaluación.
+        Desactiva dropout y pone batch normalization en modo evaluación.
+        """
+        self.actor.eval()
+        self.critic_1.eval()
+        self.critic_2.eval()
+        self.critic_target_1.eval()
+        self.critic_target_2.eval()
+    
+    def train_mode(self) -> None:
+        """
+        Pone todas las redes neuronales en modo entrenamiento.
+        Activa dropout y pone batch normalization en modo entrenamiento.
+        """
+        self.actor.train()
+        self.critic_1.train()
+        self.critic_2.train()
+        # Las redes objetivo no necesitan estar en modo entrenamiento
+        # self.critic_target_1.train()
+        # self.critic_target_2.train()
+
     def get_stats(self) -> Dict[str, Any]:
         """
         Obtiene estadísticas del agente.
