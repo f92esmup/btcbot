@@ -55,7 +55,7 @@ workerPoolSpecs:
 # - Accessing Google Cloud Secret Manager (roles/secretmanager.secretAccessor)
 # - Writing to Cloud Logging (roles/logging.logWriter)
 # - Using Vertex AI services (roles/aiplatform.user)
-serviceAccount: 'btcbot-training-sa@btcbot-461022.iam.gserviceaccount.com'
+#serviceAccount: 'btcbot-training-sa@btcbot-461022.iam.gserviceaccount.com'
 
 # baseOutputDirectory: (Optional)
 # If you want Vertex AI to manage output artifacts and provide environment variables
