@@ -126,8 +126,8 @@ agent:
   algorithm: "SAC" # Confirmando el algoritmo
   
   # --- Parámetros del Replay Buffer y Entrenamiento General ---
-  replay_buffer_size: 1000000   # Capacidad del buffer de repetición (1 millón de transiciones)
-  batch_size: 256               # Tamaño del mini-batch para cada paso de aprendizaje
+  replay_buffer_size: 8000000   # Capacidad del buffer de repetición (8 millones de transiciones)
+  batch_size: 4096               # Tamaño del mini-batch para cada paso de aprendizaje
 
   # --- Hiperparámetros Específicos de SAC ---
   hiperparametros_sac: # Usando un nombre un poco más específico que solo "hiperparametros"
