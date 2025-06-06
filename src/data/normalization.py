@@ -18,18 +18,24 @@ from ..configuration.gcs_utils import gcs_utils
 class Normalization:
     """Clase para normalizar datos de trading usando MinMaxScaler."""
     
-    def __init__(self, dataframe: pd.DataFrame):
+    def __init__(self, dataframe: pd.DataFrame, base_path: Optional[str] = None, run_id: Optional[str] = None):
         """
         Inicializa la clase de normalización.
         
         Args:
             dataframe (pd.DataFrame): DataFrame con datos OHLCV e indicadores técnicos
+            base_path (Optional[str]): Ruta base para guardar los artifacts del entrenamiento
+            run_id (Optional[str]): Identificador único del entrenamiento
         """
         self.dataframe = dataframe.copy()
         self.initial_length = len(self.dataframe)
         self.scaler = None
         self.price_scaler = None  # Nuevo: scaler específico para precios
         self.feature_columns = None
+        
+        # Store run configuration
+        self.base_path = base_path
+        self.run_id = run_id
         
         # Configurar logging
         logging.basicConfig(level=logging.INFO)
@@ -42,9 +48,9 @@ class Normalization:
         # Obtener configuración de normalización
         self.scaler_type = config.scaler_type
         self.feature_range = tuple(config.feature_range)
-        self.scaler_path = config.scaler_path
-        self.price_scaler_path = self._get_price_scaler_path()  # Nuevo: ruta para price_scaler
         self.storage_mode = config.storage_mode
+        self.scaler_path = self._get_scaler_path()
+        self.price_scaler_path = self._get_price_scaler_path()
         
         # Crear directorio para el scaler si no existe (solo en modo local)
         if self.storage_mode == "local":
@@ -55,17 +61,47 @@ class Normalization:
         self.logger.info(f"Tipo de scaler: {self.scaler_type}")
         self.logger.info(f"Rango de características: {self.feature_range}")
         self.logger.info(f"Modo de almacenamiento: {self.storage_mode}")
+        if self.run_id:
+            self.logger.info(f"Run ID: {self.run_id}")
+            self.logger.info(f"Base path: {self.base_path}")
+    
+    def _get_scaler_path(self) -> str:
+        """
+        Genera la ruta para el scaler principal basada en el run_id y base_path.
+        
+        Returns:
+            str: Ruta para el scaler
+        """
+        if self.base_path and self.run_id:
+            if self.storage_mode == "gcp":
+                # Para GCS, el path ya incluye el protocolo gs://
+                return f"{self.base_path}/scaler.pkl"
+            else:
+                # Para storage local
+                return str(Path(self.base_path) / "scaler.pkl")
+        else:
+            # Fallback a configuración por defecto si no hay run_id
+            return config.scaler_path
     
     def _get_price_scaler_path(self) -> str:
         """
-        Genera la ruta para el price_scaler basada en la ruta del scaler principal.
+        Genera la ruta para el price_scaler basada en el run_id y base_path.
         
         Returns:
             str: Ruta para el price_scaler
         """
-        scaler_path = Path(self.scaler_path)
-        price_scaler_path = scaler_path.parent / f"price_{scaler_path.name}"
-        return str(price_scaler_path)
+        if self.base_path and self.run_id:
+            if self.storage_mode == "gcp":
+                # Para GCS, el path ya incluye el protocolo gs://
+                return f"{self.base_path}/price_scaler.pkl"
+            else:
+                # Para storage local
+                return str(Path(self.base_path) / "price_scaler.pkl")
+        else:
+            # Fallback a configuración por defecto si no hay run_id
+            scaler_path = Path(config.scaler_path)
+            price_scaler_path = scaler_path.parent / f"price_{scaler_path.name}"
+            return str(price_scaler_path)
     
     def main(self) -> Tuple[pd.DataFrame, MinMaxScaler]:
         """
@@ -192,9 +228,16 @@ class Normalization:
             self.logger.info("Guardando scaler en Google Cloud Storage...")
             
             try:
-                success = gcs_utils.save_scaler_to_gcs(self.scaler)
+                if self.base_path and self.run_id:
+                    # Usar nueva estructura con run_id
+                    gcs_blob_name = f"{self.run_id}/scaler.pkl"
+                    success = gcs_utils.save_scaler_to_gcs(self.scaler, gcs_blob_name)
+                else:
+                    # Fallback al método original
+                    success = gcs_utils.save_scaler_to_gcs(self.scaler)
+                
                 if success:
-                    self.logger.info("Scaler guardado exitosamente en GCS")
+                    self.logger.info(f"Scaler guardado exitosamente en GCS: {self.scaler_path}")
                 else:
                     raise RuntimeError("Error al guardar scaler en GCS")
                     
@@ -230,9 +273,16 @@ class Normalization:
             self.logger.info("Guardando price_scaler en Google Cloud Storage...")
             
             try:
-                success = gcs_utils.save_price_scaler_to_gcs(self.price_scaler)
+                if self.base_path and self.run_id:
+                    # Usar nueva estructura con run_id
+                    gcs_blob_name = f"{self.run_id}/price_scaler.pkl"
+                    success = gcs_utils.save_price_scaler_to_gcs(self.price_scaler, gcs_blob_name)
+                else:
+                    # Fallback al método original
+                    success = gcs_utils.save_price_scaler_to_gcs(self.price_scaler)
+                
                 if success:
-                    self.logger.info("Price scaler guardado exitosamente en GCS")
+                    self.logger.info(f"Price scaler guardado exitosamente en GCS: {self.price_scaler_path}")
                 else:
                     raise RuntimeError("Error al guardar price_scaler en GCS")
                     
@@ -329,12 +379,13 @@ class Normalization:
         self.logger.info(f"Rango esperado: [{expected_min}, {expected_max}]")
     
     @staticmethod
-    def load_scaler(scaler_path: Optional[str] = None) -> MinMaxScaler:
+    def load_scaler(scaler_path: Optional[str] = None, blob_name: Optional[str] = None) -> MinMaxScaler:
         """
         Cargar un scaler previamente guardado.
         
         Args:
             scaler_path (Optional[str]): Ruta del scaler. Si es None, usa la configuración por defecto.
+            blob_name (Optional[str]): Nombre específico del blob en GCS (para checkpoint loading).
             
         Returns:
             MinMaxScaler: Scaler cargado
@@ -345,7 +396,7 @@ class Normalization:
             if config.storage_mode == "gcp":
                 # Modo GCP: cargar desde Google Cloud Storage
                 logger.info("Cargando scaler desde Google Cloud Storage...")
-                return gcs_utils.load_scaler_from_gcs()
+                return gcs_utils.load_scaler_from_gcs(blob_name)
             else:
                 # Modo local
                 if scaler_path is None:
@@ -363,12 +414,13 @@ class Normalization:
             raise
     
     @staticmethod
-    def load_price_scaler(price_scaler_path: Optional[str] = None) -> MinMaxScaler:
+    def load_price_scaler(price_scaler_path: Optional[str] = None, blob_name: Optional[str] = None) -> MinMaxScaler:
         """
         Cargar un price_scaler previamente guardado.
         
         Args:
             price_scaler_path (Optional[str]): Ruta del price_scaler. Si es None, usa la configuración por defecto.
+            blob_name (Optional[str]): Nombre específico del blob en GCS (para checkpoint loading).
             
         Returns:
             MinMaxScaler: Price scaler cargado
@@ -379,7 +431,7 @@ class Normalization:
             if config.storage_mode == "gcp":
                 # Modo GCP: cargar desde Google Cloud Storage
                 logger.info("Cargando price_scaler desde Google Cloud Storage...")
-                return gcs_utils.load_price_scaler_from_gcs()
+                return gcs_utils.load_price_scaler_from_gcs(blob_name)
             else:
                 # Modo local
                 if price_scaler_path is None:

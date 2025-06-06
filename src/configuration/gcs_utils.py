@@ -231,21 +231,25 @@ class GCSUtils:
             self.logger.error(f"Error al obtener información del price_scaler: {e}")
             return None
     
-    def load_scaler_from_gcs(self):
+    def load_scaler_from_gcs(self, blob_name: Optional[str] = None):
         """
         Carga el scaler directamente desde GCS sin guardarlo localmente.
+        
+        Args:
+            blob_name (Optional[str]): Nombre específico del blob. Si es None, usa el configurado por defecto.
         
         Returns:
             scaler: Objeto scaler cargado desde GCS
         """
-        self.logger.info("Cargando scaler directamente desde GCS...")
+        effective_blob_name = blob_name or self.scaler_blob_name
+        self.logger.info(f"Cargando scaler directamente desde GCS: {effective_blob_name}")
         
         try:
             bucket = self._get_bucket()
-            blob = bucket.blob(self.scaler_blob_name)
+            blob = bucket.blob(effective_blob_name)
             
             if not blob.exists():
-                raise FileNotFoundError(f"Scaler no existe en GCS: gs://{self.bucket_name}/{self.scaler_blob_name}")
+                raise FileNotFoundError(f"Scaler no existe en GCS: gs://{self.bucket_name}/{effective_blob_name}")
             
             # Usar archivo temporal
             with tempfile.NamedTemporaryFile() as temp_file:
@@ -259,21 +263,25 @@ class GCSUtils:
             self.logger.error(f"Error al cargar scaler desde GCS: {e}")
             raise
     
-    def load_price_scaler_from_gcs(self):
+    def load_price_scaler_from_gcs(self, blob_name: Optional[str] = None):
         """
         Carga el price_scaler directamente desde GCS sin guardarlo localmente.
+        
+        Args:
+            blob_name (Optional[str]): Nombre específico del blob. Si es None, usa el configurado por defecto.
         
         Returns:
             price_scaler: Objeto price_scaler cargado desde GCS
         """
-        self.logger.info("Cargando price_scaler directamente desde GCS...")
+        effective_blob_name = blob_name or self.price_scaler_blob_name
+        self.logger.info(f"Cargando price_scaler directamente desde GCS: {effective_blob_name}")
         
         try:
             bucket = self._get_bucket()
-            blob = bucket.blob(self.price_scaler_blob_name)
+            blob = bucket.blob(effective_blob_name)
             
             if not blob.exists():
-                raise FileNotFoundError(f"Price scaler no existe en GCS: gs://{self.bucket_name}/{self.price_scaler_blob_name}")
+                raise FileNotFoundError(f"Price scaler no existe en GCS: gs://{self.bucket_name}/{effective_blob_name}")
             
             # Usar archivo temporal
             with tempfile.NamedTemporaryFile() as temp_file:
@@ -287,56 +295,60 @@ class GCSUtils:
             self.logger.error(f"Error al cargar price_scaler desde GCS: {e}")
             raise
     
-    def save_scaler_to_gcs(self, scaler) -> bool:
+    def save_scaler_to_gcs(self, scaler, blob_name: Optional[str] = None) -> bool:
         """
         Guarda un objeto scaler directamente a GCS sin guardarlo localmente.
         
         Args:
             scaler: Objeto scaler a guardar
+            blob_name (Optional[str]): Nombre específico del blob. Si no se proporciona, usa el configurado por defecto.
             
         Returns:
             bool: True si se guardó exitosamente, False en caso contrario
         """
-        self.logger.info("Guardando scaler directamente a GCS...")
+        effective_blob_name = blob_name or self.scaler_blob_name
+        self.logger.info(f"Guardando scaler directamente a GCS como {effective_blob_name}...")
         
         try:
             bucket = self._get_bucket()
-            blob = bucket.blob(self.scaler_blob_name)
+            blob = bucket.blob(effective_blob_name)
             
             # Usar archivo temporal
             with tempfile.NamedTemporaryFile() as temp_file:
                 joblib.dump(scaler, temp_file.name)
                 blob.upload_from_filename(temp_file.name)
             
-            self.logger.info(f"Scaler guardado exitosamente en gs://{self.bucket_name}/{self.scaler_blob_name}")
+            self.logger.info(f"Scaler guardado exitosamente en gs://{self.bucket_name}/{effective_blob_name}")
             return True
             
         except Exception as e:
             self.logger.error(f"Error al guardar scaler en GCS: {e}")
             return False
     
-    def save_price_scaler_to_gcs(self, price_scaler) -> bool:
+    def save_price_scaler_to_gcs(self, price_scaler, blob_name: Optional[str] = None) -> bool:
         """
         Guarda un objeto price_scaler directamente a GCS sin guardarlo localmente.
         
         Args:
             price_scaler: Objeto price_scaler a guardar
+            blob_name (Optional[str]): Nombre específico del blob. Si no se proporciona, usa el configurado por defecto.
             
         Returns:
             bool: True si se guardó exitosamente, False en caso contrario
         """
-        self.logger.info("Guardando price_scaler directamente a GCS...")
+        effective_blob_name = blob_name or self.price_scaler_blob_name
+        self.logger.info(f"Guardando price_scaler directamente a GCS como {effective_blob_name}...")
         
         try:
             bucket = self._get_bucket()
-            blob = bucket.blob(self.price_scaler_blob_name)
+            blob = bucket.blob(effective_blob_name)
             
             # Usar archivo temporal
             with tempfile.NamedTemporaryFile() as temp_file:
                 joblib.dump(price_scaler, temp_file.name)
                 blob.upload_from_filename(temp_file.name)
             
-            self.logger.info(f"Price scaler guardado exitosamente en gs://{self.bucket_name}/{self.price_scaler_blob_name}")
+            self.logger.info(f"Price scaler guardado exitosamente en gs://{self.bucket_name}/{effective_blob_name}")
             return True
             
         except Exception as e:
@@ -484,73 +496,7 @@ class GCSUtils:
             self.logger.error(f"Error durante la sincronización de directorio a GCS: {e}")
             return False
     
-    def find_latest_checkpoint_gcs_info(self, gcs_checkpoint_folder_prefix: str) -> Optional[Tuple[str, int]]:
-        """
-        Buscar en la carpeta especificada en GCS el conjunto de archivos de checkpoint 
-        con el número de episodio más alto.
-        
-        Args:
-            gcs_checkpoint_folder_prefix (str): Prefijo de la carpeta en GCS donde buscar checkpoints
-                                              (ej: "experiments/RUN_ID/checkpoints/")
-        
-        Returns:
-            Optional[Tuple[str, int]]: Tupla con el prefijo completo del checkpoint más reciente
-                                     y el número de episodio, o None si no se encuentra ningún checkpoint
-        """
-        self.logger.info(f"Buscando checkpoints en GCS bajo el prefijo: {gcs_checkpoint_folder_prefix}")
-        
-        try:
-            # Asegurar que el prefijo termine con '/'
-            if not gcs_checkpoint_folder_prefix.endswith('/'):
-                gcs_checkpoint_folder_prefix += '/'
-            
-            # Obtener bucket y listar blobs
-            bucket = self._get_bucket()
-            blobs = list(bucket.list_blobs(prefix=gcs_checkpoint_folder_prefix))
-            
-            if not blobs:
-                self.logger.info(f"No se encontraron archivos bajo el prefijo: {gcs_checkpoint_folder_prefix}")
-                return None
-            
-            # Patrón regex para extraer el nombre base del checkpoint y el número de episodio
-            # Buscaremos archivos como "checkpoint_episode_123_metadata.pkl"
-            metadata_pattern = re.compile(r"(checkpoint_episode_(\d+))_metadata\.pkl$")
-            
-            latest_episode_number = -1
-            latest_checkpoint_base_name = None
-            
-            # Iterar sobre los blobs buscando archivos de metadata
-            for blob in blobs:
-                blob_name = blob.name
-                # Obtener solo el nombre del archivo (sin el prefijo de carpeta)
-                filename = blob_name.replace(gcs_checkpoint_folder_prefix, '')
-                
-                match = metadata_pattern.search(filename)
-                if match:
-                    checkpoint_base_name = match.group(1)  # "checkpoint_episode_123"
-                    episode_number = int(match.group(2))    # 123
-                    
-                    self.logger.debug(f"Encontrado checkpoint: {checkpoint_base_name} (episodio {episode_number})")
-                    
-                    if episode_number > latest_episode_number:
-                        latest_episode_number = episode_number
-                        latest_checkpoint_base_name = checkpoint_base_name
-            
-            if latest_checkpoint_base_name is None:
-                self.logger.info("No se encontraron checkpoints válidos en GCS")
-                return None
-            
-            # Construir el prefijo completo del checkpoint más reciente
-            latest_checkpoint_full_prefix = f"{gcs_checkpoint_folder_prefix}{latest_checkpoint_base_name}"
-            
-            self.logger.info(f"Checkpoint más reciente encontrado: {latest_checkpoint_base_name} (episodio {latest_episode_number})")
-            self.logger.info(f"Prefijo completo: {latest_checkpoint_full_prefix}")
-            
-            return (latest_checkpoint_full_prefix, latest_episode_number)
-            
-        except Exception as e:
-            self.logger.error(f"Error al buscar checkpoints en GCS: {e}")
-            return None
+
 
 
 # Instancia global para facilitar el uso
