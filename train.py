@@ -8,6 +8,7 @@ import sys
 import logging
 import os
 import random
+import tempfile
 from datetime import datetime
 import numpy as np
 import torch
@@ -720,8 +721,39 @@ def train_agent(agent: TransformerSACAgent, env: FuturesTradingEnv,
         # Guardado periódico
         if (episode + 1) % save_frequency == 0:
             if config.storage_mode == "gcp":
-                checkpoint_path = f"{run_id}/checkpoints/checkpoint_episode_{episode + 1}"
-                agent.save_models(checkpoint_path)
+                # Para GCS: usar tempfile y subir cada archivo individualmente
+                from src.configuration.gcs_utils import GCSUtils
+                gcs_utils = GCSUtils()
+                
+                gcs_checkpoint_directory_prefix = f"{run_id}/checkpoints/checkpoint_episode_{episode + 1}"
+                
+                with tempfile.TemporaryDirectory() as temp_dir:
+                    # Prefijo para archivos temporales locales
+                    local_temp_ckpt_prefix = os.path.join(temp_dir, f"ckpt_ep_{episode + 1}")
+                    
+                    # Guardar modelos en directorio temporal
+                    agent.save_models(local_temp_ckpt_prefix)
+                    
+                    # Subir cada archivo a GCS
+                    success_count = 0
+                    total_files = 0
+                    
+                    for local_file_path in Path(temp_dir).glob(f"ckpt_ep_{episode + 1}_*"):
+                        total_files += 1
+                        local_file_name_only = local_file_path.name
+                        gcs_blob_name = f"{gcs_checkpoint_directory_prefix}/{local_file_name_only}"
+                        
+                        if gcs_utils.upload_file_to_gcs(str(local_file_path), gcs_blob_name):
+                            success_count += 1
+                        else:
+                            logger.error(f"Error al subir checkpoint {local_file_path} a GCS")
+                    
+                    if success_count == total_files and total_files > 0:
+                        logger.info(f"Checkpoint guardado exitosamente en GCS: {gcs_checkpoint_directory_prefix}/")
+                    else:
+                        logger.error(f"Error al guardar checkpoint en GCS. Solo {success_count} de {total_files} archivos subidos.")
+                        
+                checkpoint_path = gcs_checkpoint_directory_prefix
             else:
                 if base_path and run_id:
                     checkpoint_dir = Path(base_path) / "checkpoints"
@@ -730,7 +762,7 @@ def train_agent(agent: TransformerSACAgent, env: FuturesTradingEnv,
                 else:
                     checkpoint_path = models_dir / f"checkpoint_episode_{episode + 1}"
                 agent.save_models(str(checkpoint_path))
-            logger.info(f"Checkpoint guardado: {checkpoint_path}")
+                logger.info(f"Checkpoint guardado: {checkpoint_path}")
     
     # Guardado final
     if config.storage_mode == "gcp":
