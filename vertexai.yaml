@@ -38,7 +38,7 @@ workerPoolSpecs:
         - '--start-date=2024-01-01' # Example start date
         - '--episodes=1000'         # Example number of episodes
         - '--eval-frequency=100'
-        - '--save-frequency=10000'
+        - '--save-frequency=50'
         - '--eval-episodes=1'
         # IMPORTANT: Do NOT include '--no-cuda' if you want to use the GPU.
         # Your train.py script's setup_device() function will detect and use the GPU.
