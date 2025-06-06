@@ -7,6 +7,7 @@ import argparse
 import sys
 import logging
 import os
+import random
 from datetime import datetime
 import numpy as np
 import torch
@@ -103,6 +104,35 @@ def calculate_sortino_ratio(returns: list, risk_free_rate: float = 0.0) -> float
     return sortino_ratio
 
 
+def set_seed(seed_value: int, logger_instance: logging.Logger) -> None:
+    """
+    Establece la semilla aleatoria para asegurar reproducibilidad del entrenamiento.
+    
+    Args:
+        seed_value (int): Valor de la semilla aleatoria
+        logger_instance (logging.Logger): Instancia del logger para mensajes
+    """
+    # Establecer semilla para Python random
+    random.seed(seed_value)
+    
+    # Establecer semilla para NumPy
+    np.random.seed(seed_value)
+    
+    # Establecer semilla para PyTorch (CPU)
+    torch.manual_seed(seed_value)
+    
+    # Establecer semilla para PyTorch (GPU) si está disponible
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed_value)
+        # Configuraciones adicionales para reproducibilidad en GPU
+        #torch.backends.cudnn.deterministic = True
+        #torch.backends.cudnn.benchmark = False
+        #ADVERTENCIA: ESTAS DOS CONFIGURACIONES ASEGURAN MUCHA REPRODUCIBILIDAD PERO REDUCEN MUCHO EL RENDIMIENTO. NO ES RECOMENDABLE
+        logger_instance.info(f"Semilla {seed_value} establecida para Python, NumPy, PyTorch (CPU y GPU)")
+    else:
+        logger_instance.info(f"Semilla {seed_value} establecida para Python, NumPy, PyTorch (CPU)")
+
+
 def setup_logging():
     """Configura el sistema de logging."""
     logging.basicConfig(
@@ -182,6 +212,13 @@ def parse_arguments():
         type=str,
         default=None,
         help='ID del run (run_id) desde el cual cargar el último checkpoint para continuar el entrenamiento. Si no se proporciona, el entrenamiento comienza desde cero.'
+    )
+    
+    parser.add_argument(
+        '--seed',
+        type=int,
+        default=73,
+        help='Semilla aleatoria para la reproducibilidad del entrenamiento (default: 73)'
     )
     
     return parser.parse_args()
@@ -426,7 +463,7 @@ def train_agent(agent: TransformerSACAgent, env: FuturesTradingEnv,
                num_episodes: int, eval_frequency: int, eval_episodes: int,
                save_frequency: int, logger, writer: SummaryWriter,
                log_dir: Path = None, start_episode: int = 0,
-               base_path: str = None, run_id: str = None):
+               base_path: str = None, run_id: str = None, seed: int = 73):
     """
     Entrena el agente SAC.
     
@@ -443,8 +480,10 @@ def train_agent(agent: TransformerSACAgent, env: FuturesTradingEnv,
         start_episode: Episodio inicial (para resumir entrenamiento)
         base_path: Ruta base para guardar artifacts del entrenamiento
         run_id: Identificador único del entrenamiento
+        seed: Semilla base para generación de seeds específicos por episodio
     """
     logger.info(f"Iniciando entrenamiento por {num_episodes} episodios (desde episodio {start_episode})...")
+    logger.info(f"Usando semilla base {seed} para generación de seeds específicos por episodio")
     
     # Los checkpoints se guardan usando el run_id como prefijo
     
@@ -473,8 +512,11 @@ def train_agent(agent: TransformerSACAgent, env: FuturesTradingEnv,
     for episode in range(start_episode, num_episodes):
         episode_start_time = time.time()
         
-        # Reset del entorno
-        obs, _ = env.reset()
+        # Calcular semilla específica para este episodio
+        current_episode_seed = seed + episode
+        
+        # Reset del entorno con semilla específica
+        obs, _ = env.reset(seed=current_episode_seed)
         episode_return = 0
         episode_length = 0
         initial_balance = env.balance_actual
@@ -938,16 +980,19 @@ def main():
     # Parsear argumentos
     args = parse_arguments()
     
+    # Configurar semilla aleatoria para reproducibilidad
+    set_seed(args.seed, logger)
+    
     # Validar fecha de inicio
     if not validate_start_date(args.start_date):
         logger.error(f"Formato de fecha inválido: {args.start_date}. Use YYYY-MM-DD")
         sys.exit(1)
     
-    logger.info(f"Parámetros: Symbol={args.symbol}, Interval={args.interval}, Start Date={args.start_date}")
+    logger.info(f"Parámetros: Symbol={args.symbol}, Interval={args.interval}, Start Date={args.start_date}, Seed={args.seed}")
 
-    # Generar run_id único
+    # Generar run_id único incluyendo la semilla
     current_time = datetime.now().strftime('%Y%m%d-%H%M%S')
-    run_id = f"{args.symbol}_{args.interval}_{current_time}"
+    run_id = f"{args.symbol}_{args.interval}_{args.seed}_{current_time}"
     logger.info(f"Run ID generado: {run_id}")
     
     # Determinar base_path según storage_mode
@@ -975,6 +1020,7 @@ def main():
         'symbol': args.symbol,
         'interval': args.interval,
         'start_date': args.start_date,
+        'seed': args.seed,
         'episodes': args.episodes,
         'eval_frequency': args.eval_frequency,
         'save_frequency': args.save_frequency,
@@ -1170,7 +1216,8 @@ def main():
             log_dir=tensorboard_dir,
             start_episode=start_episode,
             base_path=str(base_path),
-            run_id=run_id
+            run_id=run_id,
+            seed=args.seed
         )
         
         logger.info("=== Proceso Completado Exitosamente ===")
