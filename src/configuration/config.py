@@ -350,6 +350,11 @@ class Config:
         return self.agent_config.get('batch_size', 256)
     
     @property
+    def min_buffer_for_learning(self) -> int:
+        """Mínimo número de experiencias antes de comenzar el aprendizaje."""
+        return self.agent_config.get('min_buffer_for_learning', 100000)
+
+    @property
     def hiperparametros_sac(self) -> Dict[str, Any]:
         """Hiperparámetros específicos de SAC."""
         return self.agent_config.get('hiperparametros_sac', {})

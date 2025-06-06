@@ -345,6 +345,9 @@ def train_agent(agent: TransformerSACAgent, env: FuturesTradingEnv,
     alpha_losses = []
     alpha_values = []
     
+    # Control de inicio de aprendizaje
+    learning_started = False
+    
     # Crear directorio para modelos (solo si no es GCS)
     if config.storage_mode != "gcp":
         models_dir = Path("models")
@@ -395,8 +398,13 @@ def train_agent(agent: TransformerSACAgent, env: FuturesTradingEnv,
             # Almacenar experiencia
             agent.replay_buffer.add(obs, action, reward, next_obs, terminated, truncated)
             
-            # Entrenar si hay suficientes experiencias
-            if len(agent.replay_buffer) >= config.batch_size:
+            # Entrenar solo si hay suficientes experiencias acumuladas
+            if len(agent.replay_buffer) >= config.min_buffer_for_learning:
+                # Log especial cuando inicie el aprendizaje por primera vez
+                if not learning_started:
+                    logger.info(f"🎯 INICIANDO APRENDIZAJE: Buffer alcanzó {len(agent.replay_buffer)} experiencias (mínimo: {config.min_buffer_for_learning})")
+                    learning_started = True
+                
                 losses = agent.learn()
                 if losses:
                     ep_actor_losses.append(losses['actor_loss'])
@@ -509,6 +517,7 @@ def train_agent(agent: TransformerSACAgent, env: FuturesTradingEnv,
             avg_return = np.mean(episode_returns[-10:])
             avg_profit = np.mean(episode_profits[-10:])
             buffer_size = len(agent.replay_buffer)
+            learning_status = "LEARNING" if buffer_size >= config.min_buffer_for_learning else f"COLLECTING ({buffer_size}/{config.min_buffer_for_learning})"
             
             logger.info(f"Episodio {episode + 1}/{num_episodes} | "
                        f"Return: {episode_return:.2f} | "
@@ -516,6 +525,7 @@ def train_agent(agent: TransformerSACAgent, env: FuturesTradingEnv,
                        f"Avg Return (10): {avg_return:.2f} | "
                        f"Avg Profit (10): {avg_profit:.2f}% | "
                        f"Buffer: {buffer_size} | "
+                       f"Status: {learning_status} | "
                        f"Time: {episode_time:.1f}s")
             
             if alpha_values:
