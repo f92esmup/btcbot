@@ -357,6 +357,9 @@ class TransformerSACAgent:
         # Máscaras para episodios finalizados
         done_mask = terminated | truncated
         
+        # Normalización de recompensas para estabilidad del crítico
+        scaled_rewards = (rewards - rewards.mean()) / (rewards.std() + 1e-8)
+        
         with torch.no_grad():
             # Siguiente acción y log_prob usando la política actual
             next_actions, next_log_probs = self.actor.sample(next_market_data, next_portfolio_data)
@@ -369,7 +372,7 @@ class TransformerSACAgent:
             target_q = torch.min(target_q1, target_q2) - self.alpha * next_log_probs
             
             # Calcular targets
-            q_targets = rewards.unsqueeze(1) + self.gamma * (1 - done_mask.float().unsqueeze(1)) * target_q
+            q_targets = scaled_rewards.unsqueeze(1) + self.gamma * (1 - done_mask.float().unsqueeze(1)) * target_q
         
         # Actualizar críticos
         current_q1 = self.critic_1(market_data, portfolio_data, actions)
