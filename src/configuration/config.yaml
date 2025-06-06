@@ -105,9 +105,9 @@ environment:
   
   # Normalización de portfolio para observación
   max_pasos_en_posicion: 100          # Máximo esperado de pasos en una posición
-  min_clip_pnl_roe: -0.50             # ROE mínimo para clip (-50%)
-  max_clip_pnl_roe: 0.50              # ROE máximo para clip (+50%)
-  
+  min_clip_pnl_roe: -1.0             # ROE mínimo para clip (-100%)
+  max_clip_pnl_roe: 1.0              # ROE máximo para clip (+100%)
+
   # Zona muerta para acciones
   zona_muerta_mantener: 0.15          # ±0.15 para mantener posición
   
@@ -115,8 +115,9 @@ environment:
   peso_recompensa_paso: 1.0           # Peso para recompensa por paso
   peso_recompensa_cierre: 1.0         # Peso para recompensa al cerrar operación
   peso_recompensa_episodio: 0.0       # Peso para Sortino (0 = no se usa por ahora)
-  usar_log1p_en_pnl: true            # Si aplicar log1p al PNL para suavizar
-  
+  usar_log1p_en_pnl: false            # Si aplicar log1p al PNL para suavizar, \ 
+  # RECOMENDADO EN false, ya que se ha incorporado normalización de recompensas en el agente y puede interferir (DEPRECIATED)
+
   # Condiciones de finalización
   usar_max_pasos_episodio: false      # Si limitar pasos por episodio
   max_pasos_episodio: 2000           # Máximo pasos por episodio (si se usa)
