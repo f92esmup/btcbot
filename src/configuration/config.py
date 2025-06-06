@@ -5,7 +5,7 @@ Maneja la carga y acceso a parámetros desde config.yaml y Google Cloud Secret M
 
 import yaml
 import os
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Union
 from pathlib import Path
 from google.cloud import secretmanager
 import logging
@@ -390,9 +390,14 @@ class Config:
         return self.hiperparametros_sac.get('alpha_learning_rate', 0.0003)
     
     @property
-    def target_entropy(self) -> float:
-        """Entropía objetivo."""
-        return self.hiperparametros_sac.get('target_entropy', -1.0)
+    def target_entropy(self) -> Union[str, float]:
+        """
+        Entropía objetivo.
+        
+        Returns:
+            'auto' para cálculo automático como -dim_action, o valor numérico específico
+        """
+        return self.hiperparametros_sac.get('target_entropy', 'auto')
     
     @property
     def initial_log_alpha(self) -> float:

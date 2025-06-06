@@ -93,7 +93,17 @@ class TransformerSACAgent:
         
         # Parámetro de temperatura alpha (entropía)
         self.learn_alpha = self.config['learn_alpha']
-        self.target_entropy = self.config['target_entropy']
+        
+        # Manejar target_entropy: puede ser 'auto' o un valor numérico
+        target_entropy_config = self.config['target_entropy']
+        if target_entropy_config == 'auto':
+            # Calcular automáticamente como -dim_action
+            self.target_entropy = -float(self.action_dim)
+            logger.info(f"Target entropy calculado automáticamente: {self.target_entropy} (= -dim_action = -{self.action_dim})")
+        else:
+            # Usar valor especificado en configuración
+            self.target_entropy = float(target_entropy_config)
+            logger.info(f"Target entropy configurado manualmente: {self.target_entropy}")
         
         if self.learn_alpha:
             self.log_alpha = torch.tensor(

@@ -140,9 +140,8 @@ agent:
     
     learn_alpha: True             # Si alpha (temperatura de entropía) es aprendible
     alpha_learning_rate: 0.0003   # Tasa de aprendizaje para alpha (si es aprendible)
-    # target_entropy: 'auto'      # Muchas implementaciones permiten 'auto' que lo calcula como -dim_accion.
-                                  # Para tu caso, dim_accion = 1, así que puedes poner -1.0
-    target_entropy: -1.0          # Entropía objetivo para el ajuste automático de alpha
+    target_entropy: 'auto'        # Entropía objetivo. 'auto' calcula como -dim_accion (recomendado)
+                                  # También puedes usar un valor fijo como -1.0
     initial_log_alpha: 0.0        # Valor inicial para log(alpha), resultando en alpha=1.0. Ajustable.
 
   # --- Parámetros de la Arquitectura del Transformer (para StateTransformerEncoder) ---
