@@ -1075,6 +1075,16 @@ def main():
     # Log hyperparameters as text for now (we'll link to metrics later)
     writer.add_text('Hyperparameters', str(hparams), 0)
     
+    # Guardar configuración del run
+    try:
+        save_run_config(base_path=Path(base_path) if config.storage_mode == "local" else base_path, 
+                        hparams=hparams, 
+                        args=args, 
+                        logger=logger)
+    except Exception as e:
+        logger.error(f"Error al guardar config_run.yaml: {e}")
+        # Continuar ejecución ya que este error no es crítico
+    
     try:
         # 1. Adquisición de datos
         logger.info("=== FASE 1: Adquisición de Datos ===")
