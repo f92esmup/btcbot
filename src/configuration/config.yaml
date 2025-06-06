@@ -16,6 +16,7 @@ gcp:
   storage:
     bucket_name: "btcbot-training-ew4"  # Nombre del bucket para almacenar modelos
     scaler_blob_name: "scaler.pkl"  # Nombre del archivo scaler en GCS
+    price_scaler_blob_name: "price_scaler.pkl"  # Nombre del archivo price_scaler en GCS
 
 # Configuración de datos
 data:
@@ -105,9 +106,9 @@ environment:
   
   # Normalización de portfolio para observación
   max_pasos_en_posicion: 100          # Máximo esperado de pasos en una posición
-  min_clip_pnl_roe: -0.50             # ROE mínimo para clip (-50%)
-  max_clip_pnl_roe: 0.50              # ROE máximo para clip (+50%)
-  
+  min_clip_pnl_roe: -1.0             # ROE mínimo para clip (-100%)
+  max_clip_pnl_roe: 1.0              # ROE máximo para clip (+100%)
+
   # Zona muerta para acciones
   zona_muerta_mantener: 0.15          # ±0.15 para mantener posición
   
@@ -115,8 +116,9 @@ environment:
   peso_recompensa_paso: 1.0           # Peso para recompensa por paso
   peso_recompensa_cierre: 1.0         # Peso para recompensa al cerrar operación
   peso_recompensa_episodio: 0.0       # Peso para Sortino (0 = no se usa por ahora)
-  usar_log1p_en_pnl: true            # Si aplicar log1p al PNL para suavizar
-  
+  usar_log1p_en_pnl: false            # Si aplicar log1p al PNL para suavizar, \ 
+  # RECOMENDADO EN false, ya que se ha incorporado normalización de recompensas en el agente y puede interferir (DEPRECIATED)
+
   # Condiciones de finalización
   usar_max_pasos_episodio: false      # Si limitar pasos por episodio
   max_pasos_episodio: 2000           # Máximo pasos por episodio (si se usa)
@@ -126,8 +128,9 @@ agent:
   algorithm: "SAC" # Confirmando el algoritmo
   
   # --- Parámetros del Replay Buffer y Entrenamiento General ---
-  replay_buffer_size: 1000000   # Capacidad del buffer de repetición (1 millón de transiciones)
-  batch_size: 256               # Tamaño del mini-batch para cada paso de aprendizaje
+  replay_buffer_size: 8000000   # Capacidad del buffer de repetición (8 millones de transiciones)
+  batch_size: 8192               # Tamaño del mini-batch para cada paso de aprendizaje
+  min_buffer_for_learning: 500000  # Mínimo número de experiencias antes de comenzar el aprendizaje
 
   # --- Hiperparámetros Específicos de SAC ---
   hiperparametros_sac: # Usando un nombre un poco más específico que solo "hiperparametros"
@@ -139,9 +142,8 @@ agent:
     
     learn_alpha: True             # Si alpha (temperatura de entropía) es aprendible
     alpha_learning_rate: 0.0003   # Tasa de aprendizaje para alpha (si es aprendible)
-    # target_entropy: 'auto'      # Muchas implementaciones permiten 'auto' que lo calcula como -dim_accion.
-                                  # Para tu caso, dim_accion = 1, así que puedes poner -1.0
-    target_entropy: -1.0          # Entropía objetivo para el ajuste automático de alpha
+    target_entropy: 'auto'        # Entropía objetivo. 'auto' calcula como -dim_accion (recomendado)
+                                  # También puedes usar un valor fijo como -1.0
     initial_log_alpha: 0.0        # Valor inicial para log(alpha), resultando en alpha=1.0. Ajustable.
 
   # --- Parámetros de la Arquitectura del Transformer (para StateTransformerEncoder) ---

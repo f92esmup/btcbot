@@ -6,6 +6,9 @@ Orquesta la adquisición de datos, cálculo de indicadores y entrenamiento del m
 import argparse
 import sys
 import logging
+import os
+import random
+import tempfile
 from datetime import datetime
 import numpy as np
 import torch
@@ -22,6 +25,113 @@ from src.entorno.environment import FuturesTradingEnv
 from src.agente.agent import TransformerSACAgent
 from src.configuration.config import config
 from src.configuration.gcs_utils import GCSUtils
+
+
+def calculate_max_drawdown(equity_series: list) -> float:
+    """
+    Calcula el máximo drawdown de una serie de equity.
+    
+    Args:
+        equity_series: Lista de valores de equity
+        
+    Returns:
+        float: Máximo drawdown como porcentaje (0.0 - 1.0)
+    """
+    if len(equity_series) == 0:
+        return 0.0
+    
+    equity_array = np.array(equity_series)
+    peak = np.maximum.accumulate(equity_array)
+    drawdown = (peak - equity_array) / peak
+    max_drawdown = np.max(drawdown)
+    
+    return max_drawdown
+
+
+def calculate_sharpe_ratio(returns: list, risk_free_rate: float = 0.0) -> float:
+    """
+    Calcula el Sharpe Ratio de una serie de retornos.
+    
+    Args:
+        returns: Lista de retornos
+        risk_free_rate: Tasa libre de riesgo (anualizada)
+        
+    Returns:
+        float: Sharpe Ratio
+    """
+    if len(returns) <= 1:
+        return 0.0
+    
+    returns_array = np.array(returns)
+    excess_returns = returns_array - risk_free_rate
+    
+    if np.std(excess_returns) == 0:
+        return 0.0
+    
+    sharpe_ratio = np.mean(excess_returns) / np.std(excess_returns)
+    return sharpe_ratio
+
+
+def calculate_sortino_ratio(returns: list, risk_free_rate: float = 0.0) -> float:
+    """
+    Calcula el Sortino Ratio de una serie de retornos.
+    
+    Args:
+        returns: Lista de retornos
+        risk_free_rate: Tasa libre de riesgo (anualizada)
+        
+    Returns:
+        float: Sortino Ratio
+    """
+    if len(returns) <= 1:
+        return 0.0
+    
+    returns_array = np.array(returns)
+    excess_returns = returns_array - risk_free_rate
+    
+    # Solo considerar retornos negativos para la desviación estándar
+    negative_returns = excess_returns[excess_returns < 0]
+    
+    if len(negative_returns) == 0:
+        # No hay retornos negativos, se considera muy bueno
+        return float('inf') if np.mean(excess_returns) > 0 else 0.0
+    
+    downside_deviation = np.std(negative_returns)
+    
+    if downside_deviation == 0:
+        return 0.0
+    
+    sortino_ratio = np.mean(excess_returns) / downside_deviation
+    return sortino_ratio
+
+
+def set_seed(seed_value: int, logger_instance: logging.Logger) -> None:
+    """
+    Establece la semilla aleatoria para asegurar reproducibilidad del entrenamiento.
+    
+    Args:
+        seed_value (int): Valor de la semilla aleatoria
+        logger_instance (logging.Logger): Instancia del logger para mensajes
+    """
+    # Establecer semilla para Python random
+    random.seed(seed_value)
+    
+    # Establecer semilla para NumPy
+    np.random.seed(seed_value)
+    
+    # Establecer semilla para PyTorch (CPU)
+    torch.manual_seed(seed_value)
+    
+    # Establecer semilla para PyTorch (GPU) si está disponible
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed_value)
+        # Configuraciones adicionales para reproducibilidad en GPU
+        #torch.backends.cudnn.deterministic = True
+        #torch.backends.cudnn.benchmark = False
+        #ADVERTENCIA: ESTAS DOS CONFIGURACIONES ASEGURAN MUCHA REPRODUCIBILIDAD PERO REDUCEN MUCHO EL RENDIMIENTO. NO ES RECOMENDABLE
+        logger_instance.info(f"Semilla {seed_value} establecida para Python, NumPy, PyTorch (CPU y GPU)")
+    else:
+        logger_instance.info(f"Semilla {seed_value} establecida para Python, NumPy, PyTorch (CPU)")
 
 
 def setup_logging():
@@ -98,6 +208,20 @@ def parse_arguments():
         help='Número de episodios para evaluación (default: 5)'
     )
     
+    parser.add_argument(
+        '--checkpoint',
+        type=str,
+        default=None,
+        help='ID del run (run_id) desde el cual cargar el último checkpoint para continuar el entrenamiento. Si no se proporciona, el entrenamiento comienza desde cero.'
+    )
+    
+    parser.add_argument(
+        '--seed',
+        type=int,
+        default=73,
+        help='Semilla aleatoria para la reproducibilidad del entrenamiento (default: 73)'
+    )
+    
     return parser.parse_args()
 
 
@@ -121,51 +245,41 @@ def setup_device(no_cuda: bool = False) -> torch.device:
     return device
 
 
-def create_trading_environment(dataframe: Any, logger) -> FuturesTradingEnv:
+def create_trading_environment(dataframe: Any, logger, price_scaler_path: Optional[str] = None, price_scaler_blob_name: Optional[str] = None) -> FuturesTradingEnv:
     """
     Crea el entorno de trading con los datos procesados.
     
     Args:
         dataframe: DataFrame con datos normalizados
         logger: Logger para mensajes
+        price_scaler_path: Ruta específica del price_scaler (opcional, para checkpoint loading)
+        price_scaler_blob_name: Blob name específico en GCS (opcional, para checkpoint loading)
         
     Returns:
         FuturesTradingEnv: Entorno configurado
     """
     logger.info("Creando entorno de trading...")
     
-    # Cargar el scaler completo desde GCS y extraer el scaler específico para Close
-    from sklearn.preprocessing import MinMaxScaler
+    # Cargar el price_scaler directamente desde donde se guardó
     from src.data.normalization import Normalization
     
-    logger.info("Cargando scaler desde GCS para crear price_scaler...")
+    logger.info("Cargando price_scaler desde almacenamiento...")
     try:
-        # Cargar el scaler completo que se guardó durante la normalización
-        full_scaler = Normalization.load_scaler()
+        # Cargar el price_scaler que se guardó durante la normalización
+        price_scaler = Normalization.load_price_scaler(price_scaler_path, price_scaler_blob_name)
         
-        # Crear un price_scaler específico usando los parámetros del Close del scaler completo
-        price_scaler = MinMaxScaler()
-        
-        # Encontrar el índice de la columna Close en el scaler completo
-        # Asumimos que Close es la primera columna (índice 0) en los datos OHLCV
-        close_min = full_scaler.data_min_[0]  # Min del Close
-        close_max = full_scaler.data_max_[0]  # Max del Close
-        
-        # Configurar el price_scaler con el rango real del Close
-        price_scaler.data_min_ = np.array([close_min])
-        price_scaler.data_max_ = np.array([close_max])
-        price_scaler.data_range_ = np.array([close_max - close_min])
-        price_scaler.scale_ = np.array([1.0 / (close_max - close_min)])
-        price_scaler.min_ = np.array([-close_min / (close_max - close_min)])
-        price_scaler.feature_range = (0, 1)
-        price_scaler.n_features_in_ = 1
-        
-        logger.info(f"Price scaler configurado desde GCS - Rango Close: {close_min:.2f} - {close_max:.2f}")
+        # Obtener información del rango para logging
+        if hasattr(price_scaler, 'data_min_') and hasattr(price_scaler, 'data_max_'):
+            close_min = price_scaler.data_min_[0]
+            close_max = price_scaler.data_max_[0]
+            logger.info(f"Price scaler cargado exitosamente - Rango Close: {close_min:.2f} - {close_max:.2f}")
+        else:
+            logger.info("Price scaler cargado exitosamente")
         
     except Exception as e:
-        logger.error(f"Error crítico al cargar scaler desde GCS: {e}")
-        logger.error("No se puede continuar sin el scaler real. Deteniendo ejecución.")
-        raise RuntimeError(f"Fallo al cargar scaler desde GCS: {e}")
+        logger.error(f"Error crítico al cargar price_scaler: {e}")
+        logger.error("No se puede continuar sin el price_scaler. Deteniendo ejecución.")
+        raise RuntimeError(f"Fallo al cargar price_scaler: {e}")
     
     env = FuturesTradingEnv(
         data_df=dataframe,
@@ -244,6 +358,8 @@ def evaluate_agent(agent: TransformerSACAgent, env: FuturesTradingEnv,
         env: Entorno de trading
         num_episodes: Número de episodios de evaluación
         logger: Logger para mensajes
+        writer: TensorBoard SummaryWriter (opcional)
+        global_step: Paso global para TensorBoard (opcional)
         
     Returns:
         Dict[str, float]: Métricas de evaluación
@@ -256,11 +372,19 @@ def evaluate_agent(agent: TransformerSACAgent, env: FuturesTradingEnv,
     successful_trades = 0
     total_trades = 0
     
+    # Para métricas financieras avanzadas
+    all_equity_values = []  # Para calcular max drawdown
+    episode_equity_series = []  # Equity por episodio
+    
     for episode in range(num_episodes):
         obs, _ = env.reset()
         episode_return = 0
         episode_length = 0
         initial_balance = env.balance_actual
+        initial_equity = env.equity_actual
+        
+        # Track equity durante el episodio
+        episode_equity_track = [initial_equity]
         
         done = False
         while not done:
@@ -271,6 +395,9 @@ def evaluate_agent(agent: TransformerSACAgent, env: FuturesTradingEnv,
             episode_return += reward
             episode_length += 1
             
+            # Registrar equity en cada paso
+            episode_equity_track.append(env.equity_actual)
+            
             # Contar trades
             if 'trade_executed' in info and info['trade_executed']:
                 total_trades += 1
@@ -278,13 +405,23 @@ def evaluate_agent(agent: TransformerSACAgent, env: FuturesTradingEnv,
                     successful_trades += 1
         
         final_balance = env.balance_actual
+        final_equity = env.equity_actual
         profit_pct = ((final_balance - initial_balance) / initial_balance) * 100
         
         episode_returns.append(episode_return)
         episode_profits.append(profit_pct)
         episode_lengths.append(episode_length)
+        
+        # Guardar series de equity
+        episode_equity_series.extend(episode_equity_track)
+        all_equity_values.append(final_equity)
     
     agent.train_mode()
+    
+    # Calcular métricas financieras avanzadas
+    max_drawdown = calculate_max_drawdown(episode_equity_series)
+    sharpe_ratio = calculate_sharpe_ratio(episode_profits)
+    sortino_ratio = calculate_sortino_ratio(episode_profits)
     
     metrics = {
         'mean_return': np.mean(episode_returns),
@@ -293,8 +430,17 @@ def evaluate_agent(agent: TransformerSACAgent, env: FuturesTradingEnv,
         'std_profit_pct': np.std(episode_profits),
         'mean_episode_length': np.mean(episode_lengths),
         'win_rate': successful_trades / max(total_trades, 1),
-        'total_trades': total_trades / num_episodes
+        'total_trades': total_trades / num_episodes,
+        'max_drawdown': max_drawdown,
+        'sharpe_ratio': sharpe_ratio,
+        'sortino_ratio': sortino_ratio
     }
+    
+    # Log básico de métricas
+    logger.info(f"Métricas de evaluación avanzadas:")
+    logger.info(f"  - Máximo Drawdown: {max_drawdown * 100:.2f}%")
+    logger.info(f"  - Sharpe Ratio: {sharpe_ratio:.4f}")
+    logger.info(f"  - Sortino Ratio: {sortino_ratio:.4f}")
     
     # Log to TensorBoard if writer provided
     if writer and global_step is not None:
@@ -305,6 +451,11 @@ def evaluate_agent(agent: TransformerSACAgent, env: FuturesTradingEnv,
         writer.add_scalar('Evaluation/Mean_Episode_Length', metrics['mean_episode_length'], global_step)
         writer.add_scalar('Evaluation/Win_Rate', metrics['win_rate'] * 100, global_step)
         writer.add_scalar('Evaluation/Avg_Trades_per_Episode', metrics['total_trades'], global_step)
+        
+        # Nuevas métricas financieras en TensorBoard
+        writer.add_scalar('Evaluation/Max_Drawdown_Pct', metrics['max_drawdown'] * 100, global_step)
+        writer.add_scalar('Evaluation/Sharpe_Ratio', metrics['sharpe_ratio'], global_step)
+        writer.add_scalar('Evaluation/Sortino_Ratio', metrics['sortino_ratio'], global_step)
     
     return metrics
 
@@ -312,8 +463,9 @@ def evaluate_agent(agent: TransformerSACAgent, env: FuturesTradingEnv,
 def train_agent(agent: TransformerSACAgent, env: FuturesTradingEnv, 
                num_episodes: int, eval_frequency: int, eval_episodes: int,
                save_frequency: int, logger, writer: SummaryWriter,
-               model_prefix: str = "models", log_dir: Path = None,
-               start_episode: int = 0, model_save_base_prefix_arg: str = None):
+               log_dir: Path = None, start_episode: int = 0,
+               base_path: str = None, run_id: str = None, seed: int = 73,
+               gcs_utils=None):
     """
     Entrena el agente SAC.
     
@@ -326,15 +478,17 @@ def train_agent(agent: TransformerSACAgent, env: FuturesTradingEnv,
         save_frequency: Frecuencia de guardado
         logger: Logger para mensajes
         writer: TensorBoard SummaryWriter
-        model_prefix: Prefijo para nombres de modelo (usado en GCS)
         log_dir: Directorio de logs de TensorBoard para sync a GCS
         start_episode: Episodio inicial (para resumir entrenamiento)
-        model_save_base_prefix_arg: Prefijo base para guardar checkpoints
+        base_path: Ruta base para guardar artifacts del entrenamiento
+        run_id: Identificador único del entrenamiento
+        seed: Semilla base para generación de seeds específicos por episodio
+        gcs_utils: Instancia de GCSUtils (opcional, solo para modo GCP)
     """
     logger.info(f"Iniciando entrenamiento por {num_episodes} episodios (desde episodio {start_episode})...")
+    logger.info(f"Usando semilla base {seed} para generación de seeds específicos por episodio")
     
-    # Determinar el prefijo base para guardado de checkpoints
-    checkpoint_save_prefix = model_save_base_prefix_arg or model_prefix
+    # Los checkpoints se guardan usando el run_id como prefijo
     
     # Métricas de entrenamiento
     episode_returns = []
@@ -344,6 +498,9 @@ def train_agent(agent: TransformerSACAgent, env: FuturesTradingEnv,
     critic_losses = []
     alpha_losses = []
     alpha_values = []
+    
+    # Control de inicio de aprendizaje
+    learning_started = False
     
     # Crear directorio para modelos (solo si no es GCS)
     if config.storage_mode != "gcp":
@@ -358,8 +515,11 @@ def train_agent(agent: TransformerSACAgent, env: FuturesTradingEnv,
     for episode in range(start_episode, num_episodes):
         episode_start_time = time.time()
         
-        # Reset del entorno
-        obs, _ = env.reset()
+        # Calcular semilla específica para este episodio
+        current_episode_seed = seed + episode
+        
+        # Reset del entorno con semilla específica
+        obs, _ = env.reset(seed=current_episode_seed)
         episode_return = 0
         episode_length = 0
         initial_balance = env.balance_actual
@@ -395,8 +555,13 @@ def train_agent(agent: TransformerSACAgent, env: FuturesTradingEnv,
             # Almacenar experiencia
             agent.replay_buffer.add(obs, action, reward, next_obs, terminated, truncated)
             
-            # Entrenar si hay suficientes experiencias
-            if len(agent.replay_buffer) >= config.batch_size:
+            # Entrenar solo si hay suficientes experiencias acumuladas
+            if len(agent.replay_buffer) >= config.min_buffer_for_learning:
+                # Log especial cuando inicie el aprendizaje por primera vez
+                if not learning_started:
+                    logger.info(f"🎯 INICIANDO APRENDIZAJE: Buffer alcanzó {len(agent.replay_buffer)} experiencias (mínimo: {config.min_buffer_for_learning})")
+                    learning_started = True
+                
                 losses = agent.learn()
                 if losses:
                     ep_actor_losses.append(losses['actor_loss'])
@@ -509,6 +674,7 @@ def train_agent(agent: TransformerSACAgent, env: FuturesTradingEnv,
             avg_return = np.mean(episode_returns[-10:])
             avg_profit = np.mean(episode_profits[-10:])
             buffer_size = len(agent.replay_buffer)
+            learning_status = "LEARNING" if buffer_size >= config.min_buffer_for_learning else f"COLLECTING ({buffer_size}/{config.min_buffer_for_learning})"
             
             logger.info(f"Episodio {episode + 1}/{num_episodes} | "
                        f"Return: {episode_return:.2f} | "
@@ -516,6 +682,7 @@ def train_agent(agent: TransformerSACAgent, env: FuturesTradingEnv,
                        f"Avg Return (10): {avg_return:.2f} | "
                        f"Avg Profit (10): {avg_profit:.2f}% | "
                        f"Buffer: {buffer_size} | "
+                       f"Status: {learning_status} | "
                        f"Time: {episode_time:.1f}s")
             
             if alpha_values:
@@ -534,32 +701,78 @@ def train_agent(agent: TransformerSACAgent, env: FuturesTradingEnv,
             logger.info(f"  - Longitud promedio: {eval_metrics['mean_episode_length']:.1f}")
             logger.info(f"  - Win rate: {eval_metrics['win_rate']:.2%}")
             logger.info(f"  - Trades por episodio: {eval_metrics['total_trades']:.1f}")
+            logger.info(f"  - Máximo Drawdown: {eval_metrics['max_drawdown'] * 100:.2f}%")
+            logger.info(f"  - Sharpe Ratio: {eval_metrics['sharpe_ratio']:.4f}")
+            logger.info(f"  - Sortino Ratio: {eval_metrics['sortino_ratio']:.4f}")
             
             # Guardar mejor modelo
             if eval_metrics['mean_return'] > best_eval_return:
                 best_eval_return = eval_metrics['mean_return']
                 if config.storage_mode == "gcp":
-                    best_model_path = f"{model_prefix}/best_model.pth"
+                    best_model_path = f"{run_id}/best_model/model.pth"
                 else:
-                    best_model_path = models_dir / "best_model.pth"
+                    if base_path and run_id:
+                        best_model_dir = Path(base_path) / "best_model"
+                        best_model_dir.mkdir(parents=True, exist_ok=True)
+                        best_model_path = best_model_dir / "model.pth"
+                    else:
+                        best_model_path = models_dir / "best_model.pth"
                 agent.save(best_model_path)
                 logger.info(f"  - Nuevo mejor modelo guardado: {best_model_path}")
         
         # Guardado periódico
         if (episode + 1) % save_frequency == 0:
             if config.storage_mode == "gcp":
-                checkpoint_path = f"{checkpoint_save_prefix}/checkpoint_episode_{episode + 1}"
-                agent.save_models(checkpoint_path)
+                # Para GCS: usar tempfile y subir cada archivo individualmente
+                gcs_checkpoint_directory_prefix = f"{run_id}/checkpoints/checkpoint_episode_{episode + 1}"
+                
+                with tempfile.TemporaryDirectory() as temp_dir:
+                    # Prefijo para archivos temporales locales
+                    local_temp_ckpt_prefix = os.path.join(temp_dir, f"ckpt_ep_{episode + 1}")
+                    
+                    # Guardar modelos en directorio temporal
+                    agent.save_models(local_temp_ckpt_prefix)
+                    
+                    # Subir cada archivo a GCS
+                    success_count = 0
+                    total_files = 0
+                    
+                    for local_file_path in Path(temp_dir).glob(f"ckpt_ep_{episode + 1}_*"):
+                        total_files += 1
+                        local_file_name_only = local_file_path.name
+                        gcs_blob_name = f"{gcs_checkpoint_directory_prefix}/{local_file_name_only}"
+                        
+                        if gcs_utils.upload_file_to_gcs(str(local_file_path), gcs_blob_name):
+                            success_count += 1
+                        else:
+                            logger.error(f"Error al subir checkpoint {local_file_path} a GCS")
+                    
+                    if success_count == total_files and total_files > 0:
+                        logger.info(f"Checkpoint guardado exitosamente en GCS: {gcs_checkpoint_directory_prefix}/")
+                    else:
+                        logger.error(f"Error al guardar checkpoint en GCS. Solo {success_count} de {total_files} archivos subidos.")
+                        
+                checkpoint_path = gcs_checkpoint_directory_prefix
             else:
-                checkpoint_path = models_dir / f"checkpoint_episode_{episode + 1}"
+                if base_path and run_id:
+                    checkpoint_dir = Path(base_path) / "checkpoints"
+                    checkpoint_dir.mkdir(parents=True, exist_ok=True)
+                    checkpoint_path = checkpoint_dir / f"checkpoint_episode_{episode + 1}"
+                else:
+                    checkpoint_path = models_dir / f"checkpoint_episode_{episode + 1}"
                 agent.save_models(str(checkpoint_path))
-            logger.info(f"Checkpoint guardado: {checkpoint_path}")
+                logger.info(f"Checkpoint guardado: {checkpoint_path}")
     
     # Guardado final
     if config.storage_mode == "gcp":
-        final_model_path = f"{model_prefix}/final_model.pth"
+        final_model_path = f"{run_id}/final_model/model.pth"
     else:
-        final_model_path = models_dir / "final_model.pth"
+        if base_path and run_id:
+            final_model_dir = Path(base_path) / "final_model"
+            final_model_dir.mkdir(parents=True, exist_ok=True)
+            final_model_path = final_model_dir / "model.pth"
+        else:
+            final_model_path = models_dir / "final_model.pth"
     agent.save(final_model_path)
     
     total_time = time.time() - start_time
@@ -577,8 +790,8 @@ def train_agent(agent: TransformerSACAgent, env: FuturesTradingEnv,
     if config.storage_mode == "gcp" and log_dir:
         try:
             logger.info(f"Sincronizando logs de TensorBoard a GCS...")
-            gcs_utils = GCSUtils()
-            tensorboard_prefix = f"tensorboard_logs/{log_dir.name}"
+            #gcs_utils = GCSUtils()
+            tensorboard_prefix = f"{run_id}/tensorboard"
             gcs_utils.upload_directory_to_gcs(
                 local_directory_path=str(log_dir),
                 gcs_prefix=tensorboard_prefix
@@ -606,78 +819,189 @@ def validate_start_date(date_string: str) -> bool:
         return False
 
 
-def find_latest_checkpoint_info(checkpoint_search_base: str, logger: logging.Logger) -> Optional[Tuple[str, int]]:
+
+
+
+def find_checkpoint_in_specific_run(run_id: str, logger: logging.Logger, gcs_utils=None) -> Optional[Tuple[str, int]]:
     """
-    Orquestar la búsqueda del último checkpoint, ya sea localmente o en GCS.
+    Buscar el último checkpoint en un run_id específico.
     
     Args:
-        checkpoint_search_base (str): Si es local, es la ruta al directorio base de modelos.
-                                    Si es GCS, es el prefijo de la carpeta de checkpoints en GCS.
+        run_id (str): ID del run específico donde buscar checkpoints
         logger (logging.Logger): Logger para mensajes
     
     Returns:
         Optional[Tuple[str, int]]: Tupla con el prefijo completo para cargar el checkpoint
                                  y el número de episodio, o None si no se encuentra ningún checkpoint
     """
-    logger.info(f"Buscando checkpoints en: {checkpoint_search_base}")
+    logger.info(f"Buscando checkpoints en run específico: {run_id}")
     
     try:
         if config.storage_mode == "gcp":
-            # Modo GCS: usar GCSUtils para buscar
-            from src.configuration.gcs_utils import gcs_utils
-            return gcs_utils.find_latest_checkpoint_gcs_info(checkpoint_search_base)
-            
-        else:
-            # Modo local: buscar en directorio local
-            checkpoint_dir = Path(checkpoint_search_base)
-            
-            if not checkpoint_dir.exists():
-                logger.info(f"Directorio de checkpoints no existe: {checkpoint_search_base}")
+            # Modo GCS: buscar en el run específico
+            if gcs_utils is None:
+                logger.error("gcs_utils es requerido para modo GCP")
                 return None
             
-            # Buscar archivos de metadata de checkpoint usando glob
+            checkpoint_prefix = f"{run_id}/checkpoints/"
+            logger.info(f"Buscando en GCS: gs://{config.gcs_bucket_name}/{checkpoint_prefix}")
+            
+            # Buscar archivos de metadata de checkpoint en el run específico
+            bucket = gcs_utils._get_bucket()
+            blobs = bucket.list_blobs(prefix=checkpoint_prefix)
+            metadata_pattern = re.compile(r"checkpoint_episode_(\d+)_metadata\.pkl$")
+            
+            latest_episode = -1
+            latest_checkpoint = None
+            
+            for blob in blobs:
+                filename = blob.name.split('/')[-1]
+                match = metadata_pattern.search(filename)
+                if match:
+                    episode_num = int(match.group(1))
+                    if episode_num > latest_episode:
+                        latest_episode = episode_num
+                        latest_checkpoint = f"{run_id}/checkpoints/checkpoint_episode_{episode_num}"
+            
+            if latest_checkpoint:
+                logger.info(f"Checkpoint encontrado en GCS: {latest_checkpoint} (episodio {latest_episode})")
+                return (latest_checkpoint, latest_episode)
+            else:
+                logger.info(f"No se encontraron checkpoints en el run {run_id} en GCS")
+                return None
+                
+        else:
+            # Modo local: buscar en el directorio del run específico
+            checkpoint_dir = Path(f"Entrenamientos/{run_id}/checkpoints/")
+            logger.info(f"Buscando en local: {checkpoint_dir}")
+            
+            if not checkpoint_dir.exists():
+                logger.info(f"Directorio de checkpoints no existe: {checkpoint_dir}")
+                return None
+            
+            # Buscar archivos de metadata de checkpoint
             metadata_files = list(checkpoint_dir.glob("checkpoint_episode_*_metadata.pkl"))
             
             if not metadata_files:
-                logger.info(f"No se encontraron checkpoints en: {checkpoint_search_base}")
+                logger.info(f"No se encontraron archivos de metadata en: {checkpoint_dir}")
                 return None
             
-            # Patrón regex para extraer el nombre base del checkpoint y el número de episodio
-            metadata_pattern = re.compile(r"(checkpoint_episode_(\d+))_metadata\.pkl$")
+            # Patrón regex para extraer el número de episodio
+            metadata_pattern = re.compile(r"checkpoint_episode_(\d+)_metadata\.pkl$")
             
             latest_episode_number = -1
-            latest_checkpoint_base_name = None
+            latest_checkpoint_path = None
             
-            # Iterar sobre los archivos encontrados
+            # Encontrar el checkpoint más reciente
             for metadata_file in metadata_files:
                 filename = metadata_file.name
                 match = metadata_pattern.search(filename)
                 
                 if match:
-                    checkpoint_base_name = match.group(1)  # "checkpoint_episode_123"
-                    episode_number = int(match.group(2))    # 123
-                    
-                    logger.debug(f"Encontrado checkpoint local: {checkpoint_base_name} (episodio {episode_number})")
+                    episode_number = int(match.group(1))
                     
                     if episode_number > latest_episode_number:
                         latest_episode_number = episode_number
-                        latest_checkpoint_base_name = checkpoint_base_name
+                        latest_checkpoint_path = checkpoint_dir / f"checkpoint_episode_{episode_number}"
             
-            if latest_checkpoint_base_name is None:
-                logger.info("No se encontraron checkpoints válidos localmente")
+            if latest_checkpoint_path:
+                logger.info(f"Checkpoint encontrado en local: {latest_checkpoint_path} (episodio {latest_episode_number})")
+                return (str(latest_checkpoint_path), latest_episode_number)
+            else:
+                logger.info(f"No se encontraron checkpoints válidos en el run {run_id}")
                 return None
-            
-            # Construir el prefijo completo del checkpoint más reciente
-            latest_checkpoint_full_prefix = str(checkpoint_dir / latest_checkpoint_base_name)
-            
-            logger.info(f"Checkpoint local más reciente: {latest_checkpoint_base_name} (episodio {latest_episode_number})")
-            logger.info(f"Prefijo completo: {latest_checkpoint_full_prefix}")
-            
-            return (latest_checkpoint_full_prefix, latest_episode_number)
-            
+                
     except Exception as e:
-        logger.error(f"Error al buscar checkpoints: {e}")
+        logger.error(f"Error al buscar checkpoints en run {run_id}: {e}")
         return None
+
+
+def save_run_config(base_path: Path, hparams: Dict, args, logger, gcs_utils=None):
+    """
+    Guarda la configuración completa del run en config_run.yaml.
+    
+    Args:
+        base_path: Ruta base donde guardar la configuración
+        hparams: Diccionario de hiperparámetros
+        args: Argumentos de línea de comandos
+        logger: Logger para mensajes
+        gcs_utils: Instancia de GCSUtils (requerida para modo GCP)
+    """
+    import yaml
+    
+    # Crear la configuración completa del run
+    run_config = {
+        'run_info': {
+            'run_id': hparams['run_id'],
+            'timestamp': datetime.now().isoformat(),
+            'storage_mode': hparams['storage_mode'],
+            'base_path': hparams['base_path']
+        },
+        'command_line_args': {
+            'symbol': args.symbol,
+            'interval': args.interval,
+            'start_date': args.start_date,
+            'episodes': args.episodes,
+            'eval_frequency': args.eval_frequency,
+            'save_frequency': args.save_frequency,
+            'no_cuda': args.no_cuda,
+            'eval_episodes': args.eval_episodes
+        },
+        'hyperparameters': {k: v for k, v in hparams.items() if k not in ['run_id', 'storage_mode', 'base_path']},
+        'config_snapshot': {
+            'normalization': config.normalization_config,
+            'environment': {
+                'capital_inicial': config.capital_inicial,
+                'apalancamiento': config.apalancamiento,
+                'porcentaje_max_inversion_por_trade': config.porcentaje_max_inversion_por_trade,
+                'max_drawdown_configurado_cuenta': config.max_drawdown_configurado_cuenta,
+                'comision_taker_porcentaje': config.comision_taker_porcentaje,
+                'slippage_porcentaje': config.slippage_porcentaje,
+                'ventana_observacion_size': config.ventana_observacion_size,
+                'max_pasos_en_posicion': config.max_pasos_en_posicion
+            },
+            'agent': {
+                'gamma': config.gamma,
+                'tau': config.tau,
+                'batch_size': config.batch_size,
+                'replay_buffer_size': config.replay_buffer_size,
+                'actor_learning_rate': config.actor_learning_rate,
+                'critic_learning_rate': config.critic_learning_rate,
+                'alpha_learning_rate': config.alpha_learning_rate,
+                'd_model': config.d_model,
+                'n_head': config.n_head,
+                'num_encoder_layers': config.num_encoder_layers
+            }
+        }
+    }
+    
+    if config.storage_mode == "gcp":
+        # Para GCP, guardar temporalmente y subir
+        import tempfile
+        
+        if gcs_utils is None:
+            logger.error("gcs_utils es requerido para modo GCP")
+            return
+        
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as temp_file:
+            yaml.dump(run_config, temp_file, default_flow_style=False, allow_unicode=True)
+            temp_path = temp_file.name
+        
+        try:
+            # Subir a GCS
+            gcs_blob_name = f"{hparams['run_id']}/config_run.yaml"
+            if gcs_utils.upload_file_to_gcs(temp_path, gcs_blob_name):
+                logger.info(f"Configuración del run guardada en GCS: gs://{config.gcs_bucket_name}/{gcs_blob_name}")
+            else:
+                logger.error("Error al guardar configuración del run en GCS")
+        finally:
+            os.unlink(temp_path)
+    else:
+        # Para local, guardar directamente
+        config_path = base_path / "config_run.yaml"
+        with open(config_path, 'w', encoding='utf-8') as f:
+            yaml.dump(run_config, f, default_flow_style=False, allow_unicode=True)
+        logger.info(f"Configuración del run guardada en: {config_path}")
 
 
 def main():
@@ -691,26 +1015,53 @@ def main():
     # Parsear argumentos
     args = parse_arguments()
     
+    # Configurar semilla aleatoria para reproducibilidad
+    set_seed(args.seed, logger)
+    
     # Validar fecha de inicio
     if not validate_start_date(args.start_date):
         logger.error(f"Formato de fecha inválido: {args.start_date}. Use YYYY-MM-DD")
         sys.exit(1)
     
-    logger.info(f"Parámetros: Symbol={args.symbol}, Interval={args.interval}, Start Date={args.start_date}")
+    logger.info(f"Parámetros: Symbol={args.symbol}, Interval={args.interval}, Start Date={args.start_date}, Seed={args.seed}")
+
+    # Generar run_id único incluyendo la semilla
+    current_time = datetime.now().strftime('%Y%m%d-%H%M%S')
+    run_id = f"{args.symbol}_{args.interval}_{args.seed}_{current_time}"
+    logger.info(f"Run ID generado: {run_id}")
+    
+    # Crear instancia única de GCSUtils para todo el proceso
+    gcs_utils = None
+    if config.storage_mode == "gcp":
+        from src.configuration.gcs_utils import gcs_utils
+        logger.info("Usando instancia global de GCSUtils para modo GCP")
+
+    # Determinar base_path según storage_mode
+    if config.storage_mode == "gcp":
+        base_path = f"gs://{config.gcs_bucket_name}/{run_id}"
+        logger.info(f"Modo GCP: Los artefactos se guardarán en {base_path}")
+    else:
+        base_path = Path("Entrenamientos") / run_id
+        base_path.mkdir(parents=True, exist_ok=True)
+        logger.info(f"Modo Local: Los artefactos se guardarán en {base_path}")
 
     # Inicializar TensorBoard Writer
-    current_time = datetime.now().strftime('%Y%m%d-%H%M%S')
-    experiment_name = f"SAC_Transformer_{args.symbol}_{args.interval}_{current_time}"
-    log_dir = Path("runs") / experiment_name
-    log_dir.mkdir(parents=True, exist_ok=True)
-    writer = SummaryWriter(log_dir=str(log_dir))
-    logger.info(f"TensorBoard logs se guardarán en: {log_dir}")
+    tensorboard_dir = base_path / "tensorboard" if config.storage_mode == "local" else Path("runs") / f"btcbot_{current_time}"
+    if config.storage_mode == "local":
+        tensorboard_dir.mkdir(parents=True, exist_ok=True)
+    else:
+        tensorboard_dir.mkdir(parents=True, exist_ok=True)
+    
+    writer = SummaryWriter(log_dir=str(tensorboard_dir))
+    logger.info(f"TensorBoard logs se guardarán en: {tensorboard_dir}")
 
     # Registrar Hiperparámetros
     hparams = {
+        'run_id': run_id,
         'symbol': args.symbol,
         'interval': args.interval,
         'start_date': args.start_date,
+        'seed': args.seed,
         'episodes': args.episodes,
         'eval_frequency': args.eval_frequency,
         'save_frequency': args.save_frequency,
@@ -726,10 +1077,23 @@ def main():
         'num_encoder_layers': config.num_encoder_layers,
         'ventana_observacion': config.ventana_observacion_size,
         'capital_inicial': config.capital_inicial,
-        'apalancamiento': config.apalancamiento
+        'apalancamiento': config.apalancamiento,
+        'storage_mode': config.storage_mode,
+        'base_path': str(base_path)
     }
     # Log hyperparameters as text for now (we'll link to metrics later)
     writer.add_text('Hyperparameters', str(hparams), 0)
+    
+    # Guardar configuración del run
+    try:
+        save_run_config(base_path=Path(base_path) if config.storage_mode == "local" else base_path, 
+                        hparams=hparams, 
+                        args=args, 
+                        logger=logger,
+                        gcs_utils=gcs_utils)
+    except Exception as e:
+        logger.error(f"Error al guardar config_run.yaml: {e}")
+        # Continuar ejecución ya que este error no es crítico
     
     try:
         # 1. Adquisición de datos
@@ -777,7 +1141,7 @@ def main():
         
         # 3. Normalización de Datos
         logger.info("=== FASE 3: Normalización de Datos ===")
-        normalization = Normalization(dataframe)
+        normalization = Normalization(dataframe, base_path=str(base_path), run_id=run_id)
         
         # Ejecutar proceso de normalización
         normalized_dataframe, scaler = normalization.main()
@@ -804,63 +1168,97 @@ def main():
         device = setup_device(args.no_cuda)
         logger.info(f"Usando device: {device}")
         
-        # Crear entorno de trading
-        env = create_trading_environment(dataframe, logger)
-        
-        # Crear y entrenar agente
-        agent = create_sac_agent(env, device, logger)
-        
         # Variables para resumir entrenamiento
         start_episode = 0
-        model_save_base_prefix = f"models/{args.symbol}_{args.interval}_{current_time}"
         
-        # Buscar checkpoint previo para resumir entrenamiento
-        logger.info("\n=== BÚSQUEDA DE CHECKPOINT PARA RESUMIR ENTRENAMIENTO ===")
+        # Nueva lógica de carga de checkpoint basada en argumento --checkpoint
+        logger.info("\n=== CONFIGURACIÓN DE CHECKPOINT O EJECUCIÓN NUEVA ===")
         
-        if config.storage_mode == "gcp":
-            checkpoint_search_base = "models"  # Buscar en la carpeta de modelos en GCS
+        # Variables para pasar la ruta/blob del price_scaler a create_trading_environment
+        path_price_scaler_a_cargar = None
+        blob_name_price_scaler_a_cargar = None
+        
+        if args.checkpoint is None:
+            # No se especificó checkpoint, comenzar desde cero
+            logger.info("Iniciando nueva ejecución (sin checkpoint).")
+            start_episode = 0
+            
+            # Configurar rutas del price_scaler para la nueva ejecución usando el run_id actual
+            if config.storage_mode == "gcp":
+                # Para GCS, usar el run_id actual para construir el blob_name
+                blob_name_price_scaler_a_cargar = f"{run_id}/price_scaler.pkl"
+                logger.info(f"Se cargará price_scaler desde GCS (nueva ejecución): {blob_name_price_scaler_a_cargar}")
+            else:
+                # Para local, usar el base_path actual que ya incluye el run_id
+                path_price_scaler_a_cargar = str(Path(base_path) / "price_scaler.pkl")
+                logger.info(f"Se cargará price_scaler desde local (nueva ejecución): {path_price_scaler_a_cargar}")
         else:
-            checkpoint_search_base = "models"  # Buscar en directorio local models/
+            # Se especificó un run_id para cargar checkpoint
+            logger.info(f"Intentando reanudar desde checkpoint del run_id: {args.checkpoint}")
+            
+            # Buscar checkpoint en el run_id específico
+            checkpoint_info = find_checkpoint_in_specific_run(args.checkpoint, logger, gcs_utils)
+            
+            if checkpoint_info:
+                checkpoint_prefix, latest_episode = checkpoint_info
+                
+                logger.info(f"✅ Checkpoint encontrado del episodio {latest_episode}")
+                logger.info(f"Ubicación: {checkpoint_prefix}")
+                
+                # Configurar rutas de scalers para cargar desde el run_id específico del checkpoint
+                if config.storage_mode == "gcp":
+                    # Para GCS, construir blob names específicos del run_id del checkpoint
+                    blob_name_price_scaler_a_cargar = f"{args.checkpoint}/price_scaler.pkl"
+                    logger.info(f"Se cargará price_scaler desde GCS (checkpoint): {blob_name_price_scaler_a_cargar}")
+                else:
+                    # Para local, construir paths específicos del run_id del checkpoint
+                    path_price_scaler_a_cargar = f"Entrenamientos/{args.checkpoint}/price_scaler.pkl"
+                    logger.info(f"Se cargará price_scaler desde local (checkpoint): {path_price_scaler_a_cargar}")
+            else:
+                logger.error(f"❌ No se encontraron checkpoints en el run_id: {args.checkpoint}")
+                logger.error("Terminando ejecución. Verifique que el run_id sea válido y contenga checkpoints.")
+                return
         
-        checkpoint_info = find_latest_checkpoint_info(checkpoint_search_base, logger)
+        # Crear entorno de trading
+        env = create_trading_environment(
+            dataframe,  # Este debe ser el dataframe normalizado
+            logger,
+            price_scaler_path=path_price_scaler_a_cargar,
+            price_scaler_blob_name=blob_name_price_scaler_a_cargar
+        )
         
-        if checkpoint_info:
-            checkpoint_prefix, latest_episode = checkpoint_info
-            
-            logger.info(f"Se encontró checkpoint del episodio {latest_episode}")
-            logger.info(f"Ubicación: {checkpoint_prefix}")
-            
-            # Preguntar al usuario si desea resumir
-            response = input(f"\n¿Desea resumir el entrenamiento desde el episodio {latest_episode}? (y/n): ").strip().lower()
-            
-            if response in ['y', 'yes', 'sí', 'si', 's']:
+        # Crear agente
+        agent = create_sac_agent(env, device, logger)
+        
+        # Cargar checkpoint si corresponde
+        if args.checkpoint is not None:
+            checkpoint_info = find_checkpoint_in_specific_run(args.checkpoint, logger, gcs_utils)
+            if checkpoint_info:
+                checkpoint_prefix, latest_episode = checkpoint_info
+                
                 try:
                     logger.info(f"Cargando checkpoint desde: {checkpoint_prefix}")
                     agent.load_models(checkpoint_prefix)
                     
                     start_episode = latest_episode
-                    model_save_base_prefix = checkpoint_prefix.rsplit('_episode_', 1)[0] if '_episode_' in checkpoint_prefix else model_save_base_prefix
                     
                     logger.info(f"✅ Checkpoint cargado exitosamente")
+                    logger.info(f"  - Run ID de origen: {args.checkpoint}")
                     logger.info(f"  - Episodio inicial: {start_episode}")
                     logger.info(f"  - Total steps: {agent.total_steps}")
                     logger.info(f"  - Learning steps: {agent.learning_steps}")
-                    logger.info(f"  - Prefijo de guardado: {model_save_base_prefix}")
+                    logger.info(f"  - Nuevos artefactos se guardarán en run_id: {run_id}")
                     
                 except Exception as e:
-                    logger.error(f"❌ Error al cargar checkpoint: {e}")
-                    logger.info("Continuando con entrenamiento desde cero...")
-                    start_episode = 0
-            else:
-                logger.info("Iniciando entrenamiento desde cero (no se cargó checkpoint)")
-        else:
-            logger.info("No se encontraron checkpoints previos. Iniciando entrenamiento desde cero.")
+                    logger.error(f"❌ Error al cargar checkpoint desde run_id {args.checkpoint}: {e}")
+                    logger.error("Terminando ejecución. Verifique que el run_id sea válido y contenga checkpoints.")
+                    return
         
         logger.info(f"\n=== CONFIGURACIÓN FINAL DE ENTRENAMIENTO ===")
         logger.info(f"  - Episodio inicial: {start_episode}")
         logger.info(f"  - Episodios totales: {args.episodes}")
         logger.info(f"  - Episodios por entrenar: {args.episodes - start_episode}")
-        logger.info(f"  - Prefijo de guardado: {model_save_base_prefix}")
+        logger.info(f"  - Run ID actual: {run_id}")
         
         # Verificar que queden episodios por entrenar
         if start_episode >= args.episodes:
@@ -878,10 +1276,12 @@ def main():
             save_frequency=args.save_frequency,
             logger=logger,
             writer=writer,
-            model_prefix=f"models/{args.symbol}_{args.interval}_{current_time}",
-            log_dir=log_dir,
+            log_dir=tensorboard_dir,
             start_episode=start_episode,
-            model_save_base_prefix_arg=model_save_base_prefix
+            base_path=str(base_path),
+            run_id=run_id,
+            seed=args.seed,
+            gcs_utils=gcs_utils
         )
         
         logger.info("=== Proceso Completado Exitosamente ===")

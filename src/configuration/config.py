@@ -5,7 +5,7 @@ Maneja la carga y acceso a parámetros desde config.yaml y Google Cloud Secret M
 
 import yaml
 import os
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Union
 from pathlib import Path
 from google.cloud import secretmanager
 import logging
@@ -211,6 +211,11 @@ class Config:
         """Nombre del archivo scaler en GCS."""
         return self._config.get('gcp', {}).get('storage', {}).get('scaler_blob_name', 'scaler.pkl')
     
+    @property
+    def gcs_price_scaler_blob_name(self) -> str:
+        """Nombre del archivo price_scaler en GCS."""
+        return self._config.get('gcp', {}).get('storage', {}).get('price_scaler_blob_name', 'price_scaler.pkl')
+    
     # Propiedades para indicadores técnicos
     @property
     def indicators_config(self) -> Dict[str, Any]:
@@ -350,6 +355,11 @@ class Config:
         return self.agent_config.get('batch_size', 256)
     
     @property
+    def min_buffer_for_learning(self) -> int:
+        """Mínimo número de experiencias antes de comenzar el aprendizaje."""
+        return self.agent_config.get('min_buffer_for_learning', 100000)
+
+    @property
     def hiperparametros_sac(self) -> Dict[str, Any]:
         """Hiperparámetros específicos de SAC."""
         return self.agent_config.get('hiperparametros_sac', {})
@@ -385,9 +395,14 @@ class Config:
         return self.hiperparametros_sac.get('alpha_learning_rate', 0.0003)
     
     @property
-    def target_entropy(self) -> float:
-        """Entropía objetivo."""
-        return self.hiperparametros_sac.get('target_entropy', -1.0)
+    def target_entropy(self) -> Union[str, float]:
+        """
+        Entropía objetivo.
+        
+        Returns:
+            'auto' para cálculo automático como -dim_action, o valor numérico específico
+        """
+        return self.hiperparametros_sac.get('target_entropy', 'auto')
     
     @property
     def initial_log_alpha(self) -> float:

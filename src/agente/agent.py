@@ -93,7 +93,17 @@ class TransformerSACAgent:
         
         # Parámetro de temperatura alpha (entropía)
         self.learn_alpha = self.config['learn_alpha']
-        self.target_entropy = self.config['target_entropy']
+        
+        # Manejar target_entropy: puede ser 'auto' o un valor numérico
+        target_entropy_config = self.config['target_entropy']
+        if target_entropy_config == 'auto':
+            # Calcular automáticamente como -dim_action
+            self.target_entropy = -float(self.action_dim)
+            logger.info(f"Target entropy calculado automáticamente: {self.target_entropy} (= -dim_action = -{self.action_dim})")
+        else:
+            # Usar valor especificado en configuración
+            self.target_entropy = float(target_entropy_config)
+            logger.info(f"Target entropy configurado manualmente: {self.target_entropy}")
         
         if self.learn_alpha:
             self.log_alpha = torch.tensor(
@@ -347,6 +357,9 @@ class TransformerSACAgent:
         # Máscaras para episodios finalizados
         done_mask = terminated | truncated
         
+        # Normalización de recompensas para estabilidad del crítico
+        scaled_rewards = (rewards - rewards.mean()) / (rewards.std() + 1e-8)
+        
         with torch.no_grad():
             # Siguiente acción y log_prob usando la política actual
             next_actions, next_log_probs = self.actor.sample(next_market_data, next_portfolio_data)
@@ -359,7 +372,7 @@ class TransformerSACAgent:
             target_q = torch.min(target_q1, target_q2) - self.alpha * next_log_probs
             
             # Calcular targets
-            q_targets = rewards.unsqueeze(1) + self.gamma * (1 - done_mask.float().unsqueeze(1)) * target_q
+            q_targets = scaled_rewards.unsqueeze(1) + self.gamma * (1 - done_mask.float().unsqueeze(1)) * target_q
         
         # Actualizar críticos
         current_q1 = self.critic_1(market_data, portfolio_data, actions)
@@ -513,52 +526,50 @@ class TransformerSACAgent:
         
         Args:
             filepath: Ruta del archivo donde guardar (Path o string)
+                     En GCS debe incluir el run_id y subcarpeta (ej: "{run_id}/best_model/model.pth")
         """
         filepath_str = str(filepath)
         
         # Verificar modo de storage
         if config.storage_mode == "gcp":
             # Modo GCS: usar archivos temporales y subir a GCS
-            from ..configuration.gcs_utils import GCSUtils
-            gcs_utils = GCSUtils()
+            from ..configuration.gcs_utils import gcs_utils
             
             with tempfile.TemporaryDirectory() as temp_dir:
-                # Generar prefijo temporal para archivos
-                temp_prefix = os.path.join(temp_dir, "model")
+                # Generar prefijo temporal para archivos - usar nombre consistente
+                local_temp_file_prefix = os.path.join(temp_dir, "agent_model_components")
                 
                 # Guardar modelos localmente en directorio temporal
-                self.save_models(temp_prefix)
+                self.save_models(local_temp_file_prefix)
                 
-                # Subir cada archivo a GCS
-                # Extraer nombre base del archivo para usar como prefijo en GCS
-                base_name = Path(filepath).stem
-                gcs_prefix = f"models/{base_name}"
+                # Determinar directorio de destino en GCS usando el filepath proporcionado
+                gcs_target_directory = Path(filepath).parent
                 
                 # Lista de archivos que se generan en save_models
                 model_files = [
-                    f"{temp_prefix}_actor.pth",
-                    f"{temp_prefix}_critic_1.pth", 
-                    f"{temp_prefix}_critic_2.pth",
-                    f"{temp_prefix}_critic_target_1.pth",
-                    f"{temp_prefix}_critic_target_2.pth",
-                    f"{temp_prefix}_actor_optimizer.pth",
-                    f"{temp_prefix}_critic_1_optimizer.pth",
-                    f"{temp_prefix}_critic_2_optimizer.pth",
-                    f"{temp_prefix}_log_alpha.pth",
-                    f"{temp_prefix}_metadata.pkl"
+                    f"{local_temp_file_prefix}_actor.pth",
+                    f"{local_temp_file_prefix}_critic_1.pth", 
+                    f"{local_temp_file_prefix}_critic_2.pth",
+                    f"{local_temp_file_prefix}_critic_target_1.pth",
+                    f"{local_temp_file_prefix}_critic_target_2.pth",
+                    f"{local_temp_file_prefix}_actor_optimizer.pth",
+                    f"{local_temp_file_prefix}_critic_1_optimizer.pth",
+                    f"{local_temp_file_prefix}_critic_2_optimizer.pth",
+                    f"{local_temp_file_prefix}_log_alpha.pth",
+                    f"{local_temp_file_prefix}_metadata.pkl"
                 ]
                 
                 # Agregar archivo del optimizador de alpha si aplica
                 if self.learn_alpha:
-                    model_files.append(f"{temp_prefix}_alpha_optimizer.pth")
+                    model_files.append(f"{local_temp_file_prefix}_alpha_optimizer.pth")
                 
                 # Subir cada archivo a GCS
                 success_count = 0
                 for local_file in model_files:
                     if os.path.exists(local_file):
-                        # Generar nombre del blob en GCS
-                        file_suffix = os.path.basename(local_file).replace("model", "")
-                        gcs_blob_name = f"{gcs_prefix}{file_suffix}"
+                        # Construir el nombre del archivo en GCS
+                        local_file_path_obj = Path(local_file)
+                        gcs_blob_name = str(gcs_target_directory / local_file_path_obj.name)
                         
                         if gcs_utils.upload_file_to_gcs(local_file, gcs_blob_name):
                             success_count += 1
@@ -566,7 +577,7 @@ class TransformerSACAgent:
                             logger.error(f"Error al subir {local_file} a GCS como {gcs_blob_name}")
                 
                 if success_count == len([f for f in model_files if os.path.exists(f)]):
-                    logger.info(f"Modelo guardado exitosamente en GCS: {gcs_prefix}")
+                    logger.info(f"Modelo guardado exitosamente en GCS: {gcs_target_directory}")
                 else:
                     logger.error(f"Error al guardar modelo en GCS. Solo {success_count} de {len(model_files)} archivos subidos.")
         else:
@@ -582,65 +593,65 @@ class TransformerSACAgent:
         
         Args:
             filepath: Ruta del archivo desde donde cargar (Path o string)
+                     En GCS debe incluir el run_id y subcarpeta (ej: "{run_id}/best_model/model.pth")
         """
         filepath_str = str(filepath)
         
         # Verificar modo de storage  
         if config.storage_mode == "gcp":
             # Modo GCS: descargar archivos de GCS a directorio temporal
-            from ..configuration.gcs_utils import GCSUtils
-            gcs_utils = GCSUtils()
+            from ..configuration.gcs_utils import gcs_utils
             
             with tempfile.TemporaryDirectory() as temp_dir:
-                # Generar prefijo temporal para archivos
-                temp_prefix = os.path.join(temp_dir, "model")
+                # Generar prefijo temporal para archivos - usar nombre consistente con save
+                temp_prefix = os.path.join(temp_dir, "agent_model_components")
                 
-                # Extraer nombre base del archivo para usar como prefijo en GCS
-                base_name = Path(filepath).stem
-                gcs_prefix = f"models/{base_name}"
+                # Determinar directorio fuente en GCS usando el filepath proporcionado
+                gcs_source_directory = Path(filepath).parent
                 
-                # Lista de archivos que necesitamos descargar
-                model_files = [
-                    ("_actor.pth", f"{temp_prefix}_actor.pth"),
-                    ("_critic_1.pth", f"{temp_prefix}_critic_1.pth"),
-                    ("_critic_2.pth", f"{temp_prefix}_critic_2.pth"), 
-                    ("_critic_target_1.pth", f"{temp_prefix}_critic_target_1.pth"),
-                    ("_critic_target_2.pth", f"{temp_prefix}_critic_target_2.pth"),
-                    ("_actor_optimizer.pth", f"{temp_prefix}_actor_optimizer.pth"),
-                    ("_critic_1_optimizer.pth", f"{temp_prefix}_critic_1_optimizer.pth"),
-                    ("_critic_2_optimizer.pth", f"{temp_prefix}_critic_2_optimizer.pth"),
-                    ("_log_alpha.pth", f"{temp_prefix}_log_alpha.pth"),
-                    ("_metadata.pkl", f"{temp_prefix}_metadata.pkl")
+                # Lista de archivos que necesitamos descargar (nombres consistentes con save)
+                component_files = [
+                    "agent_model_components_actor.pth",
+                    "agent_model_components_critic_1.pth",
+                    "agent_model_components_critic_2.pth", 
+                    "agent_model_components_critic_target_1.pth",
+                    "agent_model_components_critic_target_2.pth",
+                    "agent_model_components_actor_optimizer.pth",
+                    "agent_model_components_critic_1_optimizer.pth",
+                    "agent_model_components_critic_2_optimizer.pth",
+                    "agent_model_components_log_alpha.pth",
+                    "agent_model_components_metadata.pkl"
                 ]
                 
                 # Agregar archivo del optimizador de alpha si aplica
                 if self.learn_alpha:
-                    model_files.append(("_alpha_optimizer.pth", f"{temp_prefix}_alpha_optimizer.pth"))
+                    component_files.append("agent_model_components_alpha_optimizer.pth")
                 
                 # Descargar cada archivo de GCS
                 success_count = 0
-                for file_suffix, local_file in model_files:
-                    gcs_blob_name = f"{gcs_prefix}{file_suffix}"
+                for component_filename in component_files:
+                    gcs_blob_name = str(gcs_source_directory / component_filename)
+                    local_temp_file = os.path.join(temp_dir, component_filename)
                     
                     # Verificar si el archivo existe en GCS antes de intentar descargarlo
                     if gcs_utils.file_exists_in_gcs(gcs_blob_name):
-                        if gcs_utils.download_file_from_gcs(gcs_blob_name, local_file):
+                        if gcs_utils.download_file_from_gcs(gcs_blob_name, local_temp_file):
                             success_count += 1
                         else:
-                            logger.error(f"Error al descargar {gcs_blob_name} de GCS a {local_file}")
+                            logger.error(f"Error al descargar {gcs_blob_name} de GCS a {local_temp_file}")
                     else:
                         # Para archivos opcionales como alpha_optimizer, no es un error si no existe
-                        if file_suffix == "_alpha_optimizer.pth" and not self.learn_alpha:
+                        if component_filename == "agent_model_components_alpha_optimizer.pth" and not self.learn_alpha:
                             continue
                         logger.error(f"Archivo {gcs_blob_name} no existe en GCS")
                 
-                if success_count >= len(model_files) - (0 if self.learn_alpha else 1):  # Ajustar por alpha_optimizer opcional
+                if success_count >= len(component_files) - (0 if self.learn_alpha else 1):  # Ajustar por alpha_optimizer opcional
                     # Cargar modelos desde archivos temporales
                     self.load_models(temp_prefix)
-                    logger.info(f"Modelo cargado exitosamente desde GCS: {gcs_prefix}")
+                    logger.info(f"Modelo cargado exitosamente desde GCS: {gcs_source_directory}")
                 else:
-                    logger.error(f"Error al cargar modelo desde GCS. Solo {success_count} de {len(model_files)} archivos descargados.")
-                    raise FileNotFoundError(f"No se pudo cargar el modelo completo desde GCS: {gcs_prefix}")
+                    logger.error(f"Error al cargar modelo desde GCS. Solo {success_count} de {len(component_files)} archivos descargados.")
+                    raise FileNotFoundError(f"No se pudo cargar el modelo completo desde GCS: {gcs_source_directory}")
         else:
             # Modo local: usar load_models directamente
             # Remover extensión .pth si existe para que load_models funcione correctamente  
