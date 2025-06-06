@@ -533,8 +533,7 @@ class TransformerSACAgent:
         # Verificar modo de storage
         if config.storage_mode == "gcp":
             # Modo GCS: usar archivos temporales y subir a GCS
-            from ..configuration.gcs_utils import GCSUtils
-            gcs_utils = GCSUtils()
+            from ..configuration.gcs_utils import gcs_utils
             
             with tempfile.TemporaryDirectory() as temp_dir:
                 # Generar prefijo temporal para archivos - usar nombre consistente
@@ -601,8 +600,7 @@ class TransformerSACAgent:
         # Verificar modo de storage  
         if config.storage_mode == "gcp":
             # Modo GCS: descargar archivos de GCS a directorio temporal
-            from ..configuration.gcs_utils import GCSUtils
-            gcs_utils = GCSUtils()
+            from ..configuration.gcs_utils import gcs_utils
             
             with tempfile.TemporaryDirectory() as temp_dir:
                 # Generar prefijo temporal para archivos - usar nombre consistente con save

@@ -464,7 +464,8 @@ def train_agent(agent: TransformerSACAgent, env: FuturesTradingEnv,
                num_episodes: int, eval_frequency: int, eval_episodes: int,
                save_frequency: int, logger, writer: SummaryWriter,
                log_dir: Path = None, start_episode: int = 0,
-               base_path: str = None, run_id: str = None, seed: int = 73):
+               base_path: str = None, run_id: str = None, seed: int = 73,
+               gcs_utils=None):
     """
     Entrena el agente SAC.
     
@@ -482,6 +483,7 @@ def train_agent(agent: TransformerSACAgent, env: FuturesTradingEnv,
         base_path: Ruta base para guardar artifacts del entrenamiento
         run_id: Identificador único del entrenamiento
         seed: Semilla base para generación de seeds específicos por episodio
+        gcs_utils: Instancia de GCSUtils (opcional, solo para modo GCP)
     """
     logger.info(f"Iniciando entrenamiento por {num_episodes} episodios (desde episodio {start_episode})...")
     logger.info(f"Usando semilla base {seed} para generación de seeds específicos por episodio")
@@ -722,9 +724,6 @@ def train_agent(agent: TransformerSACAgent, env: FuturesTradingEnv,
         if (episode + 1) % save_frequency == 0:
             if config.storage_mode == "gcp":
                 # Para GCS: usar tempfile y subir cada archivo individualmente
-                from src.configuration.gcs_utils import GCSUtils
-                gcs_utils = GCSUtils()
-                
                 gcs_checkpoint_directory_prefix = f"{run_id}/checkpoints/checkpoint_episode_{episode + 1}"
                 
                 with tempfile.TemporaryDirectory() as temp_dir:
@@ -791,7 +790,7 @@ def train_agent(agent: TransformerSACAgent, env: FuturesTradingEnv,
     if config.storage_mode == "gcp" and log_dir:
         try:
             logger.info(f"Sincronizando logs de TensorBoard a GCS...")
-            gcs_utils = GCSUtils()
+            #gcs_utils = GCSUtils()
             tensorboard_prefix = f"{run_id}/tensorboard"
             gcs_utils.upload_directory_to_gcs(
                 local_directory_path=str(log_dir),
@@ -823,7 +822,7 @@ def validate_start_date(date_string: str) -> bool:
 
 
 
-def find_checkpoint_in_specific_run(run_id: str, logger: logging.Logger) -> Optional[Tuple[str, int]]:
+def find_checkpoint_in_specific_run(run_id: str, logger: logging.Logger, gcs_utils=None) -> Optional[Tuple[str, int]]:
     """
     Buscar el último checkpoint en un run_id específico.
     
@@ -840,8 +839,9 @@ def find_checkpoint_in_specific_run(run_id: str, logger: logging.Logger) -> Opti
     try:
         if config.storage_mode == "gcp":
             # Modo GCS: buscar en el run específico
-            from src.configuration.gcs_utils import GCSUtils
-            gcs_utils = GCSUtils()
+            if gcs_utils is None:
+                logger.error("gcs_utils es requerido para modo GCP")
+                return None
             
             checkpoint_prefix = f"{run_id}/checkpoints/"
             logger.info(f"Buscando en GCS: gs://{config.gcs_bucket_name}/{checkpoint_prefix}")
@@ -916,7 +916,7 @@ def find_checkpoint_in_specific_run(run_id: str, logger: logging.Logger) -> Opti
         return None
 
 
-def save_run_config(base_path: Path, hparams: Dict, args, logger):
+def save_run_config(base_path: Path, hparams: Dict, args, logger, gcs_utils=None):
     """
     Guarda la configuración completa del run en config_run.yaml.
     
@@ -925,6 +925,7 @@ def save_run_config(base_path: Path, hparams: Dict, args, logger):
         hparams: Diccionario de hiperparámetros
         args: Argumentos de línea de comandos
         logger: Logger para mensajes
+        gcs_utils: Instancia de GCSUtils (requerida para modo GCP)
     """
     import yaml
     
@@ -977,9 +978,11 @@ def save_run_config(base_path: Path, hparams: Dict, args, logger):
     if config.storage_mode == "gcp":
         # Para GCP, guardar temporalmente y subir
         import tempfile
-        from src.configuration.gcs_utils import GCSUtils
         
-        gcs_utils = GCSUtils()
+        if gcs_utils is None:
+            logger.error("gcs_utils es requerido para modo GCP")
+            return
+        
         with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as temp_file:
             yaml.dump(run_config, temp_file, default_flow_style=False, allow_unicode=True)
             temp_path = temp_file.name
@@ -1027,6 +1030,12 @@ def main():
     run_id = f"{args.symbol}_{args.interval}_{args.seed}_{current_time}"
     logger.info(f"Run ID generado: {run_id}")
     
+    # Crear instancia única de GCSUtils para todo el proceso
+    gcs_utils = None
+    if config.storage_mode == "gcp":
+        from src.configuration.gcs_utils import gcs_utils
+        logger.info("Usando instancia global de GCSUtils para modo GCP")
+
     # Determinar base_path según storage_mode
     if config.storage_mode == "gcp":
         base_path = f"gs://{config.gcs_bucket_name}/{run_id}"
@@ -1080,7 +1089,8 @@ def main():
         save_run_config(base_path=Path(base_path) if config.storage_mode == "local" else base_path, 
                         hparams=hparams, 
                         args=args, 
-                        logger=logger)
+                        logger=logger,
+                        gcs_utils=gcs_utils)
     except Exception as e:
         logger.error(f"Error al guardar config_run.yaml: {e}")
         # Continuar ejecución ya que este error no es crítico
@@ -1187,7 +1197,7 @@ def main():
             logger.info(f"Intentando reanudar desde checkpoint del run_id: {args.checkpoint}")
             
             # Buscar checkpoint en el run_id específico
-            checkpoint_info = find_checkpoint_in_specific_run(args.checkpoint, logger)
+            checkpoint_info = find_checkpoint_in_specific_run(args.checkpoint, logger, gcs_utils)
             
             if checkpoint_info:
                 checkpoint_prefix, latest_episode = checkpoint_info
@@ -1222,7 +1232,7 @@ def main():
         
         # Cargar checkpoint si corresponde
         if args.checkpoint is not None:
-            checkpoint_info = find_checkpoint_in_specific_run(args.checkpoint, logger)
+            checkpoint_info = find_checkpoint_in_specific_run(args.checkpoint, logger, gcs_utils)
             if checkpoint_info:
                 checkpoint_prefix, latest_episode = checkpoint_info
                 
@@ -1270,7 +1280,8 @@ def main():
             start_episode=start_episode,
             base_path=str(base_path),
             run_id=run_id,
-            seed=args.seed
+            seed=args.seed,
+            gcs_utils=gcs_utils
         )
         
         logger.info("=== Proceso Completado Exitosamente ===")
