@@ -1118,18 +1118,31 @@ def main():
         
         # Variables para resumir entrenamiento
         start_episode = 0
-        price_scaler_path_for_checkpoint = None
         
         # Nueva lógica de carga de checkpoint basada en argumento --checkpoint
-        logger.info("\n=== CONFIGURACIÓN DE CHECKPOINT ===")
+        logger.info("\n=== CONFIGURACIÓN DE CHECKPOINT O EJECUCIÓN NUEVA ===")
+        
+        # Variables para pasar la ruta/blob del price_scaler a create_trading_environment
+        path_price_scaler_a_cargar = None
+        blob_name_price_scaler_a_cargar = None
         
         if args.checkpoint is None:
             # No se especificó checkpoint, comenzar desde cero
-            logger.info("No se especificó --checkpoint. Iniciando entrenamiento desde cero.")
+            logger.info("Iniciando nueva ejecución (sin checkpoint).")
             start_episode = 0
+            
+            # Configurar rutas del price_scaler para la nueva ejecución usando el run_id actual
+            if config.storage_mode == "gcp":
+                # Para GCS, usar el run_id actual para construir el blob_name
+                blob_name_price_scaler_a_cargar = f"{run_id}/price_scaler.pkl"
+                logger.info(f"Se cargará price_scaler desde GCS (nueva ejecución): {blob_name_price_scaler_a_cargar}")
+            else:
+                # Para local, usar el base_path actual que ya incluye el run_id
+                path_price_scaler_a_cargar = str(Path(base_path) / "price_scaler.pkl")
+                logger.info(f"Se cargará price_scaler desde local (nueva ejecución): {path_price_scaler_a_cargar}")
         else:
             # Se especificó un run_id para cargar checkpoint
-            logger.info(f"Intentando cargar checkpoint desde run_id: {args.checkpoint}")
+            logger.info(f"Intentando reanudar desde checkpoint del run_id: {args.checkpoint}")
             
             # Buscar checkpoint en el run_id específico
             checkpoint_info = find_checkpoint_in_specific_run(args.checkpoint, logger)
@@ -1140,29 +1153,27 @@ def main():
                 logger.info(f"✅ Checkpoint encontrado del episodio {latest_episode}")
                 logger.info(f"Ubicación: {checkpoint_prefix}")
                 
-                # Configurar rutas de scalers para cargar desde el run_id específico
+                # Configurar rutas de scalers para cargar desde el run_id específico del checkpoint
                 if config.storage_mode == "gcp":
-                    # Para GCS, construir blob names específicos del run_id
-                    price_scaler_blob_name = f"{args.checkpoint}/price_scaler.pkl"
-                    price_scaler_path_for_checkpoint = None  # Se usará blob_name
-                    logger.info(f"Price scaler se cargará desde GCS: {price_scaler_blob_name}")
+                    # Para GCS, construir blob names específicos del run_id del checkpoint
+                    blob_name_price_scaler_a_cargar = f"{args.checkpoint}/price_scaler.pkl"
+                    logger.info(f"Se cargará price_scaler desde GCS (checkpoint): {blob_name_price_scaler_a_cargar}")
                 else:
-                    # Para local, construir paths específicos del run_id
-                    price_scaler_path_for_checkpoint = f"Entrenamientos/{args.checkpoint}/price_scaler.pkl"
-                    logger.info(f"Price scaler se cargará desde: {price_scaler_path_for_checkpoint}")
+                    # Para local, construir paths específicos del run_id del checkpoint
+                    path_price_scaler_a_cargar = f"Entrenamientos/{args.checkpoint}/price_scaler.pkl"
+                    logger.info(f"Se cargará price_scaler desde local (checkpoint): {path_price_scaler_a_cargar}")
             else:
                 logger.error(f"❌ No se encontraron checkpoints en el run_id: {args.checkpoint}")
                 logger.error("Terminando ejecución. Verifique que el run_id sea válido y contenga checkpoints.")
                 return
         
-        # Crear entorno de trading (con scalers apropiados si hay checkpoint)
-        if args.checkpoint and config.storage_mode == "gcp":
-            # Para GCS, pasar blob_name específico del run_id
-            price_scaler_blob_name = f"{args.checkpoint}/price_scaler.pkl"
-            env = create_trading_environment(dataframe, logger, None, price_scaler_blob_name)
-        else:
-            # Para local o sin checkpoint
-            env = create_trading_environment(dataframe, logger, price_scaler_path_for_checkpoint)
+        # Crear entorno de trading
+        env = create_trading_environment(
+            dataframe,  # Este debe ser el dataframe normalizado
+            logger,
+            price_scaler_path=path_price_scaler_a_cargar,
+            price_scaler_blob_name=blob_name_price_scaler_a_cargar
+        )
         
         # Crear agente
         agent = create_sac_agent(env, device, logger)
