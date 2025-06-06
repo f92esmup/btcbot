@@ -29,8 +29,17 @@ Aquí tienes el resumen actualizado de los cambios que planeamos realizar, inclu
 
 **Mejoras en la Evaluación y Organización (Buenas Prácticas):**
 
-5.  **Enriquecer Métricas en `evaluate_agent`:**
-    * **Acción:** Modifica `evaluate_agent` en `train.py` para calcular y registrar (en logs y TensorBoard) el **Máximo Drawdown** y el **Sharpe Ratio** (o Sortino Ratio) de los episodios de evaluación.
+5.  **✅ [COMPLETADO] Enriquecer Métricas en `evaluate_agent`:**
+    * **Acción:** Modifica `evaluate_agent` en `train.py` para calcular y registrar (en logs y TensorBoard) el **Máximo Drawdown** y el **Sharpe Ratio** y **Sortino Ratio** de los episodios de evaluación.
+    * **Estado:** ✅ Implementado completamente el 6 de junio de 2025
+    * **Detalles:** 
+      - ✅ Funciones auxiliares: `calculate_max_drawdown()`, `calculate_sharpe_ratio()`, `calculate_sortino_ratio()`
+      - ✅ Integración completa en `evaluate_agent()` con logging detallado
+      - ✅ Métricas registradas en TensorBoard: `Evaluation/Max_Drawdown_Pct`, `Evaluation/Sharpe_Ratio`, `Evaluation/Sortino_Ratio`
+      - ✅ Métricas incluidas en logs de evaluación durante entrenamiento
+      - ✅ Documentación creada en `docs/METRICAS_FINANCIERAS.md`
+      - ✅ Métricas disponibles en diccionario de retorno para análisis programático
+      - ✅ Tracking de equity durante episodios para cálculo preciso de drawdown
 
 6.  **Mejorar la Organización de Artefactos (Modelos y Scaler):**
     * **Acción:** Ajusta las rutas de guardado en `train.py` y `src/data/normalization.py` (para modo local) para que los artefactos de cada ejecución se almacenen en un directorio único (ej., basado en el `experiment_name` de TensorBoard).

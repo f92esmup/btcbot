@@ -24,6 +24,84 @@ from src.configuration.config import config
 from src.configuration.gcs_utils import GCSUtils
 
 
+def calculate_max_drawdown(equity_series: list) -> float:
+    """
+    Calcula el máximo drawdown de una serie de equity.
+    
+    Args:
+        equity_series: Lista de valores de equity
+        
+    Returns:
+        float: Máximo drawdown como porcentaje (0.0 - 1.0)
+    """
+    if len(equity_series) == 0:
+        return 0.0
+    
+    equity_array = np.array(equity_series)
+    peak = np.maximum.accumulate(equity_array)
+    drawdown = (peak - equity_array) / peak
+    max_drawdown = np.max(drawdown)
+    
+    return max_drawdown
+
+
+def calculate_sharpe_ratio(returns: list, risk_free_rate: float = 0.0) -> float:
+    """
+    Calcula el Sharpe Ratio de una serie de retornos.
+    
+    Args:
+        returns: Lista de retornos
+        risk_free_rate: Tasa libre de riesgo (anualizada)
+        
+    Returns:
+        float: Sharpe Ratio
+    """
+    if len(returns) <= 1:
+        return 0.0
+    
+    returns_array = np.array(returns)
+    excess_returns = returns_array - risk_free_rate
+    
+    if np.std(excess_returns) == 0:
+        return 0.0
+    
+    sharpe_ratio = np.mean(excess_returns) / np.std(excess_returns)
+    return sharpe_ratio
+
+
+def calculate_sortino_ratio(returns: list, risk_free_rate: float = 0.0) -> float:
+    """
+    Calcula el Sortino Ratio de una serie de retornos.
+    
+    Args:
+        returns: Lista de retornos
+        risk_free_rate: Tasa libre de riesgo (anualizada)
+        
+    Returns:
+        float: Sortino Ratio
+    """
+    if len(returns) <= 1:
+        return 0.0
+    
+    returns_array = np.array(returns)
+    excess_returns = returns_array - risk_free_rate
+    
+    # Solo considerar retornos negativos para la desviación estándar
+    negative_returns = excess_returns[excess_returns < 0]
+    
+    if len(negative_returns) == 0:
+        # No hay retornos negativos, se considera muy bueno
+        return float('inf') if np.mean(excess_returns) > 0 else 0.0
+    
+    downside_deviation = np.std(negative_returns)
+    
+    if downside_deviation == 0:
+        return 0.0
+    
+    sortino_ratio = np.mean(excess_returns) / downside_deviation
+    return sortino_ratio
+
+
 def setup_logging():
     """Configura el sistema de logging."""
     logging.basicConfig(
@@ -244,6 +322,8 @@ def evaluate_agent(agent: TransformerSACAgent, env: FuturesTradingEnv,
         env: Entorno de trading
         num_episodes: Número de episodios de evaluación
         logger: Logger para mensajes
+        writer: TensorBoard SummaryWriter (opcional)
+        global_step: Paso global para TensorBoard (opcional)
         
     Returns:
         Dict[str, float]: Métricas de evaluación
@@ -256,11 +336,19 @@ def evaluate_agent(agent: TransformerSACAgent, env: FuturesTradingEnv,
     successful_trades = 0
     total_trades = 0
     
+    # Para métricas financieras avanzadas
+    all_equity_values = []  # Para calcular max drawdown
+    episode_equity_series = []  # Equity por episodio
+    
     for episode in range(num_episodes):
         obs, _ = env.reset()
         episode_return = 0
         episode_length = 0
         initial_balance = env.balance_actual
+        initial_equity = env.equity_actual
+        
+        # Track equity durante el episodio
+        episode_equity_track = [initial_equity]
         
         done = False
         while not done:
@@ -271,6 +359,9 @@ def evaluate_agent(agent: TransformerSACAgent, env: FuturesTradingEnv,
             episode_return += reward
             episode_length += 1
             
+            # Registrar equity en cada paso
+            episode_equity_track.append(env.equity_actual)
+            
             # Contar trades
             if 'trade_executed' in info and info['trade_executed']:
                 total_trades += 1
@@ -278,13 +369,23 @@ def evaluate_agent(agent: TransformerSACAgent, env: FuturesTradingEnv,
                     successful_trades += 1
         
         final_balance = env.balance_actual
+        final_equity = env.equity_actual
         profit_pct = ((final_balance - initial_balance) / initial_balance) * 100
         
         episode_returns.append(episode_return)
         episode_profits.append(profit_pct)
         episode_lengths.append(episode_length)
+        
+        # Guardar series de equity
+        episode_equity_series.extend(episode_equity_track)
+        all_equity_values.append(final_equity)
     
     agent.train_mode()
+    
+    # Calcular métricas financieras avanzadas
+    max_drawdown = calculate_max_drawdown(episode_equity_series)
+    sharpe_ratio = calculate_sharpe_ratio(episode_profits)
+    sortino_ratio = calculate_sortino_ratio(episode_profits)
     
     metrics = {
         'mean_return': np.mean(episode_returns),
@@ -293,8 +394,17 @@ def evaluate_agent(agent: TransformerSACAgent, env: FuturesTradingEnv,
         'std_profit_pct': np.std(episode_profits),
         'mean_episode_length': np.mean(episode_lengths),
         'win_rate': successful_trades / max(total_trades, 1),
-        'total_trades': total_trades / num_episodes
+        'total_trades': total_trades / num_episodes,
+        'max_drawdown': max_drawdown,
+        'sharpe_ratio': sharpe_ratio,
+        'sortino_ratio': sortino_ratio
     }
+    
+    # Log básico de métricas
+    logger.info(f"Métricas de evaluación avanzadas:")
+    logger.info(f"  - Máximo Drawdown: {max_drawdown * 100:.2f}%")
+    logger.info(f"  - Sharpe Ratio: {sharpe_ratio:.4f}")
+    logger.info(f"  - Sortino Ratio: {sortino_ratio:.4f}")
     
     # Log to TensorBoard if writer provided
     if writer and global_step is not None:
@@ -305,6 +415,11 @@ def evaluate_agent(agent: TransformerSACAgent, env: FuturesTradingEnv,
         writer.add_scalar('Evaluation/Mean_Episode_Length', metrics['mean_episode_length'], global_step)
         writer.add_scalar('Evaluation/Win_Rate', metrics['win_rate'] * 100, global_step)
         writer.add_scalar('Evaluation/Avg_Trades_per_Episode', metrics['total_trades'], global_step)
+        
+        # Nuevas métricas financieras en TensorBoard
+        writer.add_scalar('Evaluation/Max_Drawdown_Pct', metrics['max_drawdown'] * 100, global_step)
+        writer.add_scalar('Evaluation/Sharpe_Ratio', metrics['sharpe_ratio'], global_step)
+        writer.add_scalar('Evaluation/Sortino_Ratio', metrics['sortino_ratio'], global_step)
     
     return metrics
 
@@ -544,6 +659,9 @@ def train_agent(agent: TransformerSACAgent, env: FuturesTradingEnv,
             logger.info(f"  - Longitud promedio: {eval_metrics['mean_episode_length']:.1f}")
             logger.info(f"  - Win rate: {eval_metrics['win_rate']:.2%}")
             logger.info(f"  - Trades por episodio: {eval_metrics['total_trades']:.1f}")
+            logger.info(f"  - Máximo Drawdown: {eval_metrics['max_drawdown'] * 100:.2f}%")
+            logger.info(f"  - Sharpe Ratio: {eval_metrics['sharpe_ratio']:.4f}")
+            logger.info(f"  - Sortino Ratio: {eval_metrics['sortino_ratio']:.4f}")
             
             # Guardar mejor modelo
             if eval_metrics['mean_return'] > best_eval_return:
