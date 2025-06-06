@@ -16,6 +16,7 @@ gcp:
   storage:
     bucket_name: "btcbot-training-ew4"  # Nombre del bucket para almacenar modelos
     scaler_blob_name: "scaler.pkl"  # Nombre del archivo scaler en GCS
+    price_scaler_blob_name: "price_scaler.pkl"  # Nombre del archivo price_scaler en GCS
 
 # Configuración de datos
 data:

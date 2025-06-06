@@ -28,6 +28,7 @@ class Normalization:
         self.dataframe = dataframe.copy()
         self.initial_length = len(self.dataframe)
         self.scaler = None
+        self.price_scaler = None  # Nuevo: scaler específico para precios
         self.feature_columns = None
         
         # Configurar logging
@@ -42,6 +43,7 @@ class Normalization:
         self.scaler_type = config.scaler_type
         self.feature_range = tuple(config.feature_range)
         self.scaler_path = config.scaler_path
+        self.price_scaler_path = self._get_price_scaler_path()  # Nuevo: ruta para price_scaler
         self.storage_mode = config.storage_mode
         
         # Crear directorio para el scaler si no existe (solo en modo local)
@@ -53,6 +55,17 @@ class Normalization:
         self.logger.info(f"Tipo de scaler: {self.scaler_type}")
         self.logger.info(f"Rango de características: {self.feature_range}")
         self.logger.info(f"Modo de almacenamiento: {self.storage_mode}")
+    
+    def _get_price_scaler_path(self) -> str:
+        """
+        Genera la ruta para el price_scaler basada en la ruta del scaler principal.
+        
+        Returns:
+            str: Ruta para el price_scaler
+        """
+        scaler_path = Path(self.scaler_path)
+        price_scaler_path = scaler_path.parent / f"price_{scaler_path.name}"
+        return str(price_scaler_path)
     
     def main(self) -> Tuple[pd.DataFrame, MinMaxScaler]:
         """
@@ -69,10 +82,14 @@ class Normalization:
         # Paso 2: Crear y ajustar el scaler
         self._fit_scaler()
         
-        # Paso 3: Guardar el scaler ajustado
-        self._save_scaler()
+        # Paso 3: Crear y ajustar el price_scaler específico
+        self._fit_price_scaler()
         
-        # Paso 4: Transformar el dataset
+        # Paso 4: Guardar ambos scalers
+        self._save_scaler()
+        self._save_price_scaler()
+        
+        # Paso 5: Transformar el dataset
         normalized_df = self._transform_datasets()
         
         self.logger.info("Proceso de normalización completado exitosamente")
@@ -141,6 +158,34 @@ class Normalization:
             self.logger.error(f"Error al ajustar el scaler: {str(e)}")
             raise
     
+    def _fit_price_scaler(self):
+        """Crear y ajustar el price_scaler específico para la columna Close."""
+        self.logger.info("Creando y ajustando el price_scaler para la columna Close...")
+        
+        # Verificar que la columna Close existe
+        if 'Close' not in self.feature_columns:
+            raise ValueError("La columna 'Close' no se encuentra en las características a normalizar")
+        
+        # Crear el price_scaler
+        if self.scaler_type == "MinMaxScaler":
+            self.price_scaler = MinMaxScaler(feature_range=self.feature_range)
+        else:
+            raise ValueError(f"Tipo de scaler no soportado: {self.scaler_type}")
+        
+        try:
+            # Obtener solo los valores de la columna Close
+            close_data = self.dataframe[['Close']].values
+            
+            # Ajustar el price_scaler solo con los datos de Close
+            self.price_scaler.fit(close_data)
+            
+            self.logger.info("Price scaler ajustado exitosamente")
+            self.logger.info(f"Rango original del precio Close: {self.price_scaler.data_min_[0]:.2f} - {self.price_scaler.data_max_[0]:.2f}")
+            
+        except Exception as e:
+            self.logger.error(f"Error al ajustar el price_scaler: {str(e)}")
+            raise
+    
     def _save_scaler(self):
         """Guardar el objeto scaler ajustado para uso futuro."""
         if self.storage_mode == "gcp":
@@ -177,6 +222,44 @@ class Normalization:
                     
             except Exception as e:
                 self.logger.error(f"Error al guardar el scaler: {str(e)}")
+                raise
+    
+    def _save_price_scaler(self):
+        """Guardar el price_scaler ajustado para uso futuro."""
+        if self.storage_mode == "gcp":
+            self.logger.info("Guardando price_scaler en Google Cloud Storage...")
+            
+            try:
+                success = gcs_utils.save_price_scaler_to_gcs(self.price_scaler)
+                if success:
+                    self.logger.info("Price scaler guardado exitosamente en GCS")
+                else:
+                    raise RuntimeError("Error al guardar price_scaler en GCS")
+                    
+            except Exception as e:
+                self.logger.error(f"Error al guardar el price_scaler en GCS: {str(e)}")
+                raise
+        else:
+            # Modo local
+            self.logger.info(f"Guardando price_scaler en: {self.price_scaler_path}")
+            
+            try:
+                # Crear el directorio si no existe
+                scaler_dir = Path(self.price_scaler_path).parent
+                scaler_dir.mkdir(parents=True, exist_ok=True)
+                
+                # Guardar el price_scaler usando joblib
+                joblib.dump(self.price_scaler, self.price_scaler_path)
+                
+                # Verificar que el archivo se guardó correctamente
+                if os.path.exists(self.price_scaler_path):
+                    file_size = os.path.getsize(self.price_scaler_path)
+                    self.logger.info(f"Price scaler guardado exitosamente. Tamaño del archivo: {file_size} bytes")
+                else:
+                    raise FileNotFoundError("Error: el archivo del price_scaler no se creó")
+                    
+            except Exception as e:
+                self.logger.error(f"Error al guardar el price_scaler: {str(e)}")
                 raise
     
     def _transform_datasets(self) -> pd.DataFrame:
@@ -279,6 +362,42 @@ class Normalization:
             logger.error(f"Error al cargar el scaler: {str(e)}")
             raise
     
+    @staticmethod
+    def load_price_scaler(price_scaler_path: Optional[str] = None) -> MinMaxScaler:
+        """
+        Cargar un price_scaler previamente guardado.
+        
+        Args:
+            price_scaler_path (Optional[str]): Ruta del price_scaler. Si es None, usa la configuración por defecto.
+            
+        Returns:
+            MinMaxScaler: Price scaler cargado
+        """
+        logger = logging.getLogger(__name__)
+        
+        try:
+            if config.storage_mode == "gcp":
+                # Modo GCP: cargar desde Google Cloud Storage
+                logger.info("Cargando price_scaler desde Google Cloud Storage...")
+                return gcs_utils.load_price_scaler_from_gcs()
+            else:
+                # Modo local
+                if price_scaler_path is None:
+                    # Generar la ruta del price_scaler basada en la ruta del scaler principal
+                    scaler_path = Path(config.scaler_path)
+                    price_scaler_path = str(scaler_path.parent / f"price_{scaler_path.name}")
+                
+                if not os.path.exists(price_scaler_path):
+                    raise FileNotFoundError(f"Archivo de price_scaler no encontrado: {price_scaler_path}")
+                
+                price_scaler = joblib.load(price_scaler_path)
+                logger.info(f"Price scaler cargado exitosamente desde: {price_scaler_path}")
+                return price_scaler
+            
+        except Exception as e:
+            logger.error(f"Error al cargar el price_scaler: {str(e)}")
+            raise
+    
     def get_feature_info(self) -> Dict[str, Any]:
         """
         Obtener información sobre las características y el proceso de normalización.
@@ -292,8 +411,10 @@ class Normalization:
             'scaler_type': self.scaler_type,
             'feature_range': self.feature_range,
             'scaler_path': self.scaler_path,
+            'price_scaler_path': self.price_scaler_path,
             'original_data_shape': self.dataframe.shape,
-            'scaler_fitted': self.scaler is not None
+            'scaler_fitted': self.scaler is not None,
+            'price_scaler_fitted': self.price_scaler is not None
         }
         
         if self.scaler is not None and hasattr(self.scaler, 'data_min_'):
@@ -301,6 +422,13 @@ class Normalization:
                 'original_min_values': self.scaler.data_min_.tolist(),
                 'original_max_values': self.scaler.data_max_.tolist(),
                 'scale_factors': self.scaler.scale_.tolist() if hasattr(self.scaler, 'scale_') else None
+            })
+        
+        if self.price_scaler is not None and hasattr(self.price_scaler, 'data_min_'):
+            info.update({
+                'price_scaler_min': self.price_scaler.data_min_[0],
+                'price_scaler_max': self.price_scaler.data_max_[0],
+                'price_scaler_range': self.price_scaler.data_max_[0] - self.price_scaler.data_min_[0]
             })
         
         return info
@@ -317,29 +445,55 @@ class Normalization:
         else:
             return os.path.exists(self.scaler_path)
     
-    def get_scaler_storage_info(self) -> Dict[str, Any]:
+    def price_scaler_exists(self) -> bool:
         """
-        Obtiene información sobre el almacenamiento del scaler.
+        Verifica si existe un price_scaler previamente entrenado.
         
         Returns:
-            Dict[str, Any]: Información sobre el scaler almacenado
+            bool: True si el price_scaler existe, False en caso contrario
+        """
+        if self.storage_mode == "gcp":
+            return gcs_utils.price_scaler_exists_in_gcs()
+        else:
+            return os.path.exists(self.price_scaler_path)
+    
+    def get_scaler_storage_info(self) -> Dict[str, Any]:
+        """
+        Obtiene información sobre el almacenamiento del scaler y price_scaler.
+        
+        Returns:
+            Dict[str, Any]: Información sobre los scalers almacenados
         """
         info = {
             'storage_mode': self.storage_mode,
-            'exists': self.scaler_exists()
+            'scaler_exists': self.scaler_exists(),
+            'price_scaler_exists': self.price_scaler_exists()
         }
         
         if self.storage_mode == "gcp":
             gcs_info = gcs_utils.get_scaler_info()
             if gcs_info:
-                info.update(gcs_info)
+                info.update({'scaler_info': gcs_info})
+            
+            # Intentar obtener información del price_scaler también
+            price_scaler_info = gcs_utils.get_price_scaler_info()
+            if price_scaler_info:
+                info.update({'price_scaler_info': price_scaler_info})
         else:
             if os.path.exists(self.scaler_path):
                 stat = os.stat(self.scaler_path)
                 info.update({
-                    'path': self.scaler_path,
-                    'size': stat.st_size,
-                    'modified': stat.st_mtime
+                    'scaler_path': self.scaler_path,
+                    'scaler_size': stat.st_size,
+                    'scaler_modified': stat.st_mtime
+                })
+            
+            if os.path.exists(self.price_scaler_path):
+                stat = os.stat(self.price_scaler_path)
+                info.update({
+                    'price_scaler_path': self.price_scaler_path,
+                    'price_scaler_size': stat.st_size,
+                    'price_scaler_modified': stat.st_mtime
                 })
         
         return info

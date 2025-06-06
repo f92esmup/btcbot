@@ -26,6 +26,7 @@ class GCSUtils:
         self.project_id = config.project_id
         self.bucket_name = config.gcs_bucket_name
         self.scaler_blob_name = config.gcs_scaler_blob_name
+        self.price_scaler_blob_name = config.gcs_price_scaler_blob_name  # Nuevo: blob name para price_scaler
         
         # Cliente de GCS
         self._client = None
@@ -33,6 +34,7 @@ class GCSUtils:
         self.logger.info(f"GCSUtils inicializado para proyecto: {self.project_id}")
         self.logger.info(f"Bucket: {self.bucket_name}")
         self.logger.info(f"Archivo scaler: {self.scaler_blob_name}")
+        self.logger.info(f"Archivo price_scaler: {self.price_scaler_blob_name}")
     
     @property
     def client(self) -> storage.Client:
@@ -144,6 +146,25 @@ class GCSUtils:
             self.logger.error(f"Error al verificar existencia del scaler en GCS: {e}")
             return False
     
+    def price_scaler_exists_in_gcs(self) -> bool:
+        """
+        Verifica si el price_scaler existe en GCS.
+        
+        Returns:
+            bool: True si el price_scaler existe en GCS, False en caso contrario
+        """
+        try:
+            bucket = self._get_bucket()
+            blob = bucket.blob(self.price_scaler_blob_name)
+            exists = blob.exists()
+            
+            self.logger.info(f"Price scaler en GCS: {'existe' if exists else 'no existe'}")
+            return exists
+            
+        except Exception as e:
+            self.logger.error(f"Error al verificar existencia del price_scaler en GCS: {e}")
+            return False
+    
     def get_scaler_info(self) -> Optional[dict]:
         """
         Obtiene información del scaler en GCS.
@@ -177,6 +198,39 @@ class GCSUtils:
             self.logger.error(f"Error al obtener información del scaler: {e}")
             return None
     
+    def get_price_scaler_info(self) -> Optional[dict]:
+        """
+        Obtiene información del price_scaler en GCS.
+        
+        Returns:
+            Optional[dict]: Información del price_scaler o None si no existe
+        """
+        try:
+            bucket = self._get_bucket()
+            blob = bucket.blob(self.price_scaler_blob_name)
+            
+            if not blob.exists():
+                return None
+            
+            # Recargar para obtener metadatos actualizados
+            blob.reload()
+            
+            info = {
+                'name': blob.name,
+                'size': blob.size,
+                'created': blob.time_created,
+                'updated': blob.updated,
+                'etag': blob.etag,
+                'content_type': blob.content_type
+            }
+            
+            self.logger.info(f"Información del price_scaler en GCS: {info}")
+            return info
+            
+        except Exception as e:
+            self.logger.error(f"Error al obtener información del price_scaler: {e}")
+            return None
+    
     def load_scaler_from_gcs(self):
         """
         Carga el scaler directamente desde GCS sin guardarlo localmente.
@@ -205,6 +259,34 @@ class GCSUtils:
             self.logger.error(f"Error al cargar scaler desde GCS: {e}")
             raise
     
+    def load_price_scaler_from_gcs(self):
+        """
+        Carga el price_scaler directamente desde GCS sin guardarlo localmente.
+        
+        Returns:
+            price_scaler: Objeto price_scaler cargado desde GCS
+        """
+        self.logger.info("Cargando price_scaler directamente desde GCS...")
+        
+        try:
+            bucket = self._get_bucket()
+            blob = bucket.blob(self.price_scaler_blob_name)
+            
+            if not blob.exists():
+                raise FileNotFoundError(f"Price scaler no existe en GCS: gs://{self.bucket_name}/{self.price_scaler_blob_name}")
+            
+            # Usar archivo temporal
+            with tempfile.NamedTemporaryFile() as temp_file:
+                blob.download_to_filename(temp_file.name)
+                price_scaler = joblib.load(temp_file.name)
+            
+            self.logger.info("Price scaler cargado exitosamente desde GCS")
+            return price_scaler
+            
+        except Exception as e:
+            self.logger.error(f"Error al cargar price_scaler desde GCS: {e}")
+            raise
+    
     def save_scaler_to_gcs(self, scaler) -> bool:
         """
         Guarda un objeto scaler directamente a GCS sin guardarlo localmente.
@@ -231,6 +313,34 @@ class GCSUtils:
             
         except Exception as e:
             self.logger.error(f"Error al guardar scaler en GCS: {e}")
+            return False
+    
+    def save_price_scaler_to_gcs(self, price_scaler) -> bool:
+        """
+        Guarda un objeto price_scaler directamente a GCS sin guardarlo localmente.
+        
+        Args:
+            price_scaler: Objeto price_scaler a guardar
+            
+        Returns:
+            bool: True si se guardó exitosamente, False en caso contrario
+        """
+        self.logger.info("Guardando price_scaler directamente a GCS...")
+        
+        try:
+            bucket = self._get_bucket()
+            blob = bucket.blob(self.price_scaler_blob_name)
+            
+            # Usar archivo temporal
+            with tempfile.NamedTemporaryFile() as temp_file:
+                joblib.dump(price_scaler, temp_file.name)
+                blob.upload_from_filename(temp_file.name)
+            
+            self.logger.info(f"Price scaler guardado exitosamente en gs://{self.bucket_name}/{self.price_scaler_blob_name}")
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"Error al guardar price_scaler en GCS: {e}")
             return False
     
     def upload_file_to_gcs(self, local_path: str, gcs_blob_name: str) -> bool:

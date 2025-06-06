@@ -212,38 +212,26 @@ def create_trading_environment(dataframe: Any, logger) -> FuturesTradingEnv:
     """
     logger.info("Creando entorno de trading...")
     
-    # Cargar el scaler completo desde GCS y extraer el scaler específico para Close
-    from sklearn.preprocessing import MinMaxScaler
+    # Cargar el price_scaler directamente desde donde se guardó
     from src.data.normalization import Normalization
     
-    logger.info("Cargando scaler desde GCS para crear price_scaler...")
+    logger.info("Cargando price_scaler desde almacenamiento...")
     try:
-        # Cargar el scaler completo que se guardó durante la normalización
-        full_scaler = Normalization.load_scaler()
+        # Cargar el price_scaler que se guardó durante la normalización
+        price_scaler = Normalization.load_price_scaler()
         
-        # Crear un price_scaler específico usando los parámetros del Close del scaler completo
-        price_scaler = MinMaxScaler()
-        
-        # Encontrar el índice de la columna Close en el scaler completo
-        # Asumimos que Close es la primera columna (índice 0) en los datos OHLCV
-        close_min = full_scaler.data_min_[0]  # Min del Close
-        close_max = full_scaler.data_max_[0]  # Max del Close
-        
-        # Configurar el price_scaler con el rango real del Close
-        price_scaler.data_min_ = np.array([close_min])
-        price_scaler.data_max_ = np.array([close_max])
-        price_scaler.data_range_ = np.array([close_max - close_min])
-        price_scaler.scale_ = np.array([1.0 / (close_max - close_min)])
-        price_scaler.min_ = np.array([-close_min / (close_max - close_min)])
-        price_scaler.feature_range = (0, 1)
-        price_scaler.n_features_in_ = 1
-        
-        logger.info(f"Price scaler configurado desde GCS - Rango Close: {close_min:.2f} - {close_max:.2f}")
+        # Obtener información del rango para logging
+        if hasattr(price_scaler, 'data_min_') and hasattr(price_scaler, 'data_max_'):
+            close_min = price_scaler.data_min_[0]
+            close_max = price_scaler.data_max_[0]
+            logger.info(f"Price scaler cargado exitosamente - Rango Close: {close_min:.2f} - {close_max:.2f}")
+        else:
+            logger.info("Price scaler cargado exitosamente")
         
     except Exception as e:
-        logger.error(f"Error crítico al cargar scaler desde GCS: {e}")
-        logger.error("No se puede continuar sin el scaler real. Deteniendo ejecución.")
-        raise RuntimeError(f"Fallo al cargar scaler desde GCS: {e}")
+        logger.error(f"Error crítico al cargar price_scaler: {e}")
+        logger.error("No se puede continuar sin el price_scaler. Deteniendo ejecución.")
+        raise RuntimeError(f"Fallo al cargar price_scaler: {e}")
     
     env = FuturesTradingEnv(
         data_df=dataframe,

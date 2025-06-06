@@ -211,6 +211,11 @@ class Config:
         """Nombre del archivo scaler en GCS."""
         return self._config.get('gcp', {}).get('storage', {}).get('scaler_blob_name', 'scaler.pkl')
     
+    @property
+    def gcs_price_scaler_blob_name(self) -> str:
+        """Nombre del archivo price_scaler en GCS."""
+        return self._config.get('gcp', {}).get('storage', {}).get('price_scaler_blob_name', 'price_scaler.pkl')
+    
     # Propiedades para indicadores técnicos
     @property
     def indicators_config(self) -> Dict[str, Any]:
