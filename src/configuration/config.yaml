@@ -166,8 +166,8 @@ agent:
                                   # Ej: [256, 256] significa dos capas ocultas de 256 neuronas cada una.
 
   # --- Frecuencia de Entrenamiento ---
-  learning_frequency: 1         # Aprender cada N pasos
-  update_target_frequency: 1    # Actualizar redes objetivo cada N pasos de aprendizaje
+  learning_frequency: 16         # Aprender cada N pasos
+  update_target_frequency: 2    # Actualizar redes objetivo cada N pasos de aprendizaje
   
   # --- Parámetros de Guardado y Carga ---
   model_save_frequency: 10000   # Guardar modelo cada N pasos
