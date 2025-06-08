@@ -720,61 +720,6 @@ Retornos del Episodio: {len(self.retornos_realizados_episodio)}
         # Por ahora no hay recursos específicos que liberar
         logger.info("Entorno cerrado")
     
-    # Métodos adicionales para análisis y debugging
-    
-    def get_episode_summary(self) -> Dict[str, Any]:
-        """
-        Obtiene un resumen del episodio actual.
-        
-        Returns:
-            Diccionario con estadísticas del episodio
-        """
-        if len(self.retornos_realizados_episodio) > 0:
-            retornos_array = np.array(self.retornos_realizados_episodio)
-            retorno_total = np.sum(retornos_array)
-            retorno_promedio = np.mean(retornos_array)
-            volatilidad = np.std(retornos_array)
-            
-            # Calcular Sortino Ratio (simplificado)
-            retornos_negativos = retornos_array[retornos_array < 0]
-            if len(retornos_negativos) > 0:
-                downside_deviation = np.std(retornos_negativos)
-                sortino_ratio = retorno_promedio / downside_deviation if downside_deviation > 0 else 0
-            else:
-                sortino_ratio = float('inf') if retorno_promedio > 0 else 0
-        else:
-            retorno_total = retorno_promedio = volatilidad = sortino_ratio = 0
-        
-        # Drawdown
-        drawdown_actual = (self.max_equity_alcanzado_episodio - self.equity_actual) / self.max_equity_alcanzado_episodio
-        
-        return {
-            'pasos_totales': self.pasos_totales_episodio,
-            'balance_inicial': self.config_entorno['capital_inicial'],
-            'balance_final': self.balance_actual,
-            'equity_final': self.equity_actual,
-            'max_equity': self.max_equity_alcanzado_episodio,
-            'drawdown_actual': drawdown_actual,
-            'num_trades': len(self.historial_trades),
-            'retorno_total_trades': retorno_total,
-            'retorno_promedio_trade': retorno_promedio,
-            'volatilidad_trades': volatilidad,
-            'sortino_ratio': sortino_ratio,
-            'win_rate': len([r for r in self.retornos_realizados_episodio if r > 0]) / len(self.retornos_realizados_episodio) if len(self.retornos_realizados_episodio) > 0 else 0
-        }
-    
-    def get_trades_dataframe(self) -> pd.DataFrame:
-        """
-        Convierte el historial de trades a DataFrame.
-        
-        Returns:
-            DataFrame con el historial de trades
-        """
-        if len(self.historial_trades) == 0:
-            return pd.DataFrame()
-        
-        return pd.DataFrame(self.historial_trades)
-    
     def get_equity_series(self) -> pd.Series:
         """
         Obtiene la serie temporal del equity.

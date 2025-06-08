@@ -35,8 +35,8 @@ workerPoolSpecs:
       args:
         - '--symbol=BTCUSDT'
         - '--interval=15m'
-        - '--start-date=2024-01-01' # Example start date
-        - '--episodes=1000'         # Example number of episodes
+        - '--start-date=2023-01-01' # Example start date
+        - '--episodes=2000'         # Example number of episodes
         - '--eval-frequency=100'
         - '--save-frequency=50'
         - '--eval-episodes=1'
