@@ -15,9 +15,7 @@ from typing import Dict, Any, Optional, Tuple
 import time
 import re
 
-from src.data.Adquisicion import Adquisicion
-from src.data.indicadores import Indicadores
-from src.data.normalization import Normalization
+from src.data.pipeline import DataPipeline
 from src.entorno.environment import FuturesTradingEnv
 from src.agente.agent import TransformerSACAgent
 from src.configuration.config import config
@@ -857,68 +855,16 @@ def main():
         # Continuar ejecución ya que este error no es crítico
     
     try:
-        # 1. Adquisición de datos
-        logger.info("=== FASE 1: Adquisición de Datos ===")
-        adquisicion = Adquisicion(
+        logger.info("=== Ejecutando Pipeline de Datos ===")
+        data_pipeline = DataPipeline(
             symbol=args.symbol,
             interval=args.interval,
-            start_date=args.start_date
+            start_date=args.start_date,
+            run_id=run_id,
+            base_path=str(base_path)
         )
-        
-        # Ejecutar proceso de adquisición
-        dataframe = adquisicion.main()
+        normalized_dataframe, price_scaler_path = data_pipeline.run()
 
-        logger.info(f"Datos adquiridos exitosamente:")
-        logger.info(f"  - Forma del DataFrame: {dataframe.shape}")
-        logger.info(f"  - Rango temporal: {dataframe.index.min()} a {dataframe.index.max()}")
-        logger.info(f"  - Columnas: {list(dataframe.columns)}")
-        logger.info(f"  - Memoria utilizada: {dataframe.memory_usage(deep=True).sum() / 1024**2:.2f} MB")
-        
-        # Mostrar estadísticas básicas
-        logger.info("Estadísticas básicas del DataFrame:")
-        logger.info(f"\n{dataframe.describe()}")
-        
-        # 2. Cálculo de Indicadores Técnicos
-        logger.info("=== FASE 2: Cálculo de Indicadores Técnicos ===")
-        indicadores = Indicadores(dataframe)
-        
-        # Ejecutar proceso de cálculo de indicadores
-        dataframe_with_indicators = indicadores.main()
-        
-        logger.info(f"Indicadores calculados exitosamente:")
-        logger.info(f"  - Forma del DataFrame: {dataframe_with_indicators.shape}")
-        logger.info(f"  - Columnas totales: {len(dataframe_with_indicators.columns)}")
-        logger.info(f"  - Nuevas columnas de indicadores: {len(dataframe_with_indicators.columns) - len(dataframe.columns)}")
-        logger.info(f"  - Memoria utilizada: {dataframe_with_indicators.memory_usage(deep=True).sum() / 1024**2:.2f} MB")
-        
-        # Mostrar las nuevas columnas
-        original_columns = set(dataframe.columns)
-        new_columns = [col for col in dataframe_with_indicators.columns if col not in original_columns]
-        if new_columns:
-            logger.info(f"  - Indicadores añadidos: {new_columns}")
-        
-        # Actualizar referencia al dataframe
-        dataframe = dataframe_with_indicators
-        
-        # 3. Normalización de Datos
-        logger.info("=== FASE 3: Normalización de Datos ===")
-        normalization = Normalization(dataframe, base_path=str(base_path), run_id=run_id)
-        
-        # Ejecutar proceso de normalización
-        normalized_dataframe, scaler = normalization.main()
-        
-        logger.info(f"Normalización completada exitosamente:")
-        logger.info(f"  - Forma del DataFrame normalizado: {normalized_dataframe.shape}")
-        logger.info(f"  - Rango de valores: [{normalized_dataframe.min().min():.6f}, {normalized_dataframe.max().max():.6f}]")
-        logger.info(f"  - Scaler guardado en: {normalization.scaler_path}")
-        logger.info(f"  - Memoria utilizada: {normalized_dataframe.memory_usage(deep=True).sum() / 1024**2:.2f} MB")
-        
-        # Mostrar información del scaler
-        feature_info = normalization.get_feature_info()
-        logger.info(f"  - Características normalizadas: {feature_info['num_features']}")
-        logger.info(f"  - Tipo de scaler: {feature_info['scaler_type']}")
-        logger.info(f"  - Rango de normalización: {feature_info['feature_range']}")
-        
         # Actualizar referencia al dataframe
         dataframe = normalized_dataframe
         
@@ -944,14 +890,12 @@ def main():
             logger.info("Iniciando nueva ejecución (sin checkpoint).")
             start_episode = 0
             
-            # Configurar rutas del price_scaler para la nueva ejecución usando el run_id actual
+            # Usar la ruta del price_scaler que devolvió el pipeline
             if config.storage_mode == "gcp":
-                # Para GCS, usar el run_id actual para construir el blob_name
                 blob_name_price_scaler_a_cargar = f"{run_id}/price_scaler.pkl"
                 logger.info(f"Se cargará price_scaler desde GCS (nueva ejecución): {blob_name_price_scaler_a_cargar}")
             else:
-                # Para local, usar el base_path actual que ya incluye el run_id
-                path_price_scaler_a_cargar = str(Path(base_path) / "price_scaler.pkl")
+                path_price_scaler_a_cargar = price_scaler_path
                 logger.info(f"Se cargará price_scaler desde local (nueva ejecución): {path_price_scaler_a_cargar}")
         else:
             # Se especificó un run_id para cargar checkpoint
