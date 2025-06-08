@@ -3,11 +3,9 @@ Script principal de entrenamiento del bot de trading de Bitcoin.
 Orquesta la adquisición de datos, cálculo de indicadores y entrenamiento del modelo.
 """
 
-import argparse
+import os
 import sys
 import logging
-import os
-import random
 import tempfile
 from datetime import datetime
 import numpy as np
@@ -25,6 +23,9 @@ from src.entorno.environment import FuturesTradingEnv
 from src.agente.agent import TransformerSACAgent
 from src.configuration.config import config
 from src.configuration.gcs_utils import GCSUtils
+from src.utils.system import setup_logging, set_seed, setup_device
+from src.utils.validation import validate_date_format
+from src.utils.cli import parse_arguments
 
 
 def calculate_max_drawdown(equity_series: list) -> float:
@@ -105,144 +106,13 @@ def calculate_sortino_ratio(returns: list, risk_free_rate: float = 0.0) -> float
     return sortino_ratio
 
 
-def set_seed(seed_value: int, logger_instance: logging.Logger) -> None:
-    """
-    Establece la semilla aleatoria para asegurar reproducibilidad del entrenamiento.
-    
-    Args:
-        seed_value (int): Valor de la semilla aleatoria
-        logger_instance (logging.Logger): Instancia del logger para mensajes
-    """
-    # Establecer semilla para Python random
-    random.seed(seed_value)
-    
-    # Establecer semilla para NumPy
-    np.random.seed(seed_value)
-    
-    # Establecer semilla para PyTorch (CPU)
-    torch.manual_seed(seed_value)
-    
-    # Establecer semilla para PyTorch (GPU) si está disponible
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(seed_value)
-        # Configuraciones adicionales para reproducibilidad en GPU
-        #torch.backends.cudnn.deterministic = True
-        #torch.backends.cudnn.benchmark = False
-        #ADVERTENCIA: ESTAS DOS CONFIGURACIONES ASEGURAN MUCHA REPRODUCIBILIDAD PERO REDUCEN MUCHO EL RENDIMIENTO. NO ES RECOMENDABLE
-        logger_instance.info(f"Semilla {seed_value} establecida para Python, NumPy, PyTorch (CPU y GPU)")
-    else:
-        logger_instance.info(f"Semilla {seed_value} establecida para Python, NumPy, PyTorch (CPU)")
 
 
-def setup_logging():
-    """Configura el sistema de logging."""
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-        handlers=[
-            #logging.FileHandler('trading_bot.log'),
-            logging.StreamHandler(sys.stdout)
-        ]
-    )
 
 
-def parse_arguments():
-    """Parsea los argumentos de línea de comandos."""
-    parser = argparse.ArgumentParser(description='Bot de trading de Bitcoin')
-    
-    # Argumentos requeridos
-    parser.add_argument(
-        '--symbol',
-        type=str,
-        required=True,
-        help='Símbolo del par de trading (ej: BTCUSDT)'
-    )
-    
-    parser.add_argument(
-        '--interval',
-        type=str,
-        required=True,
-        choices=['1m', '3m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '8h', '12h', '1d', '3d', '1w', '1M'],
-        help='Intervalo de tiempo para las velas'
-    )
-    
-    parser.add_argument(
-        '--start-date',
-        type=str,
-        required=True,
-        help='Fecha de inicio en formato YYYY-MM-DD'
-    )
-    
-    # Argumentos opcionales para entrenamiento
-    parser.add_argument(
-        '--episodes',
-        type=int,
-        default=1000,
-        help='Número de episodios de entrenamiento (default: 1000)'
-    )
-    
-    parser.add_argument(
-        '--eval-frequency',
-        type=int,
-        default=50,
-        help='Frecuencia de evaluación en episodios (default: 50)'
-    )
-    
-    parser.add_argument(
-        '--save-frequency',
-        type=int,
-        default=100,
-        help='Frecuencia de guardado en episodios (default: 100)'
-    )
-    
-    parser.add_argument(
-        '--no-cuda',
-        action='store_true',
-        help='Deshabilitar CUDA aunque esté disponible'
-    )
-    
-    parser.add_argument(
-        '--eval-episodes',
-        type=int,
-        default=5,
-        help='Número de episodios para evaluación (default: 5)'
-    )
-    
-    parser.add_argument(
-        '--checkpoint',
-        type=str,
-        default=None,
-        help='ID del run (run_id) desde el cual cargar el último checkpoint para continuar el entrenamiento. Si no se proporciona, el entrenamiento comienza desde cero.'
-    )
-    
-    parser.add_argument(
-        '--seed',
-        type=int,
-        default=73,
-        help='Semilla aleatoria para la reproducibilidad del entrenamiento (default: 73)'
-    )
-    
-    return parser.parse_args()
 
 
-def setup_device(no_cuda: bool = False) -> torch.device:
-    """
-    Configura el device para el entrenamiento.
-    
-    Args:
-        no_cuda (bool): Si True, fuerza el uso de CPU
-        
-    Returns:
-        torch.device: Device configurado
-    """
-    if no_cuda or not torch.cuda.is_available():
-        device = torch.device('cpu')
-    else:
-        device = torch.device('cuda')
-        # Configurar para mejor rendimiento
-        torch.backends.cudnn.benchmark = True
-    
-    return device
+
 
 
 def create_trading_environment(dataframe: Any, logger, price_scaler_path: Optional[str] = None, price_scaler_blob_name: Optional[str] = None) -> FuturesTradingEnv:
@@ -802,21 +672,7 @@ def train_agent(agent: TransformerSACAgent, env: FuturesTradingEnv,
             logger.warning("El entrenamiento se completó correctamente, pero los logs no se pudieron sincronizar")
 
 
-def validate_start_date(date_string: str) -> bool:
-    """
-    Valida que la fecha de inicio tenga el formato correcto.
-    
-    Args:
-        date_string (str): Fecha en formato YYYY-MM-DD
-        
-    Returns:
-        bool: True si es válida, False en caso contrario
-    """
-    try:
-        datetime.strptime(date_string, '%Y-%m-%d')
-        return True
-    except ValueError:
-        return False
+
 
 
 
@@ -1019,7 +875,7 @@ def main():
     set_seed(args.seed, logger)
     
     # Validar fecha de inicio
-    if not validate_start_date(args.start_date):
+    if not validate_date_format(args.start_date):
         logger.error(f"Formato de fecha inválido: {args.start_date}. Use YYYY-MM-DD")
         sys.exit(1)
     
