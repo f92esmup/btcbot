@@ -27,13 +27,14 @@ from src.analysis.logger import TensorboardLogger
 from src.training import RunManager, AgentEvaluator, Trainer
 
 
-def create_trading_environment(dataframe: Any, logger, price_scaler_path: Optional[str] = None, price_scaler_blob_name: Optional[str] = None) -> FuturesTradingEnv:
+def create_trading_environment(dataframe: Any, logger, run_manager: RunManager, price_scaler_path: Optional[str] = None, price_scaler_blob_name: Optional[str] = None) -> FuturesTradingEnv:
     """
     Crea el entorno de trading con los datos procesados.
     
     Args:
         dataframe: DataFrame con datos normalizados
         logger: Logger para mensajes
+        run_manager: Instancia centralizada de RunManager
         price_scaler_path: Ruta específica del price_scaler (opcional, para checkpoint loading)
         price_scaler_blob_name: Blob name específico en GCS (opcional, para checkpoint loading)
         
@@ -45,8 +46,6 @@ def create_trading_environment(dataframe: Any, logger, price_scaler_path: Option
     # Cargar el price_scaler usando RunManager
     logger.info("Cargando price_scaler desde almacenamiento...")
     try:
-        # Crear una instancia de RunManager para cargar el price_scaler
-        run_manager = RunManager()
         price_scaler = run_manager.load_price_scaler(price_scaler_path, price_scaler_blob_name)
         
         # Obtener información del rango para logging
@@ -213,9 +212,12 @@ def main():
     # Log hyperparameters
     tb_logger.log_hyperparameters(hparams)
     
+    # Crear instancia única de RunManager para todo el proceso
+    run_manager = RunManager(base_path=str(base_path), run_id=run_id, gcs_utils=gcs_utils)
+    logger.info(f"RunManager centralizado creado - Base path: {base_path}")
+    
     # Guardar configuración del run usando RunManager
     try:
-        run_manager = RunManager(base_path=str(base_path), run_id=run_id, gcs_utils=gcs_utils)
         run_manager.save_run_config(hparams=hparams, args=args)
     except Exception as e:
         logger.error(f"Error al guardar config_run.yaml: {e}")
@@ -269,7 +271,6 @@ def main():
             logger.info(f"Intentando reanudar desde checkpoint del run_id: {args.checkpoint}")
             
             # Buscar checkpoint en el run_id específico usando RunManager
-            run_manager = RunManager()
             checkpoint_info = run_manager.find_latest_checkpoint(args.checkpoint)
             
             if checkpoint_info:
@@ -296,6 +297,7 @@ def main():
         env = create_trading_environment(
             dataframe,  # Este debe ser el dataframe normalizado
             logger,
+            run_manager,
             price_scaler_path=path_price_scaler_a_cargar,
             price_scaler_blob_name=blob_name_price_scaler_a_cargar
         )
@@ -305,7 +307,6 @@ def main():
         
         # Cargar checkpoint si corresponde
         if args.checkpoint is not None:
-            run_manager = RunManager(base_path=str(base_path), run_id=run_id, gcs_utils=gcs_utils)
             checkpoint_info = run_manager.find_latest_checkpoint(args.checkpoint)
             if checkpoint_info:
                 checkpoint_prefix, latest_episode = checkpoint_info
@@ -341,13 +342,14 @@ def main():
             return
         
         # Crear instancias para el entrenamiento
-        run_manager = RunManager(base_path=str(base_path), run_id=run_id, gcs_utils=gcs_utils)
         evaluator = AgentEvaluator()
         
         # Configuración para el trainer
         trainer_config = {
             'seed': args.seed,
+            'batch_size': config.batch_size,
             'min_buffer_for_learning': config.min_buffer_for_learning,
+            'replay_buffer_size': config.replay_buffer_size,
             'eval_frequency': args.eval_frequency,
             'eval_episodes': args.eval_episodes,
             'save_frequency': args.save_frequency,

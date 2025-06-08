@@ -15,7 +15,6 @@ import tempfile
 import os
 
 from .networks import ActorNetwork, CriticNetwork
-from .replay_buffer import ReplayBuffer
 from ..configuration.config import config
 
 logger = logging.getLogger(__name__)
@@ -84,13 +83,6 @@ class TransformerSACAgent:
         # Inicializar optimizadores
         self._init_optimizers()
         
-        # Inicializar replay buffer
-        self.replay_buffer = ReplayBuffer(
-            capacity=self.config['replay_buffer_size'],
-            observation_shape=observation_space_shape,
-            action_dim=self.action_dim
-        )
-        
         # Parámetro de temperatura alpha (entropía)
         self.learn_alpha = self.config['learn_alpha']
         
@@ -135,7 +127,6 @@ class TransformerSACAgent:
             'gamma': config.gamma,
             'tau': config.tau,
             'batch_size': config.batch_size,
-            'replay_buffer_size': config.replay_buffer_size,
             'actor_learning_rate': config.actor_learning_rate,
             'critic_learning_rate': config.critic_learning_rate,
             'alpha_learning_rate': config.alpha_learning_rate,
@@ -239,44 +230,18 @@ class TransformerSACAgent:
         """Parámetro de temperatura actual."""
         return torch.exp(self.log_alpha)
     
-    def _parse_observation(self, observation: np.ndarray) -> Tuple[torch.Tensor, torch.Tensor]:
+    def select_action(self, market_data: torch.Tensor, portfolio_data: torch.Tensor, deterministic: bool = False) -> np.ndarray:
         """
-        Separa la observación en datos de mercado y portfolio.
+        Selecciona una acción basada en los datos de mercado y portfolio.
         
         Args:
-            observation: Observación completa del entorno
-            
-        Returns:
-            Tupla (market_data, portfolio_data)
-        """
-        # La observación tiene la forma: [ventana_mercado_flattened, portfolio_features]
-        market_data_size = self.sequence_length * self.market_features
-        
-        # Separar componentes
-        market_flat = observation[:market_data_size]
-        portfolio_data = observation[market_data_size:]
-        
-        # Reshape market data para Transformer
-        market_data = market_flat.reshape(self.sequence_length, self.market_features)
-        
-        return (
-            torch.FloatTensor(market_data).unsqueeze(0).to(self.device),  # (1, seq_len, features)
-            torch.FloatTensor(portfolio_data).unsqueeze(0).to(self.device)  # (1, portfolio_features)
-        )
-    
-    def select_action(self, observation: np.ndarray, deterministic: bool = False) -> np.ndarray:
-        """
-        Selecciona una acción basada en la observación.
-        
-        Args:
-            observation: Observación actual del entorno
+            market_data: Tensor con datos de mercado pre-procesados
+            portfolio_data: Tensor con datos de portfolio pre-procesados
             deterministic: Si True, usa la media de la política (evaluación)
             
         Returns:
             Acción seleccionada
         """
-        market_data, portfolio_data = self._parse_observation(observation)
-        
         with torch.no_grad():
             if deterministic:
                 # Para evaluación: usar la media de la distribución
@@ -288,71 +253,38 @@ class TransformerSACAgent:
         
         return action.cpu().numpy().flatten()
     
-    def store_transition(
+    def learn(
         self,
-        observation: np.ndarray,
-        action: np.ndarray,
-        reward: float,
-        next_observation: np.ndarray,
-        terminated: bool,
-        truncated: bool
-    ) -> None:
-        """
-        Almacena una transición en el replay buffer.
-        """
-        self.replay_buffer.add(
-            observation=observation,
-            action=action,
-            reward=reward,
-            next_observation=next_observation,
-            terminated=terminated,
-            truncated=truncated
-        )
-    
-    def can_learn(self) -> bool:
-        """Verifica si el agente puede aprender."""
-        return self.replay_buffer.can_sample(self.batch_size)
-    
-    def learn(self) -> Optional[Dict[str, float]]:
+        market_data: torch.Tensor,
+        portfolio_data: torch.Tensor,
+        actions: torch.Tensor,
+        rewards: torch.Tensor,
+        next_market_data: torch.Tensor,
+        next_portfolio_data: torch.Tensor,
+        terminated: torch.Tensor,
+        truncated: torch.Tensor
+    ) -> Optional[Dict[str, float]]:
         """
         Realiza un paso de aprendizaje SAC.
         
+        Args:
+            market_data: Tensor con datos de mercado del batch
+            portfolio_data: Tensor con datos de portfolio del batch
+            actions: Tensor con acciones del batch
+            rewards: Tensor con recompensas del batch
+            next_market_data: Tensor con siguientes datos de mercado del batch
+            next_portfolio_data: Tensor con siguientes datos de portfolio del batch
+            terminated: Tensor con flags de terminación del batch
+            truncated: Tensor con flags de truncamiento del batch
+            
         Returns:
-            Diccionario con métricas de entrenamiento si se realizó aprendizaje
+            Diccionario con métricas de entrenamiento
         """
-        if not self.can_learn():
-            return None
-        
         self.total_steps += 1
         
         # Verificar frecuencia de aprendizaje
         if self.total_steps % self.learning_frequency != 0:
             return None
-        
-        # Muestrear batch del replay buffer
-        observations, actions, rewards, next_observations, terminated, truncated = self.replay_buffer.sample(
-            self.batch_size, self.device
-        )
-        
-        # Parsear observaciones
-        batch_market_data = []
-        batch_portfolio_data = []
-        batch_next_market_data = []
-        batch_next_portfolio_data = []
-        
-        for i in range(self.batch_size):
-            market, portfolio = self._parse_observation(observations[i].cpu().numpy())
-            next_market, next_portfolio = self._parse_observation(next_observations[i].cpu().numpy())
-            
-            batch_market_data.append(market.squeeze(0))
-            batch_portfolio_data.append(portfolio.squeeze(0))
-            batch_next_market_data.append(next_market.squeeze(0))
-            batch_next_portfolio_data.append(next_portfolio.squeeze(0))
-        
-        market_data = torch.stack(batch_market_data)
-        portfolio_data = torch.stack(batch_portfolio_data)
-        next_market_data = torch.stack(batch_next_market_data)
-        next_portfolio_data = torch.stack(batch_next_portfolio_data)
         
         # Máscaras para episodios finalizados
         done_mask = terminated | truncated
@@ -428,7 +360,6 @@ class TransformerSACAgent:
             'mean_q1': current_q1.mean().item(),
             'mean_q2': current_q2.mean().item(),
             'mean_log_prob': log_probs.mean().item(),
-            'buffer_size': self.replay_buffer.size,
             'learning_steps': self.learning_steps
         }
         
@@ -472,14 +403,11 @@ class TransformerSACAgent:
         Returns:
             Diccionario con estadísticas
         """
-        buffer_stats = self.replay_buffer.get_stats()
-        
         agent_stats = {
             'total_steps': self.total_steps,
             'learning_steps': self.learning_steps,
             'alpha': self.alpha.item(),
-            'device': str(self.device),
-            'can_learn': self.can_learn()
+            'device': str(self.device)
         }
         
-        return {**agent_stats, 'buffer': buffer_stats}
+        return agent_stats

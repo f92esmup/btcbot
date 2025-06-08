@@ -4,8 +4,10 @@ Handles the main training loop with dependency injection.
 """
 import time
 import numpy as np
+import torch
 from pathlib import Path
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, Tuple
+from src.agente.replay_buffer import ReplayBuffer
 
 
 class Trainer:
@@ -39,6 +41,41 @@ class Trainer:
         self.best_eval_return = float('-inf')
         self.global_trade_counter = 0
         self.learning_started = False
+        
+        # Initialize ReplayBuffer
+        self.replay_buffer = ReplayBuffer(
+            capacity=trainer_config.get('replay_buffer_capacity', trainer_config.get('replay_buffer_size', 100000)),
+            observation_shape=env.observation_space.shape,
+            action_dim=env.action_space.shape[0]
+        )
+        
+    def _parse_observation(self, observation: np.ndarray) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Parse observation from environment into market and portfolio tensors.
+        
+        Args:
+            observation: Raw observation from environment
+            
+        Returns:
+            Tuple[torch.Tensor, torch.Tensor]: (market_data, portfolio_data) tensors
+        """
+        # Environment observation is concatenated: [market_data_flat, portfolio_data]
+        ventana_size = self.env.config_entorno['ventana_observacion_size']
+        num_features_mercado = len(self.env.data_df.columns)
+        market_features_total = ventana_size * num_features_mercado
+        
+        # Split observation
+        market_data_flat = observation[:market_features_total]
+        portfolio_data_flat = observation[market_features_total:]
+        
+        # Reshape market data to (sequence_length, num_features)
+        market_data = market_data_flat.reshape(ventana_size, num_features_mercado)
+        
+        # Convert to tensors and add batch dimension
+        market_tensor = torch.FloatTensor(market_data).unsqueeze(0).to(self.agent.device)
+        portfolio_tensor = torch.FloatTensor(portfolio_data_flat).unsqueeze(0).to(self.agent.device)
+        
+        return market_tensor, portfolio_tensor
         
     def train(self, start_episode: int, total_episodes: int):
         """
@@ -95,24 +132,59 @@ class Trainer:
             
             done = False
             while not done:
-                # Select action
-                action = self.agent.select_action(obs, deterministic=False)
+                # Parse observation and select action
+                market_data, portfolio_data = self._parse_observation(obs)
+                action = self.agent.select_action(market_data, portfolio_data, deterministic=False)
                 
                 # Execute action
                 next_obs, reward, terminated, truncated, info = self.env.step(action)
                 done = terminated or truncated
                 
-                # Store experience
-                self.agent.replay_buffer.add(obs, action, reward, next_obs, terminated, truncated)
+                # Store experience in replay buffer
+                self.replay_buffer.add(obs, action, reward, next_obs, terminated, truncated)
                 
                 # Train if enough experiences accumulated
-                if len(self.agent.replay_buffer) >= self.config['min_buffer_for_learning']:
+                if self.replay_buffer.can_sample(self.config['batch_size']) and len(self.replay_buffer) >= self.config['min_buffer_for_learning']:
                     # Log when learning starts for the first time
                     if not self.learning_started:
-                        self.logger_console.info(f"🎯 INICIANDO APRENDIZAJE: Buffer alcanzó {len(self.agent.replay_buffer)} experiencias (mínimo: {self.config['min_buffer_for_learning']})")
+                        self.logger_console.info(f"🎯 INICIANDO APRENDIZAJE: Buffer alcanzó {len(self.replay_buffer)} experiencias (mínimo: {self.config['min_buffer_for_learning']})")
                         self.learning_started = True
                     
-                    losses = self.agent.learn()
+                    # Sample batch from replay buffer
+                    batch_obs, batch_actions, batch_rewards, batch_next_obs, batch_terminated, batch_truncated = self.replay_buffer.sample(
+                        self.config['batch_size'], self.agent.device
+                    )
+                    
+                    # Parse batch observations
+                    batch_market_data = []
+                    batch_portfolio_data = []
+                    batch_next_market_data = []
+                    batch_next_portfolio_data = []
+                    
+                    for i in range(self.config['batch_size']):
+                        # Parse current observations
+                        market_data_i, portfolio_data_i = self._parse_observation(batch_obs[i].cpu().numpy())
+                        batch_market_data.append(market_data_i.squeeze(0))  # Remove batch dimension we added
+                        batch_portfolio_data.append(portfolio_data_i.squeeze(0))
+                        
+                        # Parse next observations
+                        next_market_data_i, next_portfolio_data_i = self._parse_observation(batch_next_obs[i].cpu().numpy())
+                        batch_next_market_data.append(next_market_data_i.squeeze(0))
+                        batch_next_portfolio_data.append(next_portfolio_data_i.squeeze(0))
+                    
+                    # Stack tensors
+                    batch_market_data = torch.stack(batch_market_data)
+                    batch_portfolio_data = torch.stack(batch_portfolio_data)
+                    batch_next_market_data = torch.stack(batch_next_market_data)
+                    batch_next_portfolio_data = torch.stack(batch_next_portfolio_data)
+                    
+                    # Learn from batch
+                    losses = self.agent.learn(
+                        batch_market_data, batch_portfolio_data, batch_actions,
+                        batch_rewards, batch_next_market_data, batch_next_portfolio_data,
+                        batch_terminated, batch_truncated
+                    )
+                    
                     if losses:
                         ep_actor_losses.append(losses['actor_loss'])
                         ep_critic1_losses.append(losses['critic_1_loss'])
@@ -207,16 +279,24 @@ class Trainer:
             
             # Log agent-specific metrics if we have losses
             if ep_actor_losses:
-                self.logger.writer.add_scalar('Agent_Episode/Mean_Actor_Loss', np.mean(ep_actor_losses), episode)
-                self.logger.writer.add_scalar('Agent_Episode/Mean_Critic_Loss', (np.mean(ep_critic1_losses) + np.mean(ep_critic2_losses)) / 2, episode)
-                self.logger.writer.add_scalar('Agent_Episode/Mean_Alpha_Loss', np.mean(ep_alpha_losses), episode)
-                self.logger.writer.add_scalar('Agent_Episode/Alpha_Value_at_End', self.agent.alpha.item(), episode)
+                agent_episode_metrics = {
+                    'mean_actor_loss': np.mean(ep_actor_losses),
+                    'mean_critic_loss': (np.mean(ep_critic1_losses) + np.mean(ep_critic2_losses)) / 2,
+                    'mean_alpha_loss': np.mean(ep_alpha_losses),
+                    'alpha_value_at_end': self.agent.alpha.item()
+                }
+                
+                # Use individual metric logging for agent metrics not covered by high-level methods
+                self.logger.writer.add_scalar('Agent_Episode/Mean_Actor_Loss', agent_episode_metrics['mean_actor_loss'], episode)
+                self.logger.writer.add_scalar('Agent_Episode/Mean_Critic_Loss', agent_episode_metrics['mean_critic_loss'], episode)
+                self.logger.writer.add_scalar('Agent_Episode/Mean_Alpha_Loss', agent_episode_metrics['mean_alpha_loss'], episode)
+                self.logger.writer.add_scalar('Agent_Episode/Alpha_Value_at_End', agent_episode_metrics['alpha_value_at_end'], episode)
             
             # Additional metrics
             self.logger.writer.add_scalar('Environment_Episode/Max_Equity_Reached', max_equity_episode, episode)
             self.logger.writer.add_scalar('Trading_Episode/Win_Rate_Percentage', win_rate_episode, episode)
             self.logger.writer.add_scalar('Trading_Episode/Average_ROE_per_Trade', avg_roe_episode, episode)
-            self.logger.writer.add_scalar('Agent_Stats/Replay_Buffer_Size', len(self.agent.replay_buffer), episode)
+            self.logger.writer.add_scalar('Agent_Stats/Replay_Buffer_Size', len(self.replay_buffer), episode)
             
             episode_time = time.time() - episode_start_time
             
@@ -224,7 +304,7 @@ class Trainer:
             if (episode + 1) % 10 == 0:
                 avg_return = np.mean(episode_returns[-10:])
                 avg_profit = np.mean(episode_profits[-10:])
-                buffer_size = len(self.agent.replay_buffer)
+                buffer_size = len(self.replay_buffer)
                 learning_status = "LEARNING" if buffer_size >= self.config['min_buffer_for_learning'] else f"COLLECTING ({buffer_size}/{self.config['min_buffer_for_learning']})"
                 
                 self.logger_console.info(f"Episodio {episode + 1}/{total_episodes} | "
@@ -258,13 +338,8 @@ class Trainer:
                 self.logger_console.info(f"  - Sharpe Ratio: {eval_metrics['sharpe_ratio']:.4f}")
                 self.logger_console.info(f"  - Sortino Ratio: {eval_metrics['sortino_ratio']:.4f}")
                 
-                # Log evaluation metrics to TensorBoard
-                self.logger.writer.add_scalar('Evaluation/Mean_Return', eval_metrics['mean_return'], episode + 1)
-                self.logger.writer.add_scalar('Evaluation/Mean_Profit_Pct', eval_metrics['mean_profit_pct'], episode + 1)
-                self.logger.writer.add_scalar('Evaluation/Win_Rate', eval_metrics['win_rate'], episode + 1)
-                self.logger.writer.add_scalar('Evaluation/Max_Drawdown', eval_metrics['max_drawdown'], episode + 1)
-                self.logger.writer.add_scalar('Evaluation/Sharpe_Ratio', eval_metrics['sharpe_ratio'], episode + 1)
-                self.logger.writer.add_scalar('Evaluation/Sortino_Ratio', eval_metrics['sortino_ratio'], episode + 1)
+                # Log evaluation metrics to TensorBoard using high-level method
+                self.logger.log_evaluation_metrics(episode + 1, eval_metrics)
                 
                 # Save best model using RunManager
                 if eval_metrics['mean_return'] > self.best_eval_return:
