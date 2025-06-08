@@ -36,13 +36,14 @@ class AgentEvaluator:
         else:
             self.metrics_calculator = metrics_calculator
     
-    def _parse_observation(self, observation: np.ndarray, env: FuturesTradingEnv) -> Tuple[torch.Tensor, torch.Tensor]:
+    def _parse_observation(self, observation: np.ndarray, env: FuturesTradingEnv, device: torch.device) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Parse observation from environment into market and portfolio tensors.
         
         Args:
             observation: Raw observation from environment
             env: Environment instance for configuration access
+            device: Device to move tensors to (CPU or GPU)
             
         Returns:
             Tuple[torch.Tensor, torch.Tensor]: (market_data, portfolio_data) tensors
@@ -60,8 +61,10 @@ class AgentEvaluator:
         market_data = market_data_flat.reshape(ventana_size, num_features_mercado)
         
         # Convert to tensors and add batch dimension
-        market_tensor = torch.FloatTensor(market_data).unsqueeze(0)
-        portfolio_tensor = torch.FloatTensor(portfolio_data_flat).unsqueeze(0)
+        # --- CAMBIO CLAVE AQUÍ ---
+        # Mover los tensores al dispositivo correcto (GPU)
+        market_tensor = torch.FloatTensor(market_data).unsqueeze(0).to(device)
+        portfolio_tensor = torch.FloatTensor(portfolio_data_flat).unsqueeze(0).to(device)
         
         return market_tensor, portfolio_tensor
     
@@ -146,7 +149,9 @@ class AgentEvaluator:
             done = False
             while not done:
                 # Parse observation and select action
-                market_data, portfolio_data = self._parse_observation(obs, env)
+                # --- CAMBIO CLAVE AQUÍ ---
+                # Pasar el dispositivo del agente al método de parseo
+                market_data, portfolio_data = self._parse_observation(obs, env, agent.device)
                 action = agent.select_action(market_data, portfolio_data, deterministic=True)
                 obs, reward, terminated, truncated, info = env.step(action)
                 done = terminated or truncated
