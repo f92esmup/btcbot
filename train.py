@@ -14,7 +14,6 @@ from pathlib import Path
 from typing import Dict, Any, Optional, Tuple
 import time
 import re
-from torch.utils.tensorboard import SummaryWriter
 
 from src.data.Adquisicion import Adquisicion
 from src.data.indicadores import Indicadores
@@ -26,93 +25,8 @@ from src.configuration.gcs_utils import GCSUtils
 from src.utils.system import setup_logging, set_seed, setup_device
 from src.utils.validation import validate_date_format
 from src.utils.cli import parse_arguments
-
-
-def calculate_max_drawdown(equity_series: list) -> float:
-    """
-    Calcula el máximo drawdown de una serie de equity.
-    
-    Args:
-        equity_series: Lista de valores de equity
-        
-    Returns:
-        float: Máximo drawdown como porcentaje (0.0 - 1.0)
-    """
-    if len(equity_series) == 0:
-        return 0.0
-    
-    equity_array = np.array(equity_series)
-    peak = np.maximum.accumulate(equity_array)
-    drawdown = (peak - equity_array) / peak
-    max_drawdown = np.max(drawdown)
-    
-    return max_drawdown
-
-
-def calculate_sharpe_ratio(returns: list, risk_free_rate: float = 0.0) -> float:
-    """
-    Calcula el Sharpe Ratio de una serie de retornos.
-    
-    Args:
-        returns: Lista de retornos
-        risk_free_rate: Tasa libre de riesgo (anualizada)
-        
-    Returns:
-        float: Sharpe Ratio
-    """
-    if len(returns) <= 1:
-        return 0.0
-    
-    returns_array = np.array(returns)
-    excess_returns = returns_array - risk_free_rate
-    
-    if np.std(excess_returns) == 0:
-        return 0.0
-    
-    sharpe_ratio = np.mean(excess_returns) / np.std(excess_returns)
-    return sharpe_ratio
-
-
-def calculate_sortino_ratio(returns: list, risk_free_rate: float = 0.0) -> float:
-    """
-    Calcula el Sortino Ratio de una serie de retornos.
-    
-    Args:
-        returns: Lista de retornos
-        risk_free_rate: Tasa libre de riesgo (anualizada)
-        
-    Returns:
-        float: Sortino Ratio
-    """
-    if len(returns) <= 1:
-        return 0.0
-    
-    returns_array = np.array(returns)
-    excess_returns = returns_array - risk_free_rate
-    
-    # Solo considerar retornos negativos para la desviación estándar
-    negative_returns = excess_returns[excess_returns < 0]
-    
-    if len(negative_returns) == 0:
-        # No hay retornos negativos, se considera muy bueno
-        return float('inf') if np.mean(excess_returns) > 0 else 0.0
-    
-    downside_deviation = np.std(negative_returns)
-    
-    if downside_deviation == 0:
-        return 0.0
-    
-    sortino_ratio = np.mean(excess_returns) / downside_deviation
-    return sortino_ratio
-
-
-
-
-
-
-
-
-
+from src.analysis.metrics import FinancialMetrics
+from src.analysis.logger import TensorboardLogger
 
 
 def create_trading_environment(dataframe: Any, logger, price_scaler_path: Optional[str] = None, price_scaler_blob_name: Optional[str] = None) -> FuturesTradingEnv:
@@ -219,7 +133,7 @@ def create_sac_agent(env: FuturesTradingEnv, device: torch.device, logger) -> Tr
 
 
 def evaluate_agent(agent: TransformerSACAgent, env: FuturesTradingEnv, 
-                  num_episodes: int, logger, writer: SummaryWriter = None, global_step: int = None) -> Dict[str, float]:
+                  num_episodes: int, logger, writer: TensorboardLogger = None, global_step: int = None) -> Dict[str, float]:
     """
     Evalúa el rendimiento del agente.
     
@@ -228,7 +142,7 @@ def evaluate_agent(agent: TransformerSACAgent, env: FuturesTradingEnv,
         env: Entorno de trading
         num_episodes: Número de episodios de evaluación
         logger: Logger para mensajes
-        writer: TensorBoard SummaryWriter (opcional)
+        writer: TensorBoard logger (opcional)
         global_step: Paso global para TensorBoard (opcional)
         
     Returns:
@@ -289,9 +203,9 @@ def evaluate_agent(agent: TransformerSACAgent, env: FuturesTradingEnv,
     agent.train_mode()
     
     # Calcular métricas financieras avanzadas
-    max_drawdown = calculate_max_drawdown(episode_equity_series)
-    sharpe_ratio = calculate_sharpe_ratio(episode_profits)
-    sortino_ratio = calculate_sortino_ratio(episode_profits)
+    max_drawdown = FinancialMetrics.calculate_max_drawdown(episode_equity_series)
+    sharpe_ratio = FinancialMetrics.calculate_sharpe_ratio(episode_profits)
+    sortino_ratio = FinancialMetrics.calculate_sortino_ratio(episode_profits)
     
     metrics = {
         'mean_return': np.mean(episode_returns),
@@ -314,25 +228,14 @@ def evaluate_agent(agent: TransformerSACAgent, env: FuturesTradingEnv,
     
     # Log to TensorBoard if writer provided
     if writer and global_step is not None:
-        writer.add_scalar('Evaluation/Mean_Return', metrics['mean_return'], global_step)
-        writer.add_scalar('Evaluation/Std_Return', metrics['std_return'], global_step)
-        writer.add_scalar('Evaluation/Mean_Profit_Pct', metrics['mean_profit_pct'], global_step)
-        writer.add_scalar('Evaluation/Std_Profit_Pct', metrics['std_profit_pct'], global_step)
-        writer.add_scalar('Evaluation/Mean_Episode_Length', metrics['mean_episode_length'], global_step)
-        writer.add_scalar('Evaluation/Win_Rate', metrics['win_rate'] * 100, global_step)
-        writer.add_scalar('Evaluation/Avg_Trades_per_Episode', metrics['total_trades'], global_step)
-        
-        # Nuevas métricas financieras en TensorBoard
-        writer.add_scalar('Evaluation/Max_Drawdown_Pct', metrics['max_drawdown'] * 100, global_step)
-        writer.add_scalar('Evaluation/Sharpe_Ratio', metrics['sharpe_ratio'], global_step)
-        writer.add_scalar('Evaluation/Sortino_Ratio', metrics['sortino_ratio'], global_step)
+        writer.log_evaluation_metrics(global_step, metrics)
     
     return metrics
 
 
 def train_agent(agent: TransformerSACAgent, env: FuturesTradingEnv, 
                num_episodes: int, eval_frequency: int, eval_episodes: int,
-               save_frequency: int, logger, writer: SummaryWriter,
+               save_frequency: int, logger, writer: TensorboardLogger,
                log_dir: Path = None, start_episode: int = 0,
                base_path: str = None, run_id: str = None, seed: int = 73,
                gcs_utils=None):
@@ -347,7 +250,7 @@ def train_agent(agent: TransformerSACAgent, env: FuturesTradingEnv,
         eval_episodes: Episodios para evaluación
         save_frequency: Frecuencia de guardado
         logger: Logger para mensajes
-        writer: TensorBoard SummaryWriter
+        writer: TensorBoard logger
         log_dir: Directorio de logs de TensorBoard para sync a GCS
         start_episode: Episodio inicial (para resumir entrenamiento)
         base_path: Ruta base para guardar artifacts del entrenamiento
@@ -440,11 +343,7 @@ def train_agent(agent: TransformerSACAgent, env: FuturesTradingEnv,
                     ep_alpha_losses.append(losses['alpha_loss'])
                     
                     # Log losses por cada paso de aprendizaje
-                    writer.add_scalar('Agent/Actor_Loss_step', losses['actor_loss'], agent.learning_steps)
-                    writer.add_scalar('Agent/Critic_1_Loss_step', losses['critic_1_loss'], agent.learning_steps)
-                    writer.add_scalar('Agent/Critic_2_Loss_step', losses['critic_2_loss'], agent.learning_steps)
-                    writer.add_scalar('Agent/Alpha_Loss_step', losses['alpha_loss'], agent.learning_steps)
-                    writer.add_scalar('Agent/Alpha_Value_step', agent.alpha.item(), agent.learning_steps)
+                    writer.log_step_metrics(agent.learning_steps, losses, agent.alpha.item())
             
             obs = next_obs
             episode_return += reward
@@ -478,13 +377,14 @@ def train_agent(agent: TransformerSACAgent, env: FuturesTradingEnv,
                     episode_short_trades += 1
                 
                 # Log métricas por trade individual
-                writer.add_scalar('Per_Trade/PNL_Realized_ROE', roe_trade, global_trade_counter)
-                writer.add_scalar('Per_Trade/PNL_Realized_Absolute', pnl_abs_trade, global_trade_counter)
-                writer.add_scalar('Per_Trade/Duration_Steps', ultimo_trade.get('pasos_duracion', 0), global_trade_counter)
-                writer.add_scalar('Per_Trade/Margin_Used', margen_usado_trade, global_trade_counter)
-                
-                direction_val = 1 if ultimo_trade['tipo'] == 'LARGO' else (-1 if ultimo_trade['tipo'] == 'CORTO' else 0)
-                writer.add_scalar('Per_Trade/Direction', direction_val, global_trade_counter)
+                trade_data = {
+                    'roe': roe_trade,
+                    'pnl_abs': pnl_abs_trade,
+                    'pasos_duracion': ultimo_trade.get('pasos_duracion', 0),
+                    'margen_usado': margen_usado_trade,
+                    'tipo': ultimo_trade['tipo']
+                }
+                writer.log_per_trade_metrics(global_trade_counter, trade_data)
         
         # Calcular profit del episodio
         final_balance = env.balance_actual
@@ -502,40 +402,45 @@ def train_agent(agent: TransformerSACAgent, env: FuturesTradingEnv,
             critic_losses.append((np.mean(ep_critic1_losses) + np.mean(ep_critic2_losses)) / 2)
             alpha_losses.append(np.mean(ep_alpha_losses))
             alpha_values.append(agent.alpha.item())
-            
-            # TensorBoard logging por episodio - Agent metrics
-            writer.add_scalar('Agent_Episode/Mean_Actor_Loss', np.mean(ep_actor_losses), episode)
-            writer.add_scalar('Agent_Episode/Mean_Critic_Loss', (np.mean(ep_critic1_losses) + np.mean(ep_critic2_losses)) / 2, episode)
-            writer.add_scalar('Agent_Episode/Mean_Alpha_Loss', np.mean(ep_alpha_losses), episode)
-            writer.add_scalar('Agent_Episode/Alpha_Value_at_End', agent.alpha.item(), episode)
         
-        # TensorBoard logging por episodio - Episode metrics
-        writer.add_scalar('Episode_Metrics/Return', episode_return, episode)
-        writer.add_scalar('Episode_Metrics/Profit_Percentage_Initial_Capital', profit_pct, episode)
-        writer.add_scalar('Episode_Metrics/Length', episode_length, episode)
-        
-        # TensorBoard logging por episodio - Environment metrics
-        writer.add_scalar('Environment_Episode/Final_Balance', env.balance_actual, episode)
-        writer.add_scalar('Environment_Episode/Final_Equity', env.equity_actual, episode)
-        writer.add_scalar('Environment_Episode/Max_Equity_Reached', max_equity_episode, episode)
+        # Preparar métricas para logging
         drawdown_episode = (max_equity_episode - env.equity_actual) / max_equity_episode if max_equity_episode > 0 else 0
-        writer.add_scalar('Environment_Episode/Drawdown_Percentage', drawdown_episode * 100, episode)
-        
-        # TensorBoard logging por episodio - Trading metrics
-        writer.add_scalar('Trading_Episode/Total_Trades_Executed', episode_trades_count, episode)
-        writer.add_scalar('Trading_Episode/Number_Long_Trades', episode_long_trades, episode)
-        writer.add_scalar('Trading_Episode/Number_Short_Trades', episode_short_trades, episode)
         win_rate_episode = (episode_winning_trades / episode_trades_count) * 100 if episode_trades_count > 0 else 0
-        writer.add_scalar('Trading_Episode/Win_Rate_Percentage', win_rate_episode, episode)
-        
         avg_roe_episode = (episode_total_roe_realized / episode_trades_count) if episode_trades_count > 0 else 0.0
-        writer.add_scalar('Trading_Episode/Average_ROE_per_Trade', avg_roe_episode, episode)
-        writer.add_scalar('Trading_Episode/Total_PNL_Realized_Absolute', episode_total_pnl_realized_abs, episode)
         avg_margin_used_episode = np.mean(episode_margins_used) if episode_margins_used else 0.0
-        writer.add_scalar('Trading_Episode/Average_Margin_Used_per_Trade', avg_margin_used_episode, episode)
         
-        # Buffer size
-        writer.add_scalar('Agent_Stats/Replay_Buffer_Size', len(agent.replay_buffer), episode)
+        # Organizar métricas en diccionarios
+        trade_metrics = {
+            'trades_count': episode_trades_count,
+            'winning_trades': episode_winning_trades,
+            'long_trades': episode_long_trades,
+            'short_trades': episode_short_trades,
+            'total_pnl_realized_abs': episode_total_pnl_realized_abs,
+            'total_roe_realized': episode_total_roe_realized,
+            'avg_margin_used': avg_margin_used_episode
+        }
+        
+        env_metrics = {
+            'drawdown_episode': drawdown_episode,
+            'final_balance': env.balance_actual,
+            'initial_balance': initial_balance
+        }
+        
+        # Log episode metrics usando el TensorboardLogger
+        writer.log_episode_metrics(episode, episode_return, profit_pct, episode_length, trade_metrics, env_metrics)
+        
+        # Log agent-specific metrics if we have losses
+        if ep_actor_losses:
+            writer.writer.add_scalar('Agent_Episode/Mean_Actor_Loss', np.mean(ep_actor_losses), episode)
+            writer.writer.add_scalar('Agent_Episode/Mean_Critic_Loss', (np.mean(ep_critic1_losses) + np.mean(ep_critic2_losses)) / 2, episode)
+            writer.writer.add_scalar('Agent_Episode/Mean_Alpha_Loss', np.mean(ep_alpha_losses), episode)
+            writer.writer.add_scalar('Agent_Episode/Alpha_Value_at_End', agent.alpha.item(), episode)
+        
+        # Additional metrics
+        writer.writer.add_scalar('Environment_Episode/Max_Equity_Reached', max_equity_episode, episode)
+        writer.writer.add_scalar('Trading_Episode/Win_Rate_Percentage', win_rate_episode, episode)
+        writer.writer.add_scalar('Trading_Episode/Average_ROE_per_Trade', avg_roe_episode, episode)
+        writer.writer.add_scalar('Agent_Stats/Replay_Buffer_Size', len(agent.replay_buffer), episode)
         
         episode_time = time.time() - episode_start_time
         
@@ -901,14 +806,14 @@ def main():
         base_path.mkdir(parents=True, exist_ok=True)
         logger.info(f"Modo Local: Los artefactos se guardarán en {base_path}")
 
-    # Inicializar TensorBoard Writer
+    # Inicializar TensorBoard Logger
     tensorboard_dir = base_path / "tensorboard" if config.storage_mode == "local" else Path("runs") / f"btcbot_{current_time}"
     if config.storage_mode == "local":
         tensorboard_dir.mkdir(parents=True, exist_ok=True)
     else:
         tensorboard_dir.mkdir(parents=True, exist_ok=True)
     
-    writer = SummaryWriter(log_dir=str(tensorboard_dir))
+    tb_logger = TensorboardLogger(log_dir=str(tensorboard_dir))
     logger.info(f"TensorBoard logs se guardarán en: {tensorboard_dir}")
 
     # Registrar Hiperparámetros
@@ -937,8 +842,8 @@ def main():
         'storage_mode': config.storage_mode,
         'base_path': str(base_path)
     }
-    # Log hyperparameters as text for now (we'll link to metrics later)
-    writer.add_text('Hyperparameters', str(hparams), 0)
+    # Log hyperparameters
+    tb_logger.log_hyperparameters(hparams)
     
     # Guardar configuración del run
     try:
@@ -1131,7 +1036,7 @@ def main():
             eval_episodes=args.eval_episodes,
             save_frequency=args.save_frequency,
             logger=logger,
-            writer=writer,
+            writer=tb_logger,
             log_dir=tensorboard_dir,
             start_episode=start_episode,
             base_path=str(base_path),
@@ -1144,19 +1049,19 @@ def main():
         
     except KeyboardInterrupt:
         logger.info("Proceso interrumpido por el usuario")
-        writer.close()
+        tb_logger.close()
         sys.exit(0)
         
     except Exception as e:
         logger.error(f"Error durante la ejecución: {e}")
         logger.exception("Detalles del error:")
-        writer.close()
+        tb_logger.close()
         sys.exit(1)
     
     finally:
         # Asegurar que el writer se cierre
-        if 'writer' in locals():
-            writer.close()
+        if 'tb_logger' in locals():
+            tb_logger.close()
 
 
 if __name__ == "__main__":
