@@ -61,7 +61,7 @@ class Trainer:
         """
         # Environment observation is concatenated: [market_data_flat, portfolio_data]
         ventana_size = self.env.config_entorno['ventana_observacion_size']
-        num_features_mercado = len(self.env.data_df.columns)
+        num_features_mercado = len(self.env.column_names)
         market_features_total = ventana_size * num_features_mercado
         
         # Split observation
@@ -91,7 +91,7 @@ class Trainer:
         """
         # Calculate dimensions
         ventana_size = self.env.config_entorno['ventana_observacion_size']
-        num_features_mercado = len(self.env.data_df.columns)
+        num_features_mercado = len(self.env.column_names)
         market_features_total = ventana_size * num_features_mercado
         
         # Use tensor slicing to separate market and portfolio data (vectorized)
