@@ -76,7 +76,34 @@ class Trainer:
         portfolio_tensor = torch.FloatTensor(portfolio_data_flat).unsqueeze(0).to(self.agent.device)
         
         return market_tensor, portfolio_tensor
+    
+    def _parse_observation_batch(self, observations_batch: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Vectorized parsing of a batch of observations.
         
+        Args:
+            observations_batch: Tensor of shape (batch_size, total_features)
+            
+        Returns:
+            Tuple[torch.Tensor, torch.Tensor]: (market_data, portfolio_data) tensors
+            - market_data: shape (batch_size, ventana_size, num_features_mercado)
+            - portfolio_data: shape (batch_size, portfolio_features)
+        """
+        # Calculate dimensions
+        ventana_size = self.env.config_entorno['ventana_observacion_size']
+        num_features_mercado = len(self.env.data_df.columns)
+        market_features_total = ventana_size * num_features_mercado
+        
+        # Use tensor slicing to separate market and portfolio data (vectorized)
+        market_data_flat = observations_batch[:, :market_features_total]
+        portfolio_data = observations_batch[:, market_features_total:]
+        
+        # Reshape market data to 3D tensor (vectorized)
+        batch_size = observations_batch.shape[0]
+        market_data = market_data_flat.view(batch_size, ventana_size, num_features_mercado)
+        
+        return market_data, portfolio_data
+
     def train(self, start_episode: int, total_episodes: int):
         """
         Main training loop.
@@ -155,28 +182,9 @@ class Trainer:
                         self.config['batch_size'], self.agent.device
                     )
                     
-                    # Parse batch observations
-                    batch_market_data = []
-                    batch_portfolio_data = []
-                    batch_next_market_data = []
-                    batch_next_portfolio_data = []
-                    
-                    for i in range(self.config['batch_size']):
-                        # Parse current observations
-                        market_data_i, portfolio_data_i = self._parse_observation(batch_obs[i].cpu().numpy())
-                        batch_market_data.append(market_data_i.squeeze(0))  # Remove batch dimension we added
-                        batch_portfolio_data.append(portfolio_data_i.squeeze(0))
-                        
-                        # Parse next observations
-                        next_market_data_i, next_portfolio_data_i = self._parse_observation(batch_next_obs[i].cpu().numpy())
-                        batch_next_market_data.append(next_market_data_i.squeeze(0))
-                        batch_next_portfolio_data.append(next_portfolio_data_i.squeeze(0))
-                    
-                    # Stack tensors
-                    batch_market_data = torch.stack(batch_market_data)
-                    batch_portfolio_data = torch.stack(batch_portfolio_data)
-                    batch_next_market_data = torch.stack(batch_next_market_data)
-                    batch_next_portfolio_data = torch.stack(batch_next_portfolio_data)
+                    # Parse batch observations (vectorized)
+                    batch_market_data, batch_portfolio_data = self._parse_observation_batch(batch_obs)
+                    batch_next_market_data, batch_next_portfolio_data = self._parse_observation_batch(batch_next_obs)
                     
                     # Learn from batch
                     losses = self.agent.learn(
