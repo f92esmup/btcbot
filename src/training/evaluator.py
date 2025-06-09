@@ -50,7 +50,7 @@ class AgentEvaluator:
         """
         # Environment observation is concatenated: [market_data_flat, portfolio_data]
         ventana_size = env.config_entorno['ventana_observacion_size']
-        num_features_mercado = len(env.data_df.columns)
+        num_features_mercado = len(env.column_names)
         market_features_total = ventana_size * num_features_mercado
         
         # Split observation
