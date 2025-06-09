@@ -160,8 +160,12 @@ class TransformerSACAgent:
             max_seq_len=self.sequence_length
         ).to(self.device)
         
+        # Note: Actor is not JIT-compiled because it uses additional methods (sample, log_prob)
+        # beyond forward() that are not easily traceable by JIT
+        logger.info("✅ ActorNetwork creado (sin JIT compilation debido a métodos adicionales)")
+        
         # Redes de los Críticos (2 redes)
-        self.critic_1 = CriticNetwork(
+        critic_1_network = CriticNetwork(
             market_features=self.market_features,
             portfolio_features=self.portfolio_features,
             action_dim=self.action_dim,
@@ -170,7 +174,14 @@ class TransformerSACAgent:
             max_seq_len=self.sequence_length
         ).to(self.device)
         
-        self.critic_2 = CriticNetwork(
+        try:
+            self.critic_1 = torch.jit.script(critic_1_network)
+            logger.info("✅ JIT compilation aplicada exitosamente al CriticNetwork 1")
+        except Exception as e:
+            logger.warning(f"⚠️ JIT compilation falló para CriticNetwork 1: {e}. Usando red normal.")
+            self.critic_1 = critic_1_network
+        
+        critic_2_network = CriticNetwork(
             market_features=self.market_features,
             portfolio_features=self.portfolio_features,
             action_dim=self.action_dim,
@@ -178,9 +189,16 @@ class TransformerSACAgent:
             mlp_hidden_dims=mlp_hidden_dims,
             max_seq_len=self.sequence_length
         ).to(self.device)
+        
+        try:
+            self.critic_2 = torch.jit.script(critic_2_network)
+            logger.info("✅ JIT compilation aplicada exitosamente al CriticNetwork 2")
+        except Exception as e:
+            logger.warning(f"⚠️ JIT compilation falló para CriticNetwork 2: {e}. Usando red normal.")
+            self.critic_2 = critic_2_network
         
         # Redes objetivo (copias de los críticos)
-        self.critic_target_1 = CriticNetwork(
+        critic_target_1_network = CriticNetwork(
             market_features=self.market_features,
             portfolio_features=self.portfolio_features,
             action_dim=self.action_dim,
@@ -189,7 +207,14 @@ class TransformerSACAgent:
             max_seq_len=self.sequence_length
         ).to(self.device)
         
-        self.critic_target_2 = CriticNetwork(
+        try:
+            self.critic_target_1 = torch.jit.script(critic_target_1_network)
+            logger.info("✅ JIT compilation aplicada exitosamente al CriticNetwork Target 1")
+        except Exception as e:
+            logger.warning(f"⚠️ JIT compilation falló para CriticNetwork Target 1: {e}. Usando red normal.")
+            self.critic_target_1 = critic_target_1_network
+        
+        critic_target_2_network = CriticNetwork(
             market_features=self.market_features,
             portfolio_features=self.portfolio_features,
             action_dim=self.action_dim,
@@ -197,6 +222,13 @@ class TransformerSACAgent:
             mlp_hidden_dims=mlp_hidden_dims,
             max_seq_len=self.sequence_length
         ).to(self.device)
+        
+        try:
+            self.critic_target_2 = torch.jit.script(critic_target_2_network)
+            logger.info("✅ JIT compilation aplicada exitosamente al CriticNetwork Target 2")
+        except Exception as e:
+            logger.warning(f"⚠️ JIT compilation falló para CriticNetwork Target 2: {e}. Usando red normal.")
+            self.critic_target_2 = critic_target_2_network
         
         # Copiar pesos a las redes objetivo
         self.critic_target_1.load_state_dict(self.critic_1.state_dict())

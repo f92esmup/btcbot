@@ -30,9 +30,13 @@ class PositionalEncoding(nn.Module):
         self.d_model = d_model
         self.learnable = learnable
         
+        # Always create both attributes for JIT compatibility
         if learnable:
             # Embeddings posicionales aprendibles
             self.pos_embedding = nn.Parameter(torch.randn(max_len, d_model))
+            # Create dummy fixed encoding as buffer (won't be used but needed for JIT)
+            dummy_pe = torch.zeros(max_len, d_model)
+            self.register_buffer('pe', dummy_pe)
         else:
             # Codificación posicional sinusoidal fija
             pe = torch.zeros(max_len, d_model)
@@ -44,6 +48,8 @@ class PositionalEncoding(nn.Module):
             pe[:, 1::2] = torch.cos(position * div_term)
             
             self.register_buffer('pe', pe)
+            # Create dummy learnable parameter (won't be used but needed for JIT)
+            self.pos_embedding = nn.Parameter(torch.zeros(max_len, d_model), requires_grad=False)
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
