@@ -617,7 +617,7 @@ class RunManager:
         
         # Determine path and worker function based on storage mode
         if self.storage_mode == "gcp":
-            path_prefix = f"{self.run_id}/best_model/best_model"
+            path_prefix = f"{self.run_id}/best_model"
             args = (agent_state, path_prefix)
             target_worker = _save_worker_gcs
             best_model_path = f"gs://{self.gcs_utils.bucket_name}/{self.run_id}/best_model"
@@ -674,7 +674,7 @@ class RunManager:
         
         # Determine path and worker function based on storage mode
         if self.storage_mode == "gcp":
-            path_prefix = f"{self.run_id}/final_model/final_model"
+            path_prefix = f"{self.run_id}/final_model"
             args = (agent_state, path_prefix)
             target_worker = _save_worker_gcs
             final_model_path = f"gs://{self.gcs_utils.bucket_name}/{self.run_id}/final_model"
