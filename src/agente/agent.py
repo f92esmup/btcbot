@@ -112,6 +112,9 @@ class TransformerSACAgent:
                 device=self.device
             )
         
+        # Inicializar GradScaler para Automatic Mixed Precision (AMP)
+        self.scaler = torch.cuda.amp.GradScaler(enabled=(self.device.type == 'cuda'))
+        
         logger.info(f"TransformerSACAgent inicializado en {self.device}")
         logger.info(f"  - Observación shape: {observation_space_shape}")
         logger.info(f"  - Acción dim: {self.action_dim}")
@@ -120,6 +123,7 @@ class TransformerSACAgent:
         logger.info(f"  - Sequence length: {sequence_length}")
         logger.info(f"  - Alpha aprendible: {self.learn_alpha}")
         logger.info(f"  - Target entropy: {self.target_entropy}")
+        logger.info(f"  - AMP habilitado: {self.device.type == 'cuda'}")
     
     def _load_config_from_yaml(self) -> Dict[str, Any]:
         """Carga configuración desde config.yaml."""
@@ -160,8 +164,12 @@ class TransformerSACAgent:
             max_seq_len=self.sequence_length
         ).to(self.device)
         
+        # Note: Actor is not JIT-compiled because it uses additional methods (sample, log_prob)
+        # beyond forward() that are not easily traceable by JIT
+        logger.info("✅ ActorNetwork creado (sin JIT compilation debido a métodos adicionales)")
+        
         # Redes de los Críticos (2 redes)
-        self.critic_1 = CriticNetwork(
+        critic_1_network = CriticNetwork(
             market_features=self.market_features,
             portfolio_features=self.portfolio_features,
             action_dim=self.action_dim,
@@ -170,7 +178,14 @@ class TransformerSACAgent:
             max_seq_len=self.sequence_length
         ).to(self.device)
         
-        self.critic_2 = CriticNetwork(
+        try:
+            self.critic_1 = torch.jit.script(critic_1_network)
+            logger.info("✅ JIT compilation aplicada exitosamente al CriticNetwork 1")
+        except Exception as e:
+            logger.warning(f"⚠️ JIT compilation falló para CriticNetwork 1: {e}. Usando red normal.")
+            self.critic_1 = critic_1_network
+        
+        critic_2_network = CriticNetwork(
             market_features=self.market_features,
             portfolio_features=self.portfolio_features,
             action_dim=self.action_dim,
@@ -178,9 +193,16 @@ class TransformerSACAgent:
             mlp_hidden_dims=mlp_hidden_dims,
             max_seq_len=self.sequence_length
         ).to(self.device)
+        
+        try:
+            self.critic_2 = torch.jit.script(critic_2_network)
+            logger.info("✅ JIT compilation aplicada exitosamente al CriticNetwork 2")
+        except Exception as e:
+            logger.warning(f"⚠️ JIT compilation falló para CriticNetwork 2: {e}. Usando red normal.")
+            self.critic_2 = critic_2_network
         
         # Redes objetivo (copias de los críticos)
-        self.critic_target_1 = CriticNetwork(
+        critic_target_1_network = CriticNetwork(
             market_features=self.market_features,
             portfolio_features=self.portfolio_features,
             action_dim=self.action_dim,
@@ -189,7 +211,14 @@ class TransformerSACAgent:
             max_seq_len=self.sequence_length
         ).to(self.device)
         
-        self.critic_target_2 = CriticNetwork(
+        try:
+            self.critic_target_1 = torch.jit.script(critic_target_1_network)
+            logger.info("✅ JIT compilation aplicada exitosamente al CriticNetwork Target 1")
+        except Exception as e:
+            logger.warning(f"⚠️ JIT compilation falló para CriticNetwork Target 1: {e}. Usando red normal.")
+            self.critic_target_1 = critic_target_1_network
+        
+        critic_target_2_network = CriticNetwork(
             market_features=self.market_features,
             portfolio_features=self.portfolio_features,
             action_dim=self.action_dim,
@@ -197,6 +226,13 @@ class TransformerSACAgent:
             mlp_hidden_dims=mlp_hidden_dims,
             max_seq_len=self.sequence_length
         ).to(self.device)
+        
+        try:
+            self.critic_target_2 = torch.jit.script(critic_target_2_network)
+            logger.info("✅ JIT compilation aplicada exitosamente al CriticNetwork Target 2")
+        except Exception as e:
+            logger.warning(f"⚠️ JIT compilation falló para CriticNetwork Target 2: {e}. Usando red normal.")
+            self.critic_target_2 = critic_target_2_network
         
         # Copiar pesos a las redes objetivo
         self.critic_target_1.load_state_dict(self.critic_1.state_dict())
@@ -307,43 +343,49 @@ class TransformerSACAgent:
             q_targets = scaled_rewards.unsqueeze(1) + self.gamma * (1 - done_mask.float().unsqueeze(1)) * target_q
         
         # Actualizar críticos
-        current_q1 = self.critic_1(market_data, portfolio_data, actions)
-        current_q2 = self.critic_2(market_data, portfolio_data, actions)
-        
-        critic_1_loss = F.mse_loss(current_q1, q_targets)
-        critic_2_loss = F.mse_loss(current_q2, q_targets)
+        with torch.cuda.amp.autocast(enabled=(self.device.type == 'cuda')):
+            current_q1 = self.critic_1(market_data, portfolio_data, actions)
+            current_q2 = self.critic_2(market_data, portfolio_data, actions)
+            
+            critic_1_loss = F.mse_loss(current_q1, q_targets)
+            critic_2_loss = F.mse_loss(current_q2, q_targets)
         
         # Optimizar crítico 1
         self.critic_1_optimizer.zero_grad()
-        critic_1_loss.backward()
-        self.critic_1_optimizer.step()
+        self.scaler.scale(critic_1_loss).backward()
+        self.scaler.step(self.critic_1_optimizer)
         
         # Optimizar crítico 2
         self.critic_2_optimizer.zero_grad()
-        critic_2_loss.backward()
-        self.critic_2_optimizer.step()
+        self.scaler.scale(critic_2_loss).backward()
+        self.scaler.step(self.critic_2_optimizer)
         
         # Actualizar actor
-        new_actions, log_probs = self.actor.sample(market_data, portfolio_data)
-        
-        q1_new = self.critic_1(market_data, portfolio_data, new_actions)
-        q2_new = self.critic_2(market_data, portfolio_data, new_actions)
-        q_new = torch.min(q1_new, q2_new)
-        
-        actor_loss = (self.alpha * log_probs - q_new).mean()
+        with torch.cuda.amp.autocast(enabled=(self.device.type == 'cuda')):
+            new_actions, log_probs = self.actor.sample(market_data, portfolio_data)
+            
+            q1_new = self.critic_1(market_data, portfolio_data, new_actions)
+            q2_new = self.critic_2(market_data, portfolio_data, new_actions)
+            q_new = torch.min(q1_new, q2_new)
+            
+            actor_loss = (self.alpha * log_probs - q_new).mean()
         
         self.actor_optimizer.zero_grad()
-        actor_loss.backward()
-        self.actor_optimizer.step()
+        self.scaler.scale(actor_loss).backward()
+        self.scaler.step(self.actor_optimizer)
         
         # Actualizar alpha si es aprendible
         alpha_loss = torch.tensor(0.0)
         if self.learn_alpha:
-            alpha_loss = -(self.log_alpha * (log_probs + self.target_entropy).detach()).mean()
+            with torch.cuda.amp.autocast(enabled=(self.device.type == 'cuda')):
+                alpha_loss = -(self.log_alpha * (log_probs + self.target_entropy).detach()).mean()
             
             self.alpha_optimizer.zero_grad()
-            alpha_loss.backward()
-            self.alpha_optimizer.step()
+            self.scaler.scale(alpha_loss).backward()
+            self.scaler.step(self.alpha_optimizer)
+        
+        # Actualizar el scaler después de todos los pasos de optimización
+        self.scaler.update()
         
         # Actualizar redes objetivo
         self.learning_steps += 1

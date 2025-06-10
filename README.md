@@ -28,6 +28,7 @@ Este proyecto implementa un bot de trading automatizado que utiliza técnicas de
 ### Características Principales
 
 - **Adquisición de datos**: Descarga automática de datos OHLCV desde la API de Binance con múltiples llamadas secuenciales
+- **🚀 Descarga paralela**: Optimización opcional para acelerar la descarga de datos históricos grandes usando multiprocessing
 - **Indicadores técnicos**: Cálculo de múltiples indicadores usando pandas-ta
 - **Almacenamiento de modelos**: Soporte para almacenamiento local o en Google Cloud Storage (GCS)
 - **Normalización avanzada**: Sistema de escalado de características con persistencia
@@ -259,6 +260,45 @@ python train.py --symbol BTCUSDT --interval 4h --start-date 2024-01-01
 # Descargar datos de Ethereum en intervalos de 1 hora desde marzo 2024
 python train.py --symbol ETHUSDT --interval 1h --start-date 2024-03-01
 ```
+
+### 🚀 Optimización de Descarga Paralela
+
+**Nueva Funcionalidad**: Para rangos de fechas grandes, el sistema incluye una optimización que permite descargar datos en paralelo usando múltiples procesos.
+
+#### Cuándo Usar Descarga Paralela
+
+- ✅ **Recomendado**: Datos históricos de varios meses o años
+- ✅ **Ideal**: Backfills masivos o descargas iniciales
+- ❌ **No recomendado**: Actualizaciones incrementales pequeñas
+
+#### Uso Programático
+
+```python
+from src.data.Adquisicion import Adquisicion
+
+# Método tradicional (secuencial)
+adquisicion = Adquisicion("BTCUSDT", "1h", "2024-01-01")
+df = adquisicion.main()  # Descarga secuencial
+
+# Método optimizado (paralelo) - para rangos grandes
+adquisicion = Adquisicion("BTCUSDT", "1h", "2023-01-01")  # 1+ años
+df = adquisicion.main_parallel()  # Descarga paralela
+```
+
+#### Scripts de Prueba Disponibles
+
+```bash
+# Ejemplo básico de comparación
+python ejemplo_paralelo.py
+
+# Demostración completa de diferentes escenarios
+python demo_optimizacion_paralela.py
+
+# Validación de la implementación
+python validar_optimizacion_paralela.py
+```
+
+**Nota**: La descarga paralela incluye fallback automático al método secuencial en caso de error, garantizando la robustez del sistema.
 
 ## 📦 Módulos del Sistema
 

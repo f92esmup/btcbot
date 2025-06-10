@@ -63,6 +63,9 @@ class Indicadores:
         """Calcular y añadir todos los indicadores técnicos configurados al DataFrame."""
         self.logger.info("Calculando indicadores técnicos...")
         
+        # Diccionario para almacenar todos los nuevos indicadores
+        new_indicators = {}
+        
         # Obtener configuraciones de indicadores
         trend_config = config.trend_indicators
         momentum_config = config.momentum_indicators
@@ -72,12 +75,12 @@ class Indicadores:
         # 1. Indicadores de Tendencia
         if trend_config.get('ema_20', {}).get('enabled', False):
             period = trend_config['ema_20']['period']
-            self.dataframe[f'EMA_{period}'] = ta.ema(self.dataframe['Close'], length=period)
+            new_indicators[f'EMA_{period}'] = ta.ema(self.dataframe['Close'], length=period)
             self.logger.info(f"EMA {period} calculado")
         
         if trend_config.get('ema_50', {}).get('enabled', False):
             period = trend_config['ema_50']['period']
-            self.dataframe[f'EMA_{period}'] = ta.ema(self.dataframe['Close'], length=period)
+            new_indicators[f'EMA_{period}'] = ta.ema(self.dataframe['Close'], length=period)
             self.logger.info(f"EMA {period} calculado")
         
         if trend_config.get('adx', {}).get('enabled', False):
@@ -92,13 +95,13 @@ class Indicadores:
                 # Buscar la columna ADX correcta
                 adx_column = f'ADX_{period}'
                 if adx_column in adx_result.columns:
-                    self.dataframe[adx_column] = adx_result[adx_column]
+                    new_indicators[adx_column] = adx_result[adx_column]
                     self.logger.info(f"ADX {period} calculado")
                 else:
                     # Buscar cualquier columna que contenga ADX
                     adx_cols = [col for col in adx_result.columns if 'ADX' in col]
                     if adx_cols:
-                        self.dataframe[f'ADX_{period}'] = adx_result[adx_cols[0]]
+                        new_indicators[f'ADX_{period}'] = adx_result[adx_cols[0]]
                         self.logger.info(f"ADX {period} calculado usando {adx_cols[0]}")
                     else:
                         self.logger.warning(f"No se pudo calcular ADX, columnas disponibles: {adx_result.columns.tolist()}")
@@ -108,7 +111,7 @@ class Indicadores:
         # 2. Indicadores de Momento
         if momentum_config.get('rsi', {}).get('enabled', False):
             period = momentum_config['rsi']['period']
-            self.dataframe[f'RSI_{period}'] = ta.rsi(self.dataframe['Close'], length=period)
+            new_indicators[f'RSI_{period}'] = ta.rsi(self.dataframe['Close'], length=period)
             self.logger.info(f"RSI {period} calculado")
         
         if momentum_config.get('stoch', {}).get('enabled', False):
@@ -128,13 +131,13 @@ class Indicadores:
                 # El nombre de la columna en pandas-ta es diferente
                 column_name = f'STOCHk_{k_period}_{d_period}_{smooth_k}'
                 if column_name in stoch_result.columns:
-                    self.dataframe[f'STOCHK_{k_period}_{d_period}_{smooth_k}'] = stoch_result[column_name]
+                    new_indicators[f'STOCHK_{k_period}_{d_period}_{smooth_k}'] = stoch_result[column_name]
                     self.logger.info(f"STOCHK ({k_period},{d_period},{smooth_k}) calculado")
                 else:
                     # Intentar con el primer nombre disponible
                     available_cols = [col for col in stoch_result.columns if 'STOCH' in col]
                     if available_cols:
-                        self.dataframe[f'STOCHK_{k_period}_{d_period}_{smooth_k}'] = stoch_result[available_cols[0]]
+                        new_indicators[f'STOCHK_{k_period}_{d_period}_{smooth_k}'] = stoch_result[available_cols[0]]
                         self.logger.info(f"STOCHK ({k_period},{d_period},{smooth_k}) calculado usando {available_cols[0]}")
                     else:
                         self.logger.warning(f"No se pudo calcular STOCHK, columnas disponibles: {stoch_result.columns.tolist()}")
@@ -142,7 +145,7 @@ class Indicadores:
         # 3. Indicadores de Volatilidad
         if volatility_config.get('atr', {}).get('enabled', False):
             period = volatility_config['atr']['period']
-            self.dataframe[f'ATR_{period}'] = ta.atr(
+            new_indicators[f'ATR_{period}'] = ta.atr(
                 high=self.dataframe['High'],
                 low=self.dataframe['Low'],
                 close=self.dataframe['Close'],
@@ -152,11 +155,17 @@ class Indicadores:
         
         # 4. Indicadores de Volumen
         if volume_config.get('obv', {}).get('enabled', False):
-            self.dataframe['OBV'] = ta.obv(
+            new_indicators['OBV'] = ta.obv(
                 close=self.dataframe['Close'],
                 volume=self.dataframe['Volume']
             )
             self.logger.info("OBV calculado")
+        
+        # Añadir todos los indicadores al DataFrame en una sola operación
+        if new_indicators:
+            indicators_df = pd.DataFrame(new_indicators, index=self.dataframe.index)
+            self.dataframe = pd.concat([self.dataframe, indicators_df], axis=1)
+            self.logger.info(f"Añadidos {len(new_indicators)} indicadores al DataFrame en una sola operación")
         
         self.logger.info("Todos los indicadores técnicos calculados exitosamente")
     

@@ -96,7 +96,7 @@ def create_sac_agent(env: FuturesTradingEnv, device: torch.device, logger) -> Tr
     
     # Calcular características de mercado y portfolio
     ventana_size = config.ventana_observacion_size
-    num_features_mercado = len(env.data_df.columns)
+    num_features_mercado = len(env.column_names)
     market_features = num_features_mercado
     portfolio_features = 4  # tipo_posicion, pnl_roe, pasos_posicion, precio_entrada
     sequence_length = ventana_size

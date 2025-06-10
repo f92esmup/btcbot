@@ -62,11 +62,28 @@ class FuturesTradingEnv(gym.Env):
         self.price_scaler = price_scaler
         self.config_entorno = config_entorno or self._load_default_config()
         
+        # Convertir DataFrame a array de NumPy para acceso más rápido
+        self.data_array = self.data_df.to_numpy(dtype=np.float32)
+        
+        # Guardar nombres de columnas para compatibilidad
+        self.column_names = self.data_df.columns.tolist()
+        
+        # Pre-calcular precios originales (desnormalizados) para optimizar _get_current_price
+        if 'Close' not in self.column_names:
+            raise ValueError("Columna 'Close' no encontrada en los datos")
+        
+        close_index = self.column_names.index('Close')
+        close_data_normalized = self.data_array[:, close_index].reshape(-1, 1)
+        self.original_prices = self.price_scaler.inverse_transform(close_data_normalized).ravel()
+        
         # Validar datos mínimos
-        if len(self.data_df) < self.config_entorno['ventana_observacion_size']:
+        if len(self.data_array) < self.config_entorno['ventana_observacion_size']:
             raise ValueError(
                 f"Dataset debe tener al menos {self.config_entorno['ventana_observacion_size']} filas"
             )
+        
+        # Liberar memoria del DataFrame después de la conversión
+        del self.data_df
         
         # Configurar espacios de acción y observación
         self._setup_spaces()
@@ -74,7 +91,7 @@ class FuturesTradingEnv(gym.Env):
         # Inicializar estado interno
         self._initialize_state()
         
-        logger.info(f"Entorno inicializado con {len(self.data_df)} filas de datos")
+        logger.info(f"Entorno inicializado con {len(self.data_array)} filas de datos")
     
     def _load_default_config(self) -> Dict[str, Any]:
         """Carga configuración por defecto desde config.yaml."""
@@ -110,7 +127,7 @@ class FuturesTradingEnv(gym.Env):
         
         # Espacio de observación: ventana de mercado + características del portafolio
         ventana_size = self.config_entorno['ventana_observacion_size']
-        num_features_mercado = len(self.data_df.columns)
+        num_features_mercado = len(self.column_names)
         num_features_portfolio = 4  # tipo_posicion, pnl_roe, pasos_posicion, precio_entrada
         
         total_features = ventana_size * num_features_mercado + num_features_portfolio
@@ -202,7 +219,7 @@ class FuturesTradingEnv(gym.Env):
             options: Puede contener 'start_index' para especificar inicio
         """
         ventana_size = self.config_entorno['ventana_observacion_size']
-        max_start = len(self.data_df) - ventana_size - 1
+        max_start = len(self.data_array) - ventana_size - 1
         
         if options and 'start_index' in options:
             self.paso_actual = max(ventana_size, min(options['start_index'], max_start))
@@ -537,7 +554,7 @@ class FuturesTradingEnv(gym.Env):
             logger.info(f"Episodio terminado por drawdown: equity={self.equity_actual:.2f} <= threshold={drawdown_threshold:.2f}")
         
         # Truncated: fin de datos
-        if self.paso_actual >= len(self.data_df) - 1:
+        if self.paso_actual >= len(self.data_array) - 1:
             truncated = True
             logger.info("Episodio truncado: fin de datos alcanzado")
         
@@ -561,16 +578,16 @@ class FuturesTradingEnv(gym.Env):
         start_idx = max(0, self.paso_actual - ventana_size + 1)
         end_idx = self.paso_actual + 1
         
-        ventana_datos = self.data_df.iloc[start_idx:end_idx].values
+        market_data = self.data_array[start_idx:end_idx]
         
         # Si no hay suficientes datos históricos, rellenar con la primera fila disponible
-        if ventana_datos.shape[0] < ventana_size:
-            padding_needed = ventana_size - ventana_datos.shape[0]
-            primera_fila = self.data_df.iloc[0:1].values
+        if market_data.shape[0] < ventana_size:
+            padding_needed = ventana_size - market_data.shape[0]
+            primera_fila = self.data_array[0:1]
             padding = np.repeat(primera_fila, padding_needed, axis=0)
-            ventana_datos = np.vstack([padding, ventana_datos])
+            market_data = np.vstack([padding, market_data])
         
-        ventana_flat = ventana_datos.flatten()
+        ventana_flat = market_data.ravel()
         
         # 2. Características del portafolio normalizadas
         portfolio_features = self._get_normalized_portfolio_features()
@@ -631,23 +648,7 @@ class FuturesTradingEnv(gym.Env):
         Returns:
             Precio Close actual (desnormalizado)
         """
-        # Asumir que 'Close' está en las columnas y está normalizado
-        if 'Close' not in self.data_df.columns:
-            raise ValueError("Columna 'Close' no encontrada en los datos")
-        
-        # Obtener toda la fila actual normalizada
-        fila_actual = self.data_df.iloc[self.paso_actual].values.reshape(1, -1)
-        
-        # Desnormalizar toda la fila
-        fila_desnormalizada = self.price_scaler.inverse_transform(fila_actual)
-        
-        # Obtener el índice de la columna 'Close'
-        close_index = list(self.data_df.columns).index('Close')
-        
-        # Retornar solo el precio Close desnormalizado
-        precio_actual = fila_desnormalizada[0, close_index]
-        
-        return precio_actual
+        return self.original_prices[self.paso_actual]
     
     def _get_step_info(self, action_raw: float, intencion: str, trade_ejecutado: bool, pnl_realizado: float) -> Dict[str, Any]:
         """

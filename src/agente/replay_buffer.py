@@ -106,13 +106,16 @@ class ReplayBuffer:
         # Muestreo aleatorio
         indices = np.random.randint(0, self.size, size=batch_size)
         
-        # Convertir a tensors de PyTorch
-        observations = torch.FloatTensor(self.observations[indices]).to(device)
-        actions = torch.FloatTensor(self.actions[indices]).to(device)
-        rewards = torch.FloatTensor(self.rewards[indices]).to(device)
-        next_observations = torch.FloatTensor(self.next_observations[indices]).to(device)
-        terminated = torch.BoolTensor(self.terminated_flags[indices]).to(device)
-        truncated = torch.BoolTensor(self.truncated_flags[indices]).to(device)
+        # Verificar si se está usando CUDA para transferencias no bloqueantes
+        is_cuda = device.type == 'cuda'
+        
+        # Convertir a tensors de PyTorch con transferencias no bloqueantes
+        observations = torch.from_numpy(self.observations[indices]).to(device, non_blocking=is_cuda)
+        actions = torch.from_numpy(self.actions[indices]).to(device, non_blocking=is_cuda)
+        rewards = torch.from_numpy(self.rewards[indices]).to(device, non_blocking=is_cuda)
+        next_observations = torch.from_numpy(self.next_observations[indices]).to(device, non_blocking=is_cuda)
+        terminated = torch.from_numpy(self.terminated_flags[indices]).to(device, non_blocking=is_cuda)
+        truncated = torch.from_numpy(self.truncated_flags[indices]).to(device, non_blocking=is_cuda)
         
         return observations, actions, rewards, next_observations, terminated, truncated
     

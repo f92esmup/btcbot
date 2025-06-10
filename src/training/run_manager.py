@@ -17,12 +17,110 @@ import pickle
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Any, Optional, Tuple, Union
+from multiprocessing import Process
 import yaml
 import joblib
 import torch
 
 from src.configuration.config import config
 from src.agente.agent import TransformerSACAgent
+
+
+def _save_worker_local(agent_state_dicts: Dict[str, Any], path_prefix: str) -> None:
+    """
+    Worker function for saving agent state dictionaries to local storage.
+    
+    Args:
+        agent_state_dicts: Dictionary containing all agent state dictionaries
+        path_prefix: Path prefix for saving files
+    """
+    try:
+        # Save networks
+        torch.save(agent_state_dicts['actor'], f"{path_prefix}_actor.pth")
+        torch.save(agent_state_dicts['critic_1'], f"{path_prefix}_critic_1.pth")
+        torch.save(agent_state_dicts['critic_2'], f"{path_prefix}_critic_2.pth")
+        torch.save(agent_state_dicts['critic_target_1'], f"{path_prefix}_critic_target_1.pth")
+        torch.save(agent_state_dicts['critic_target_2'], f"{path_prefix}_critic_target_2.pth")
+        
+        # Save optimizers
+        torch.save(agent_state_dicts['actor_optimizer'], f"{path_prefix}_actor_optimizer.pth")
+        torch.save(agent_state_dicts['critic_1_optimizer'], f"{path_prefix}_critic_1_optimizer.pth")
+        torch.save(agent_state_dicts['critic_2_optimizer'], f"{path_prefix}_critic_2_optimizer.pth")
+        
+        # Save alpha and its optimizer if present
+        torch.save(agent_state_dicts['log_alpha'], f"{path_prefix}_log_alpha.pth")
+        if 'alpha_optimizer' in agent_state_dicts:
+            torch.save(agent_state_dicts['alpha_optimizer'], f"{path_prefix}_alpha_optimizer.pth")
+        
+        # Save metadata
+        torch.save(agent_state_dicts['metadata'], f"{path_prefix}_metadata.pth")
+        
+        print(f"✅ Guardado local completado: {path_prefix}")
+        
+    except Exception as e:
+        print(f"❌ Error en guardado local: {str(e)}")
+
+
+def _save_worker_gcs(agent_state_dicts: Dict[str, Any], gcs_prefix: str) -> None:
+    """
+    Worker function for saving agent state dictionaries to GCS.
+    
+    Args:
+        agent_state_dicts: Dictionary containing all agent state dictionaries
+        gcs_prefix: GCS prefix for saving files
+    """
+    try:
+        # Import GCS utils in the worker process
+        from src.configuration.gcs_utils import GCSUtils
+        
+        # Create GCS client in this process
+        gcs_utils = GCSUtils()
+        
+        with tempfile.TemporaryDirectory() as temp_dir:
+            # Save all state dictionaries to temporary directory
+            prefix = os.path.join(temp_dir, gcs_prefix.split('/')[-1])
+            
+            # Save networks
+            torch.save(agent_state_dicts['actor'], f"{prefix}_actor.pth")
+            torch.save(agent_state_dicts['critic_1'], f"{prefix}_critic_1.pth")
+            torch.save(agent_state_dicts['critic_2'], f"{prefix}_critic_2.pth")
+            torch.save(agent_state_dicts['critic_target_1'], f"{prefix}_critic_target_1.pth")
+            torch.save(agent_state_dicts['critic_target_2'], f"{prefix}_critic_target_2.pth")
+            
+            # Save optimizers
+            torch.save(agent_state_dicts['actor_optimizer'], f"{prefix}_actor_optimizer.pth")
+            torch.save(agent_state_dicts['critic_1_optimizer'], f"{prefix}_critic_1_optimizer.pth")
+            torch.save(agent_state_dicts['critic_2_optimizer'], f"{prefix}_critic_2_optimizer.pth")
+            
+            # Save alpha and its optimizer if present
+            torch.save(agent_state_dicts['log_alpha'], f"{prefix}_log_alpha.pth")
+            if 'alpha_optimizer' in agent_state_dicts:
+                torch.save(agent_state_dicts['alpha_optimizer'], f"{prefix}_alpha_optimizer.pth")
+            
+            # Save metadata
+            torch.save(agent_state_dicts['metadata'], f"{prefix}_metadata.pth")
+            
+            # Upload each file to GCS
+            success_count = 0
+            total_files = 0
+            
+            for local_file_path in Path(temp_dir).glob(f"{gcs_prefix.split('/')[-1]}_*"):
+                total_files += 1
+                local_file_name_only = local_file_path.name
+                gcs_blob_name = f"{gcs_prefix}/{local_file_name_only}"
+                
+                if gcs_utils.upload_file_to_gcs(str(local_file_path), gcs_blob_name):
+                    success_count += 1
+                else:
+                    print(f"❌ Error subiendo archivo {local_file_path} a GCS")
+            
+            if success_count == total_files and total_files > 0:
+                print(f"✅ Guardado GCS completado: {gcs_prefix}/")
+            else:
+                print(f"❌ Error en guardado GCS. Solo {success_count} de {total_files} archivos subidos.")
+                
+    except Exception as e:
+        print(f"❌ Error en guardado GCS: {str(e)}")
 
 
 class RunManager:
@@ -32,6 +130,19 @@ class RunManager:
     Handles persistence operations for models, configurations, and scalers
     across both local and GCS storage modes.
     """
+    
+    @staticmethod
+    def _to_cpu_state_dict(state_dict):
+        """
+        Move all tensors in a state_dict to CPU to avoid CUDA multiprocessing issues.
+        
+        Args:
+            state_dict: Dictionary containing tensors
+            
+        Returns:
+            Dictionary with all tensors moved to CPU
+        """
+        return {k: v.cpu() if hasattr(v, 'cpu') else v for k, v in state_dict.items()}
     
     def __init__(self, base_path: str = None, run_id: str = None, gcs_utils=None):
         """
@@ -315,96 +426,27 @@ class RunManager:
     
     def save_agent_checkpoint(self, agent: TransformerSACAgent, episode: int) -> str:
         """
-        Save agent checkpoint for a specific episode.
+        Save agent checkpoint for a specific episode asynchronously.
         
         Args:
             agent: The agent to save
             episode: Episode number for checkpoint naming
             
         Returns:
-            Path where checkpoint was saved
+            Path where checkpoint will be saved
         """
-        if self.storage_mode == "gcp":
-            # For GCS: use tempfile and upload each file individually
-            gcs_checkpoint_directory_prefix = f"{self.run_id}/checkpoints/checkpoint_episode_{episode + 1}"
-            
-            with tempfile.TemporaryDirectory() as temp_dir:
-                # Save all state dictionaries to temporary directory
-                prefix = os.path.join(temp_dir, f"checkpoint_episode_{episode + 1}")
-                
-                # Save networks
-                torch.save(agent.actor.state_dict(), f"{prefix}_actor.pth")
-                torch.save(agent.critic_1.state_dict(), f"{prefix}_critic_1.pth")
-                torch.save(agent.critic_2.state_dict(), f"{prefix}_critic_2.pth")
-                torch.save(agent.critic_target_1.state_dict(), f"{prefix}_critic_target_1.pth")
-                torch.save(agent.critic_target_2.state_dict(), f"{prefix}_critic_target_2.pth")
-                
-                # Save optimizers
-                torch.save(agent.actor_optimizer.state_dict(), f"{prefix}_actor_optimizer.pth")
-                torch.save(agent.critic_1_optimizer.state_dict(), f"{prefix}_critic_1_optimizer.pth")
-                torch.save(agent.critic_2_optimizer.state_dict(), f"{prefix}_critic_2_optimizer.pth")
-                
-                # Save alpha and its optimizer if learnable
-                torch.save(agent.log_alpha, f"{prefix}_log_alpha.pth")
-                if agent.learn_alpha:
-                    torch.save(agent.alpha_optimizer.state_dict(), f"{prefix}_alpha_optimizer.pth")
-                
-                # Save metadata
-                metadata = {
-                    'episode': episode + 1,
-                    'total_steps': agent.total_steps,
-                    'learning_steps': agent.learning_steps,
-                    'learn_alpha': agent.learn_alpha,
-                    'target_entropy': agent.target_entropy,
-                    'device': str(agent.device)
-                }
-                torch.save(metadata, f"{prefix}_metadata.pth")
-                
-                # Upload each file to GCS
-                success_count = 0
-                total_files = 0
-                
-                for local_file_path in Path(temp_dir).glob(f"checkpoint_episode_{episode + 1}_*"):
-                    total_files += 1
-                    local_file_name_only = local_file_path.name
-                    gcs_blob_name = f"{gcs_checkpoint_directory_prefix}/{local_file_name_only}"
-                    
-                    if self.gcs_utils.upload_file_to_gcs(str(local_file_path), gcs_blob_name):
-                        success_count += 1
-                    else:
-                        self.logger.error(f"Error uploading checkpoint {local_file_path} to GCS")
-                
-                if success_count == total_files and total_files > 0:
-                    self.logger.info(f"Checkpoint saved successfully to GCS: {gcs_checkpoint_directory_prefix}/")
-                else:
-                    self.logger.error(f"Error saving checkpoint to GCS. Only {success_count} of {total_files} files uploaded.")
-                    
-            checkpoint_path = gcs_checkpoint_directory_prefix
-        else:
-            # Local mode
-            checkpoint_dir = Path(self.base_path) / "checkpoints"
-            checkpoint_dir.mkdir(parents=True, exist_ok=True)
-            prefix = checkpoint_dir / f"checkpoint_episode_{episode + 1}"
-            
-            # Save networks
-            torch.save(agent.actor.state_dict(), f"{prefix}_actor.pth")
-            torch.save(agent.critic_1.state_dict(), f"{prefix}_critic_1.pth")
-            torch.save(agent.critic_2.state_dict(), f"{prefix}_critic_2.pth")
-            torch.save(agent.critic_target_1.state_dict(), f"{prefix}_critic_target_1.pth")
-            torch.save(agent.critic_target_2.state_dict(), f"{prefix}_critic_target_2.pth")
-            
-            # Save optimizers
-            torch.save(agent.actor_optimizer.state_dict(), f"{prefix}_actor_optimizer.pth")
-            torch.save(agent.critic_1_optimizer.state_dict(), f"{prefix}_critic_1_optimizer.pth")
-            torch.save(agent.critic_2_optimizer.state_dict(), f"{prefix}_critic_2_optimizer.pth")
-            
-            # Save alpha and its optimizer if learnable
-            torch.save(agent.log_alpha, f"{prefix}_log_alpha.pth")
-            if agent.learn_alpha:
-                torch.save(agent.alpha_optimizer.state_dict(), f"{prefix}_alpha_optimizer.pth")
-            
-            # Save metadata
-            metadata = {
+        # Extract state dictionaries and move to CPU for multiprocessing safety
+        agent_state = {
+            'actor': self._to_cpu_state_dict(agent.actor.state_dict()),
+            'critic_1': self._to_cpu_state_dict(agent.critic_1.state_dict()),
+            'critic_2': self._to_cpu_state_dict(agent.critic_2.state_dict()),
+            'critic_target_1': self._to_cpu_state_dict(agent.critic_target_1.state_dict()),
+            'critic_target_2': self._to_cpu_state_dict(agent.critic_target_2.state_dict()),
+            'actor_optimizer': self._to_cpu_state_dict(agent.actor_optimizer.state_dict()),
+            'critic_1_optimizer': self._to_cpu_state_dict(agent.critic_1_optimizer.state_dict()),
+            'critic_2_optimizer': self._to_cpu_state_dict(agent.critic_2_optimizer.state_dict()),
+            'log_alpha': agent.log_alpha.cpu(),
+            'metadata': {
                 'episode': episode + 1,
                 'total_steps': agent.total_steps,
                 'learning_steps': agent.learning_steps,
@@ -412,10 +454,32 @@ class RunManager:
                 'target_entropy': agent.target_entropy,
                 'device': str(agent.device)
             }
-            torch.save(metadata, f"{prefix}_metadata.pth")
-            
-            checkpoint_path = str(prefix)
-            self.logger.info(f"Checkpoint saved: {checkpoint_path}")
+        }
+        
+        # Add alpha optimizer if learnable
+        if agent.learn_alpha:
+            agent_state['alpha_optimizer'] = self._to_cpu_state_dict(agent.alpha_optimizer.state_dict())
+        
+        # Determine path and worker function based on storage mode
+        if self.storage_mode == "gcp":
+            path_prefix = f"{self.run_id}/checkpoints/checkpoint_episode_{episode + 1}"
+            args = (agent_state, path_prefix)
+            target_worker = _save_worker_gcs
+            checkpoint_path = f"gs://{self.gcs_utils.bucket_name}/{path_prefix}"
+        else:
+            # Ensure checkpoint directory exists
+            checkpoint_dir = Path(self.base_path) / "checkpoints"
+            checkpoint_dir.mkdir(parents=True, exist_ok=True)
+            path_prefix = str(checkpoint_dir / f"checkpoint_episode_{episode + 1}")
+            args = (agent_state, path_prefix)
+            target_worker = _save_worker_local
+            checkpoint_path = path_prefix
+        
+        # Launch asynchronous save process
+        save_process = Process(target=target_worker, args=args)
+        save_process.start()
+        
+        self.logger.info(f"🚀 Guardado asíncrono del checkpoint del episodio {episode + 1} iniciado en segundo plano.")
         
         return checkpoint_path
     
@@ -519,207 +583,115 @@ class RunManager:
     
     def save_best_model(self, agent: TransformerSACAgent) -> str:
         """
-        Save the best performing model.
+        Save the best performing model asynchronously.
         
         Args:
             agent: The agent to save
             
         Returns:
-            Path where model was saved
+            Path where model will be saved
         """
-        if self.storage_mode == "gcp":
-            # For GCS: use tempfile and upload each file individually
-            gcs_model_directory_prefix = f"{self.run_id}/best_model"
-            
-            with tempfile.TemporaryDirectory() as temp_dir:
-                # Save all state dictionaries to temporary directory
-                prefix = os.path.join(temp_dir, "best_model")
-                
-                # Save networks
-                torch.save(agent.actor.state_dict(), f"{prefix}_actor.pth")
-                torch.save(agent.critic_1.state_dict(), f"{prefix}_critic_1.pth")
-                torch.save(agent.critic_2.state_dict(), f"{prefix}_critic_2.pth")
-                torch.save(agent.critic_target_1.state_dict(), f"{prefix}_critic_target_1.pth")
-                torch.save(agent.critic_target_2.state_dict(), f"{prefix}_critic_target_2.pth")
-                
-                # Save optimizers
-                torch.save(agent.actor_optimizer.state_dict(), f"{prefix}_actor_optimizer.pth")
-                torch.save(agent.critic_1_optimizer.state_dict(), f"{prefix}_critic_1_optimizer.pth")
-                torch.save(agent.critic_2_optimizer.state_dict(), f"{prefix}_critic_2_optimizer.pth")
-                
-                # Save alpha and its optimizer if learnable
-                torch.save(agent.log_alpha, f"{prefix}_log_alpha.pth")
-                if agent.learn_alpha:
-                    torch.save(agent.alpha_optimizer.state_dict(), f"{prefix}_alpha_optimizer.pth")
-                
-                # Save metadata
-                metadata = {
-                    'total_steps': agent.total_steps,
-                    'learning_steps': agent.learning_steps,
-                    'learn_alpha': agent.learn_alpha,
-                    'target_entropy': agent.target_entropy,
-                    'device': str(agent.device)
-                }
-                torch.save(metadata, f"{prefix}_metadata.pth")
-                
-                # Upload each file to GCS
-                success_count = 0
-                total_files = 0
-                
-                for local_file_path in Path(temp_dir).glob("best_model_*"):
-                    total_files += 1
-                    local_file_name_only = local_file_path.name
-                    gcs_blob_name = f"{gcs_model_directory_prefix}/{local_file_name_only}"
-                    
-                    if self.gcs_utils.upload_file_to_gcs(str(local_file_path), gcs_blob_name):
-                        success_count += 1
-                    else:
-                        self.logger.error(f"Error uploading best model {local_file_path} to GCS")
-                
-                if success_count == total_files and total_files > 0:
-                    self.logger.info(f"Best model saved successfully to GCS: {gcs_model_directory_prefix}/")
-                else:
-                    self.logger.error(f"Error saving best model to GCS. Only {success_count} of {total_files} files uploaded.")
-                    
-            best_model_path = gcs_model_directory_prefix
-        else:
-            # Local mode
-            best_model_dir = Path(self.base_path) / "best_model"
-            best_model_dir.mkdir(parents=True, exist_ok=True)
-            prefix = best_model_dir / "best_model"
-            
-            # Save networks
-            torch.save(agent.actor.state_dict(), f"{prefix}_actor.pth")
-            torch.save(agent.critic_1.state_dict(), f"{prefix}_critic_1.pth")
-            torch.save(agent.critic_2.state_dict(), f"{prefix}_critic_2.pth")
-            torch.save(agent.critic_target_1.state_dict(), f"{prefix}_critic_target_1.pth")
-            torch.save(agent.critic_target_2.state_dict(), f"{prefix}_critic_target_2.pth")
-            
-            # Save optimizers
-            torch.save(agent.actor_optimizer.state_dict(), f"{prefix}_actor_optimizer.pth")
-            torch.save(agent.critic_1_optimizer.state_dict(), f"{prefix}_critic_1_optimizer.pth")
-            torch.save(agent.critic_2_optimizer.state_dict(), f"{prefix}_critic_2_optimizer.pth")
-            
-            # Save alpha and its optimizer if learnable
-            torch.save(agent.log_alpha, f"{prefix}_log_alpha.pth")
-            if agent.learn_alpha:
-                torch.save(agent.alpha_optimizer.state_dict(), f"{prefix}_alpha_optimizer.pth")
-            
-            # Save metadata
-            metadata = {
+        # Extract state dictionaries and move to CPU for multiprocessing safety
+        agent_state = {
+            'actor': self._to_cpu_state_dict(agent.actor.state_dict()),
+            'critic_1': self._to_cpu_state_dict(agent.critic_1.state_dict()),
+            'critic_2': self._to_cpu_state_dict(agent.critic_2.state_dict()),
+            'critic_target_1': self._to_cpu_state_dict(agent.critic_target_1.state_dict()),
+            'critic_target_2': self._to_cpu_state_dict(agent.critic_target_2.state_dict()),
+            'actor_optimizer': self._to_cpu_state_dict(agent.actor_optimizer.state_dict()),
+            'critic_1_optimizer': self._to_cpu_state_dict(agent.critic_1_optimizer.state_dict()),
+            'critic_2_optimizer': self._to_cpu_state_dict(agent.critic_2_optimizer.state_dict()),
+            'log_alpha': agent.log_alpha.cpu(),
+            'metadata': {
                 'total_steps': agent.total_steps,
                 'learning_steps': agent.learning_steps,
                 'learn_alpha': agent.learn_alpha,
                 'target_entropy': agent.target_entropy,
                 'device': str(agent.device)
             }
-            torch.save(metadata, f"{prefix}_metadata.pth")
-            
-            best_model_path = str(prefix)
-            self.logger.info(f"Best model saved: {best_model_path}")
+        }
+        
+        # Add alpha optimizer if learnable
+        if agent.learn_alpha:
+            agent_state['alpha_optimizer'] = self._to_cpu_state_dict(agent.alpha_optimizer.state_dict())
+        
+        # Determine path and worker function based on storage mode
+        if self.storage_mode == "gcp":
+            path_prefix = f"{self.run_id}/best_model"
+            args = (agent_state, path_prefix)
+            target_worker = _save_worker_gcs
+            best_model_path = f"gs://{self.gcs_utils.bucket_name}/{self.run_id}/best_model"
+        else:
+            # Ensure best model directory exists
+            best_model_dir = Path(self.base_path) / "best_model"
+            best_model_dir.mkdir(parents=True, exist_ok=True)
+            path_prefix = str(best_model_dir / "best_model")
+            args = (agent_state, path_prefix)
+            target_worker = _save_worker_local
+            best_model_path = path_prefix
+        
+        # Launch asynchronous save process
+        save_process = Process(target=target_worker, args=args)
+        save_process.start()
+        
+        self.logger.info(f"🚀 Guardado asíncrono del mejor modelo iniciado en segundo plano.")
         
         return str(best_model_path)
     
     def save_final_model(self, agent: TransformerSACAgent) -> str:
         """
-        Save the final model at the end of training.
+        Save the final model at the end of training asynchronously.
         
         Args:
             agent: The agent to save
             
         Returns:
-            Path where model was saved
+            Path where model will be saved
         """
-        if self.storage_mode == "gcp":
-            # For GCS: use tempfile and upload each file individually
-            gcs_model_directory_prefix = f"{self.run_id}/final_model"
-            
-            with tempfile.TemporaryDirectory() as temp_dir:
-                # Save all state dictionaries to temporary directory
-                prefix = os.path.join(temp_dir, "final_model")
-                
-                # Save networks
-                torch.save(agent.actor.state_dict(), f"{prefix}_actor.pth")
-                torch.save(agent.critic_1.state_dict(), f"{prefix}_critic_1.pth")
-                torch.save(agent.critic_2.state_dict(), f"{prefix}_critic_2.pth")
-                torch.save(agent.critic_target_1.state_dict(), f"{prefix}_critic_target_1.pth")
-                torch.save(agent.critic_target_2.state_dict(), f"{prefix}_critic_target_2.pth")
-                
-                # Save optimizers
-                torch.save(agent.actor_optimizer.state_dict(), f"{prefix}_actor_optimizer.pth")
-                torch.save(agent.critic_1_optimizer.state_dict(), f"{prefix}_critic_1_optimizer.pth")
-                torch.save(agent.critic_2_optimizer.state_dict(), f"{prefix}_critic_2_optimizer.pth")
-                
-                # Save alpha and its optimizer if learnable
-                torch.save(agent.log_alpha, f"{prefix}_log_alpha.pth")
-                if agent.learn_alpha:
-                    torch.save(agent.alpha_optimizer.state_dict(), f"{prefix}_alpha_optimizer.pth")
-                
-                # Save metadata
-                metadata = {
-                    'total_steps': agent.total_steps,
-                    'learning_steps': agent.learning_steps,
-                    'learn_alpha': agent.learn_alpha,
-                    'target_entropy': agent.target_entropy,
-                    'device': str(agent.device)
-                }
-                torch.save(metadata, f"{prefix}_metadata.pth")
-                
-                # Upload each file to GCS
-                success_count = 0
-                total_files = 0
-                
-                for local_file_path in Path(temp_dir).glob("final_model_*"):
-                    total_files += 1
-                    local_file_name_only = local_file_path.name
-                    gcs_blob_name = f"{gcs_model_directory_prefix}/{local_file_name_only}"
-                    
-                    if self.gcs_utils.upload_file_to_gcs(str(local_file_path), gcs_blob_name):
-                        success_count += 1
-                    else:
-                        self.logger.error(f"Error uploading final model {local_file_path} to GCS")
-                
-                if success_count == total_files and total_files > 0:
-                    self.logger.info(f"Final model saved successfully to GCS: {gcs_model_directory_prefix}/")
-                else:
-                    self.logger.error(f"Error saving final model to GCS. Only {success_count} of {total_files} files uploaded.")
-                    
-            final_model_path = gcs_model_directory_prefix
-        else:
-            # Local mode
-            final_model_dir = Path(self.base_path) / "final_model"
-            final_model_dir.mkdir(parents=True, exist_ok=True)
-            prefix = final_model_dir / "final_model"
-            
-            # Save networks
-            torch.save(agent.actor.state_dict(), f"{prefix}_actor.pth")
-            torch.save(agent.critic_1.state_dict(), f"{prefix}_critic_1.pth")
-            torch.save(agent.critic_2.state_dict(), f"{prefix}_critic_2.pth")
-            torch.save(agent.critic_target_1.state_dict(), f"{prefix}_critic_target_1.pth")
-            torch.save(agent.critic_target_2.state_dict(), f"{prefix}_critic_target_2.pth")
-            
-            # Save optimizers
-            torch.save(agent.actor_optimizer.state_dict(), f"{prefix}_actor_optimizer.pth")
-            torch.save(agent.critic_1_optimizer.state_dict(), f"{prefix}_critic_1_optimizer.pth")
-            torch.save(agent.critic_2_optimizer.state_dict(), f"{prefix}_critic_2_optimizer.pth")
-            
-            # Save alpha and its optimizer if learnable
-            torch.save(agent.log_alpha, f"{prefix}_log_alpha.pth")
-            if agent.learn_alpha:
-                torch.save(agent.alpha_optimizer.state_dict(), f"{prefix}_alpha_optimizer.pth")
-            
-            # Save metadata
-            metadata = {
+        # Extract state dictionaries and move to CPU for multiprocessing safety
+        agent_state = {
+            'actor': self._to_cpu_state_dict(agent.actor.state_dict()),
+            'critic_1': self._to_cpu_state_dict(agent.critic_1.state_dict()),
+            'critic_2': self._to_cpu_state_dict(agent.critic_2.state_dict()),
+            'critic_target_1': self._to_cpu_state_dict(agent.critic_target_1.state_dict()),
+            'critic_target_2': self._to_cpu_state_dict(agent.critic_target_2.state_dict()),
+            'actor_optimizer': self._to_cpu_state_dict(agent.actor_optimizer.state_dict()),
+            'critic_1_optimizer': self._to_cpu_state_dict(agent.critic_1_optimizer.state_dict()),
+            'critic_2_optimizer': self._to_cpu_state_dict(agent.critic_2_optimizer.state_dict()),
+            'log_alpha': agent.log_alpha.cpu(),
+            'metadata': {
                 'total_steps': agent.total_steps,
                 'learning_steps': agent.learning_steps,
                 'learn_alpha': agent.learn_alpha,
                 'target_entropy': agent.target_entropy,
                 'device': str(agent.device)
             }
-            torch.save(metadata, f"{prefix}_metadata.pth")
-            
-            final_model_path = str(prefix)
-            self.logger.info(f"Final model saved: {final_model_path}")
+        }
+        
+        # Add alpha optimizer if learnable
+        if agent.learn_alpha:
+            agent_state['alpha_optimizer'] = self._to_cpu_state_dict(agent.alpha_optimizer.state_dict())
+        
+        # Determine path and worker function based on storage mode
+        if self.storage_mode == "gcp":
+            path_prefix = f"{self.run_id}/final_model"
+            args = (agent_state, path_prefix)
+            target_worker = _save_worker_gcs
+            final_model_path = f"gs://{self.gcs_utils.bucket_name}/{self.run_id}/final_model"
+        else:
+            # Ensure final model directory exists
+            final_model_dir = Path(self.base_path) / "final_model"
+            final_model_dir.mkdir(parents=True, exist_ok=True)
+            path_prefix = str(final_model_dir / "final_model")
+            args = (agent_state, path_prefix)
+            target_worker = _save_worker_local
+            final_model_path = path_prefix
+        
+        # Launch asynchronous save process
+        save_process = Process(target=target_worker, args=args)
+        save_process.start()
+        
+        self.logger.info(f"🚀 Guardado asíncrono del modelo final iniciado en segundo plano.")
         
         return str(final_model_path)
     

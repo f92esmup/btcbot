@@ -58,8 +58,9 @@ class DataPipeline:
             interval=self.interval,
             start_date=self.start_date
         )
-        dataframe = adquisicion.main()
-        
+        #dataframe = adquisicion.main()
+        dataframe = adquisicion.main_parallel()
+
         self.logger.info(f"Datos adquiridos exitosamente:")
         self.logger.info(f"  - Forma del DataFrame: {dataframe.shape}")
         self.logger.info(f"  - Rango temporal: {dataframe.index.min()} a {dataframe.index.max()}")
