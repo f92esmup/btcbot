@@ -71,7 +71,10 @@ class TensorboardLogger:
 
             # Crear el writer para el experimento y el run específicos
             # Usamos una estructura de directorio que Vertex AI puede interpretar correctamente
-            log_dir_vertex = f"gs://{project}-aiplatform-tensorboard/{instance_name}/experiments/{experiment_name}/runs/{run_id}"
+            log_dir_vertex = (
+                f"projects/{project}/locations/{location}/tensorboards/{instance_name}"
+                f"/experiments/{experiment_name}/runs/{run_id}"
+            )
             self.writer = SummaryWriter(log_dir=log_dir_vertex)
             self.logger.info("✅ Conexión con Vertex AI TensorBoard establecida.")
 
