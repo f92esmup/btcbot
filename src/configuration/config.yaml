@@ -53,6 +53,12 @@ normalization:
   scaler_path: "models/scaler.pkl"  # Ruta donde guardar el scaler (modo local)
   storage_mode: "gcp"        # Modo de almacenamiento: "local" o "gcp"
 
+# Configuración para Vertex AI TensorBoard
+tensorboard_vertex_ai:
+  instance_name: "2382342630227836928" # ¡IMPORTANTE: Reemplaza con el nombre de tu instancia!
+  experiment_name: "7916559723728470016"
+  location: "europe-west4" # La región de tu instancia de TensorBoard
+
 # Configuración de indicadores técnicos
 indicators:
   # Indicadores de tendencia

@@ -6,25 +6,78 @@ This module provides the TensorboardLogger class for centralized TensorBoard log
 
 from typing import Dict, Any, Optional
 from torch.utils.tensorboard import SummaryWriter
+import logging
+from ..configuration.config import config
+
+# Importar aiplatform para la integración con Vertex AI
+try:
+    from google.cloud import aiplatform
+except ImportError:
+    aiplatform = None
 
 
 class TensorboardLogger:
     """
-    A class for handling all TensorBoard logging operations.
-    
-    This class centralizes all TensorBoard logging functionality to keep logging
-    logic organized and reusable across different parts of the application.
+    Clase para manejar todas las operaciones de logging de TensorBoard.
+    Soporta logging local y en Vertex AI TensorBoard.
     """
     
-    def __init__(self, log_dir: str) -> None:
+    def __init__(self, log_dir: str, run_id: str) -> None:
         """
-        Initialize the TensorBoard logger.
+        Inicializa el logger de TensorBoard.
         
         Args:
-            log_dir: Directory path where TensorBoard logs will be stored
+            log_dir: Directorio para logs locales o None si es modo GCP.
+            run_id: ID único del entrenamiento, usado como nombre del run en TensorBoard.
         """
+        self.writer = None
+        self.storage_mode = config.storage_mode
+        self.logger = logging.getLogger(__name__)
+
+        if self.storage_mode == "gcp":
+            self._init_vertex_ai_writer(run_id)
+        else:
+            self._init_local_writer(log_dir)
+
+    def _init_local_writer(self, log_dir: str):
+        """Inicializa el writer para logging local."""
+        self.logger.info(f"Configurando TensorBoard para logging local en: {log_dir}")
         self.writer = SummaryWriter(log_dir=log_dir)
-        self.log_dir = log_dir
+
+    def _init_vertex_ai_writer(self, run_id: str):
+        """Inicializa el writer para logging en Vertex AI TensorBoard."""
+        if aiplatform is None:
+            self.logger.error("Librería 'google-cloud-aiplatform' no encontrada. No se puede loggear en Vertex AI.")
+            return
+
+        project = config.project_id
+        location = config.tensorboard_location
+        instance_name = config.tensorboard_instance_name
+        experiment_name = config.tensorboard_experiment_name
+
+        if not all([project, location, instance_name]):
+            self.logger.error("Configuración incompleta para Vertex AI TensorBoard en config.yaml.")
+            return
+
+        try:
+            # Inicializar cliente de AI Platform
+            aiplatform.init(project=project, location=location)
+            
+            self.logger.info("Configurando TensorBoard para logging en Vertex AI...")
+            self.logger.info(f"  - Proyecto: {project}")
+            self.logger.info(f"  - Instancia: {instance_name}")
+            self.logger.info(f"  - Experimento: {experiment_name}")
+            self.logger.info(f"  - Run: {run_id}")
+
+            # Crear el writer para el experimento y el run específicos
+            # Usamos una estructura de directorio que Vertex AI puede interpretar correctamente
+            log_dir_vertex = f"gs://{project}-aiplatform-tensorboard/{instance_name}/experiments/{experiment_name}/runs/{run_id}"
+            self.writer = SummaryWriter(log_dir=log_dir_vertex)
+            self.logger.info("✅ Conexión con Vertex AI TensorBoard establecida.")
+
+        except Exception as e:
+            self.logger.error(f"Error al inicializar Vertex AI TensorBoard Writer: {e}")
+            self.writer = None  # Asegurar que no se intente usar un writer fallido
     
     def log_hyperparameters(self, hparams: Dict[str, Any]) -> None:
         """
@@ -147,9 +200,8 @@ class TensorboardLogger:
             self.writer.add_scalar('Evaluation/Sortino_Ratio', eval_metrics['sortino_ratio'], episode)
     
     def close(self) -> None:
-        """
-        Close the TensorBoard writer and clean up resources.
-        """
-        if hasattr(self, 'writer') and self.writer is not None:
+        """Cierra el writer de TensorBoard y limpia los recursos."""
+        if self.writer is not None:
             self.writer.close()
             self.writer = None
+            self.logger.info("TensorBoard writer cerrado.")

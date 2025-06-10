@@ -372,19 +372,3 @@ class Trainer:
         
         # Close TensorBoard writer
         self.logger.close()
-        
-        # Sync TensorBoard logs to GCS if configured
-        if self.config.get('storage_mode') == "gcp" and self.config.get('tensorboard_dir'):
-            try:
-                self.logger_console.info(f"Sincronizando logs de TensorBoard a GCS...")
-                gcs_utils = self.config.get('gcs_utils')
-                if gcs_utils:
-                    tensorboard_prefix = f"{self.config['run_id']}/tensorboard"
-                    gcs_utils.upload_directory_to_gcs(
-                        local_directory_path=str(self.config['tensorboard_dir']),
-                        gcs_prefix=tensorboard_prefix
-                    )
-                    self.logger_console.info(f"Logs de TensorBoard sincronizados exitosamente a gs://{self.config['gcs_bucket_name']}/{tensorboard_prefix}")
-            except Exception as e:
-                self.logger_console.error(f"Error al sincronizar logs de TensorBoard a GCS: {e}")
-                self.logger_console.warning("El entrenamiento se completó correctamente, pero los logs no se pudieron sincronizar")

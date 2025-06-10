@@ -173,15 +173,26 @@ def main():
         base_path.mkdir(parents=True, exist_ok=True)
         logger.info(f"Modo Local: Los artefactos se guardarán en {base_path}")
 
-    # Inicializar TensorBoard Logger
-    tensorboard_dir = base_path / "tensorboard" if config.storage_mode == "local" else Path("runs") / f"btcbot_{current_time}"
+    # Lógica de TensorBoard modificada
+    # Para el modo local, seguimos creando un directorio.
+    # Para el modo GCP, log_dir no es estrictamente necesario, pero lo mantenemos por consistencia.
+    # El logger interno decidirá qué hacer.
     if config.storage_mode == "local":
+        tensorboard_dir = Path(base_path) / "tensorboard"
         tensorboard_dir.mkdir(parents=True, exist_ok=True)
     else:
-        tensorboard_dir.mkdir(parents=True, exist_ok=True)
+        # En modo GCP, los logs se envían directamente a la API de Vertex,
+        # no se necesita un directorio local persistente.
+        tensorboard_dir = None
+
+    # Inicializar TensorBoard Logger
+    # Pasamos el run_id para que lo use como nombre del "run" en el experimento
+    tb_logger = TensorboardLogger(log_dir=str(tensorboard_dir) if tensorboard_dir else None, run_id=run_id)
     
-    tb_logger = TensorboardLogger(log_dir=str(tensorboard_dir))
-    logger.info(f"TensorBoard logs se guardarán en: {tensorboard_dir}")
+    if config.storage_mode == "local":
+        logger.info(f"TensorBoard logs se guardarán localmente en: {tensorboard_dir}")
+    else:
+        logger.info(f"TensorBoard logs se enviarán directamente a Vertex AI TensorBoard")
 
     # Registrar Hiperparámetros
     hparams = {
