@@ -61,22 +61,20 @@ def _save_worker_local(agent_state_dicts: Dict[str, Any], path_prefix: str) -> N
         print(f"❌ Error en guardado local: {str(e)}")
 
 
-def _save_worker_gcs(agent_state_dicts: Dict[str, Any], gcs_prefix: str, bucket_name: str, project_id: str) -> None:
+def _save_worker_gcs(agent_state_dicts: Dict[str, Any], gcs_prefix: str) -> None:
     """
     Worker function for saving agent state dictionaries to GCS.
     
     Args:
         agent_state_dicts: Dictionary containing all agent state dictionaries
         gcs_prefix: GCS prefix for saving files
-        bucket_name: GCS bucket name
-        project_id: GCS project ID
     """
     try:
         # Import GCS utils in the worker process
         from src.configuration.gcs_utils import GCSUtils
         
         # Create GCS client in this process
-        gcs_utils = GCSUtils(bucket_name, project_id)
+        gcs_utils = GCSUtils()
         
         with tempfile.TemporaryDirectory() as temp_dir:
             # Save all state dictionaries to temporary directory
@@ -132,6 +130,19 @@ class RunManager:
     Handles persistence operations for models, configurations, and scalers
     across both local and GCS storage modes.
     """
+    
+    @staticmethod
+    def _to_cpu_state_dict(state_dict):
+        """
+        Move all tensors in a state_dict to CPU to avoid CUDA multiprocessing issues.
+        
+        Args:
+            state_dict: Dictionary containing tensors
+            
+        Returns:
+            Dictionary with all tensors moved to CPU
+        """
+        return {k: v.cpu() if hasattr(v, 'cpu') else v for k, v in state_dict.items()}
     
     def __init__(self, base_path: str = None, run_id: str = None, gcs_utils=None):
         """
@@ -424,17 +435,17 @@ class RunManager:
         Returns:
             Path where checkpoint will be saved
         """
-        # Extract state dictionaries (serializable for multiprocessing)
+        # Extract state dictionaries and move to CPU for multiprocessing safety
         agent_state = {
-            'actor': agent.actor.state_dict(),
-            'critic_1': agent.critic_1.state_dict(),
-            'critic_2': agent.critic_2.state_dict(),
-            'critic_target_1': agent.critic_target_1.state_dict(),
-            'critic_target_2': agent.critic_target_2.state_dict(),
-            'actor_optimizer': agent.actor_optimizer.state_dict(),
-            'critic_1_optimizer': agent.critic_1_optimizer.state_dict(),
-            'critic_2_optimizer': agent.critic_2_optimizer.state_dict(),
-            'log_alpha': agent.log_alpha,
+            'actor': self._to_cpu_state_dict(agent.actor.state_dict()),
+            'critic_1': self._to_cpu_state_dict(agent.critic_1.state_dict()),
+            'critic_2': self._to_cpu_state_dict(agent.critic_2.state_dict()),
+            'critic_target_1': self._to_cpu_state_dict(agent.critic_target_1.state_dict()),
+            'critic_target_2': self._to_cpu_state_dict(agent.critic_target_2.state_dict()),
+            'actor_optimizer': self._to_cpu_state_dict(agent.actor_optimizer.state_dict()),
+            'critic_1_optimizer': self._to_cpu_state_dict(agent.critic_1_optimizer.state_dict()),
+            'critic_2_optimizer': self._to_cpu_state_dict(agent.critic_2_optimizer.state_dict()),
+            'log_alpha': agent.log_alpha.cpu(),
             'metadata': {
                 'episode': episode + 1,
                 'total_steps': agent.total_steps,
@@ -447,12 +458,12 @@ class RunManager:
         
         # Add alpha optimizer if learnable
         if agent.learn_alpha:
-            agent_state['alpha_optimizer'] = agent.alpha_optimizer.state_dict()
+            agent_state['alpha_optimizer'] = self._to_cpu_state_dict(agent.alpha_optimizer.state_dict())
         
         # Determine path and worker function based on storage mode
         if self.storage_mode == "gcp":
             path_prefix = f"{self.run_id}/checkpoints/checkpoint_episode_{episode + 1}"
-            args = (agent_state, path_prefix, self.gcs_utils.bucket_name, self.gcs_utils.project_id)
+            args = (agent_state, path_prefix)
             target_worker = _save_worker_gcs
             checkpoint_path = f"gs://{self.gcs_utils.bucket_name}/{path_prefix}"
         else:
@@ -580,17 +591,17 @@ class RunManager:
         Returns:
             Path where model will be saved
         """
-        # Extract state dictionaries (serializable for multiprocessing)
+        # Extract state dictionaries and move to CPU for multiprocessing safety
         agent_state = {
-            'actor': agent.actor.state_dict(),
-            'critic_1': agent.critic_1.state_dict(),
-            'critic_2': agent.critic_2.state_dict(),
-            'critic_target_1': agent.critic_target_1.state_dict(),
-            'critic_target_2': agent.critic_target_2.state_dict(),
-            'actor_optimizer': agent.actor_optimizer.state_dict(),
-            'critic_1_optimizer': agent.critic_1_optimizer.state_dict(),
-            'critic_2_optimizer': agent.critic_2_optimizer.state_dict(),
-            'log_alpha': agent.log_alpha,
+            'actor': self._to_cpu_state_dict(agent.actor.state_dict()),
+            'critic_1': self._to_cpu_state_dict(agent.critic_1.state_dict()),
+            'critic_2': self._to_cpu_state_dict(agent.critic_2.state_dict()),
+            'critic_target_1': self._to_cpu_state_dict(agent.critic_target_1.state_dict()),
+            'critic_target_2': self._to_cpu_state_dict(agent.critic_target_2.state_dict()),
+            'actor_optimizer': self._to_cpu_state_dict(agent.actor_optimizer.state_dict()),
+            'critic_1_optimizer': self._to_cpu_state_dict(agent.critic_1_optimizer.state_dict()),
+            'critic_2_optimizer': self._to_cpu_state_dict(agent.critic_2_optimizer.state_dict()),
+            'log_alpha': agent.log_alpha.cpu(),
             'metadata': {
                 'total_steps': agent.total_steps,
                 'learning_steps': agent.learning_steps,
@@ -602,12 +613,12 @@ class RunManager:
         
         # Add alpha optimizer if learnable
         if agent.learn_alpha:
-            agent_state['alpha_optimizer'] = agent.alpha_optimizer.state_dict()
+            agent_state['alpha_optimizer'] = self._to_cpu_state_dict(agent.alpha_optimizer.state_dict())
         
         # Determine path and worker function based on storage mode
         if self.storage_mode == "gcp":
             path_prefix = f"{self.run_id}/best_model/best_model"
-            args = (agent_state, path_prefix, self.gcs_utils.bucket_name, self.gcs_utils.project_id)
+            args = (agent_state, path_prefix)
             target_worker = _save_worker_gcs
             best_model_path = f"gs://{self.gcs_utils.bucket_name}/{self.run_id}/best_model"
         else:
@@ -637,17 +648,17 @@ class RunManager:
         Returns:
             Path where model will be saved
         """
-        # Extract state dictionaries (serializable for multiprocessing)
+        # Extract state dictionaries and move to CPU for multiprocessing safety
         agent_state = {
-            'actor': agent.actor.state_dict(),
-            'critic_1': agent.critic_1.state_dict(),
-            'critic_2': agent.critic_2.state_dict(),
-            'critic_target_1': agent.critic_target_1.state_dict(),
-            'critic_target_2': agent.critic_target_2.state_dict(),
-            'actor_optimizer': agent.actor_optimizer.state_dict(),
-            'critic_1_optimizer': agent.critic_1_optimizer.state_dict(),
-            'critic_2_optimizer': agent.critic_2_optimizer.state_dict(),
-            'log_alpha': agent.log_alpha,
+            'actor': self._to_cpu_state_dict(agent.actor.state_dict()),
+            'critic_1': self._to_cpu_state_dict(agent.critic_1.state_dict()),
+            'critic_2': self._to_cpu_state_dict(agent.critic_2.state_dict()),
+            'critic_target_1': self._to_cpu_state_dict(agent.critic_target_1.state_dict()),
+            'critic_target_2': self._to_cpu_state_dict(agent.critic_target_2.state_dict()),
+            'actor_optimizer': self._to_cpu_state_dict(agent.actor_optimizer.state_dict()),
+            'critic_1_optimizer': self._to_cpu_state_dict(agent.critic_1_optimizer.state_dict()),
+            'critic_2_optimizer': self._to_cpu_state_dict(agent.critic_2_optimizer.state_dict()),
+            'log_alpha': agent.log_alpha.cpu(),
             'metadata': {
                 'total_steps': agent.total_steps,
                 'learning_steps': agent.learning_steps,
@@ -659,12 +670,12 @@ class RunManager:
         
         # Add alpha optimizer if learnable
         if agent.learn_alpha:
-            agent_state['alpha_optimizer'] = agent.alpha_optimizer.state_dict()
+            agent_state['alpha_optimizer'] = self._to_cpu_state_dict(agent.alpha_optimizer.state_dict())
         
         # Determine path and worker function based on storage mode
         if self.storage_mode == "gcp":
             path_prefix = f"{self.run_id}/final_model/final_model"
-            args = (agent_state, path_prefix, self.gcs_utils.bucket_name, self.gcs_utils.project_id)
+            args = (agent_state, path_prefix)
             target_worker = _save_worker_gcs
             final_model_path = f"gs://{self.gcs_utils.bucket_name}/{self.run_id}/final_model"
         else:
