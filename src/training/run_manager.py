@@ -296,8 +296,8 @@ class RunManager:
                 blobs = bucket.list_blobs(prefix=checkpoint_prefix)
                 
                 # Regex para encontrar el número de episodio en la ruta
-                # Ej: .../checkpoints/checkpoint_episode_123/checkpoint_episode_123_metadata.pkl
-                metadata_pattern = re.compile(r"checkpoint_episode_(\d+)/checkpoint_episode_\1_metadata\.pkl$")
+                # Ej: .../checkpoints/checkpoint_episode_123/checkpoint_episode_123_metadata.pth
+                metadata_pattern = re.compile(r"checkpoint_episode_(\d+)/checkpoint_episode_\1_metadata\.pth$")
                 
                 latest_episode = -1
                 
@@ -326,14 +326,14 @@ class RunManager:
                     return None
                 
                 # Search for checkpoint metadata files
-                metadata_files = list(checkpoint_dir.glob("checkpoint_episode_*_metadata.pkl"))
+                metadata_files = list(checkpoint_dir.glob("checkpoint_episode_*_metadata.pth"))
                 
                 if not metadata_files:
                     self.logger.info(f"No metadata files found in: {checkpoint_dir}")
                     return None
                 
                 # Regex pattern to extract episode number
-                metadata_pattern = re.compile(r"checkpoint_episode_(\d+)_metadata\.pkl$")
+                metadata_pattern = re.compile(r"checkpoint_episode_(\d+)_metadata\.pth$")
                 
                 latest_episode_number = -1
                 latest_checkpoint_path = None
