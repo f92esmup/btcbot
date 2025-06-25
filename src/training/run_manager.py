@@ -294,25 +294,26 @@ class RunManager:
                 # Search for checkpoint metadata files in the specific run
                 bucket = self.gcs_utils._get_bucket()
                 blobs = bucket.list_blobs(prefix=checkpoint_prefix)
-                metadata_pattern = re.compile(r"checkpoint_episode_(\d+)_metadata\.pkl$")
+                
+                # Regex para encontrar el número de episodio en la ruta
+                # Ej: .../checkpoints/checkpoint_episode_123/checkpoint_episode_123_metadata.pkl
+                metadata_pattern = re.compile(r"checkpoint_episode_(\d+)/checkpoint_episode_\1_metadata\.pkl$")
                 
                 latest_episode = -1
-                latest_checkpoint = None
                 
                 for blob in blobs:
-                    filename = blob.name.split('/')[-1]
-                    match = metadata_pattern.search(filename)
+                    match = metadata_pattern.search(blob.name)
                     if match:
                         episode_num = int(match.group(1))
                         if episode_num > latest_episode:
                             latest_episode = episode_num
-                            latest_checkpoint = f"{run_id_to_check}/checkpoints/checkpoint_episode_{episode_num}"
                 
-                if latest_checkpoint:
-                    self.logger.info(f"Checkpoint found in GCS: {latest_checkpoint} (episode {latest_episode})")
-                    return (latest_checkpoint, latest_episode)
+                if latest_episode != -1:
+                    latest_checkpoint_prefix = f"{run_id_to_check}/checkpoints/checkpoint_episode_{latest_episode}"
+                    self.logger.info(f"Último checkpoint encontrado en GCS: {latest_checkpoint_prefix} (episodio {latest_episode})")
+                    return (latest_checkpoint_prefix, latest_episode)
                 else:
-                    self.logger.info(f"No checkpoints found in run {run_id_to_check} in GCS")
+                    self.logger.info(f"No se encontraron checkpoints válidos en el run {run_id_to_check} en GCS")
                     return None
                     
             else:
@@ -483,15 +484,19 @@ class RunManager:
         
         return checkpoint_path
     
-    def load_agent_from_checkpoint(self, agent: TransformerSACAgent, checkpoint_prefix: str) -> None:
+    def load_agent_from_checkpoint(self, agent: TransformerSACAgent, checkpoint_prefix: str, reset_optimizers: bool = False) -> None:
         """
         Load agent from a checkpoint.
         
         Args:
             agent: The agent to load into
             checkpoint_prefix: Prefix/path of the checkpoint to load
+            reset_optimizers: If True, skip loading optimizer states for fine-tuning
         """
         self.logger.info(f"Loading checkpoint from: {checkpoint_prefix}")
+        
+        if reset_optimizers:
+            self.logger.warning("⚠️  MODO FINE-TUNING ACTIVADO: Los optimizadores serán reiniciados con los hiperparámetros actuales")
         
         try:
             if self.storage_mode == "gcp":
@@ -536,15 +541,16 @@ class RunManager:
                     agent.critic_target_1.load_state_dict(torch.load(os.path.join(temp_dir, "critic_target_1.pth"), map_location=agent.device))
                     agent.critic_target_2.load_state_dict(torch.load(os.path.join(temp_dir, "critic_target_2.pth"), map_location=agent.device))
                     
-                    # Load optimizer state dictionaries
-                    agent.actor_optimizer.load_state_dict(torch.load(os.path.join(temp_dir, "actor_optimizer.pth"), map_location=agent.device))
-                    agent.critic_1_optimizer.load_state_dict(torch.load(os.path.join(temp_dir, "critic_1_optimizer.pth"), map_location=agent.device))
-                    agent.critic_2_optimizer.load_state_dict(torch.load(os.path.join(temp_dir, "critic_2_optimizer.pth"), map_location=agent.device))
-                    
-                    # Load alpha and its optimizer
-                    agent.log_alpha = torch.load(os.path.join(temp_dir, "log_alpha.pth"), map_location=agent.device)
-                    if agent.learn_alpha and os.path.exists(os.path.join(temp_dir, "alpha_optimizer.pth")):
-                        agent.alpha_optimizer.load_state_dict(torch.load(os.path.join(temp_dir, "alpha_optimizer.pth"), map_location=agent.device))
+                    # Load optimizer state dictionaries and log_alpha only if not in fine-tuning mode
+                    if not reset_optimizers:
+                        agent.actor_optimizer.load_state_dict(torch.load(os.path.join(temp_dir, "actor_optimizer.pth"), map_location=agent.device))
+                        agent.critic_1_optimizer.load_state_dict(torch.load(os.path.join(temp_dir, "critic_1_optimizer.pth"), map_location=agent.device))
+                        agent.critic_2_optimizer.load_state_dict(torch.load(os.path.join(temp_dir, "critic_2_optimizer.pth"), map_location=agent.device))
+                        
+                        # Load alpha and its optimizer
+                        agent.log_alpha = torch.load(os.path.join(temp_dir, "log_alpha.pth"), map_location=agent.device)
+                        if agent.learn_alpha and os.path.exists(os.path.join(temp_dir, "alpha_optimizer.pth")):
+                            agent.alpha_optimizer.load_state_dict(torch.load(os.path.join(temp_dir, "alpha_optimizer.pth"), map_location=agent.device))
                         
             else:
                 # Local mode: load directly from files
@@ -565,15 +571,16 @@ class RunManager:
                 agent.critic_target_1.load_state_dict(torch.load(f"{prefix}_critic_target_1.pth", map_location=agent.device))
                 agent.critic_target_2.load_state_dict(torch.load(f"{prefix}_critic_target_2.pth", map_location=agent.device))
                 
-                # Load optimizer state dictionaries
-                agent.actor_optimizer.load_state_dict(torch.load(f"{prefix}_actor_optimizer.pth", map_location=agent.device))
-                agent.critic_1_optimizer.load_state_dict(torch.load(f"{prefix}_critic_1_optimizer.pth", map_location=agent.device))
-                agent.critic_2_optimizer.load_state_dict(torch.load(f"{prefix}_critic_2_optimizer.pth", map_location=agent.device))
-                
-                # Load alpha and its optimizer
-                agent.log_alpha = torch.load(f"{prefix}_log_alpha.pth", map_location=agent.device)
-                if agent.learn_alpha and os.path.exists(f"{prefix}_alpha_optimizer.pth"):
-                    agent.alpha_optimizer.load_state_dict(torch.load(f"{prefix}_alpha_optimizer.pth", map_location=agent.device))
+                # Load optimizer state dictionaries and log_alpha only if not in fine-tuning mode
+                if not reset_optimizers:
+                    agent.actor_optimizer.load_state_dict(torch.load(f"{prefix}_actor_optimizer.pth", map_location=agent.device))
+                    agent.critic_1_optimizer.load_state_dict(torch.load(f"{prefix}_critic_1_optimizer.pth", map_location=agent.device))
+                    agent.critic_2_optimizer.load_state_dict(torch.load(f"{prefix}_critic_2_optimizer.pth", map_location=agent.device))
+                    
+                    # Load alpha and its optimizer
+                    agent.log_alpha = torch.load(f"{prefix}_log_alpha.pth", map_location=agent.device)
+                    if agent.learn_alpha and os.path.exists(f"{prefix}_alpha_optimizer.pth"):
+                        agent.alpha_optimizer.load_state_dict(torch.load(f"{prefix}_alpha_optimizer.pth", map_location=agent.device))
             
             self.logger.info("✅ Checkpoint loaded successfully")
             

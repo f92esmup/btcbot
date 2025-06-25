@@ -16,7 +16,7 @@ from .normalization import Normalization
 class DataPipeline:
     """Clase que unifica todo el preprocesamiento de datos."""
     
-    def __init__(self, symbol: str, interval: str, start_date: str, run_id: str, base_path: str):
+    def __init__(self, symbol: str, interval: str, start_date: str, run_id: str, base_path: str, end_date: str = None):
         """
         Inicializa el pipeline de datos.
         
@@ -26,10 +26,12 @@ class DataPipeline:
             start_date (str): Fecha de inicio en formato YYYY-MM-DD
             run_id (str): Identificador único del entrenamiento
             base_path (str): Ruta base para guardar los artifacts del entrenamiento
+            end_date (str, optional): Fecha de fin en formato YYYY-MM-DD
         """
         self.symbol = symbol
         self.interval = interval
         self.start_date = start_date
+        self.end_date = end_date
         self.run_id = run_id
         self.base_path = base_path
         
@@ -38,7 +40,7 @@ class DataPipeline:
         self.logger = logging.getLogger(__name__)
         
         self.logger.info(f"Pipeline de datos inicializado para {symbol} ({interval})")
-        self.logger.info(f"Período: desde {start_date}")
+        self.logger.info(f"Período: desde {start_date}" + (f" hasta {end_date}" if end_date else " hasta ahora"))
         self.logger.info(f"Run ID: {run_id}")
         self.logger.info(f"Base path: {base_path}")
     
@@ -56,7 +58,8 @@ class DataPipeline:
         adquisicion = Adquisicion(
             symbol=self.symbol,
             interval=self.interval,
-            start_date=self.start_date
+            start_date=self.start_date,
+            end_date=self.end_date
         )
         #dataframe = adquisicion.main()
         dataframe = adquisicion.main_parallel()

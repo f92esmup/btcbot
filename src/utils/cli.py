@@ -32,6 +32,13 @@ def parse_arguments():
         help='Fecha de inicio en formato YYYY-MM-DD'
     )
     
+    parser.add_argument(
+        '--end-date',
+        type=str,
+        default=None,
+        help='Fecha de fin para la descarga de datos en formato YYYY-MM-DD (opcional, por defecto es la fecha actual)'
+    )
+    
     # Argumentos opcionales para entrenamiento
     parser.add_argument(
         '--episodes',
@@ -79,6 +86,12 @@ def parse_arguments():
         type=int,
         default=73,
         help='Semilla aleatoria para la reproducibilidad del entrenamiento (default: 73)'
+    )
+    
+    parser.add_argument(
+        '--fine-tune-mode',
+        action='store_true',
+        help='Activa el modo de ajuste fino: carga los pesos del agente pero reinicia los optimizadores para aprender con nuevos hiperparámetros (ej: un learning rate más bajo).'
     )
     
     return parser.parse_args()

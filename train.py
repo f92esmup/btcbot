@@ -240,6 +240,7 @@ def main():
             symbol=args.symbol,
             interval=args.interval,
             start_date=args.start_date,
+            end_date=args.end_date,
             run_id=run_id,
             base_path=str(base_path)
         )
@@ -324,7 +325,7 @@ def main():
                 
                 try:
                     logger.info(f"Cargando checkpoint desde: {checkpoint_prefix}")
-                    run_manager.load_agent_from_checkpoint(agent, checkpoint_prefix)
+                    run_manager.load_agent_from_checkpoint(agent, checkpoint_prefix, reset_optimizers=args.fine_tune_mode)
                     
                     start_episode = latest_episode
                     
