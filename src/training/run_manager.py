@@ -445,7 +445,7 @@ class RunManager:
             'actor_optimizer': self._to_cpu_state_dict(agent.actor_optimizer.state_dict()),
             'critic_1_optimizer': self._to_cpu_state_dict(agent.critic_1_optimizer.state_dict()),
             'critic_2_optimizer': self._to_cpu_state_dict(agent.critic_2_optimizer.state_dict()),
-            'log_alpha': agent.log_alpha.cpu(),
+            'log_alpha': agent.log_alpha.detach().cpu(),
             'metadata': {
                 'episode': episode + 1,
                 'total_steps': agent.total_steps,
@@ -601,7 +601,7 @@ class RunManager:
             'actor_optimizer': self._to_cpu_state_dict(agent.actor_optimizer.state_dict()),
             'critic_1_optimizer': self._to_cpu_state_dict(agent.critic_1_optimizer.state_dict()),
             'critic_2_optimizer': self._to_cpu_state_dict(agent.critic_2_optimizer.state_dict()),
-            'log_alpha': agent.log_alpha.cpu(),
+            'log_alpha': agent.log_alpha.detach().cpu(),
             'metadata': {
                 'total_steps': agent.total_steps,
                 'learning_steps': agent.learning_steps,
@@ -658,7 +658,7 @@ class RunManager:
             'actor_optimizer': self._to_cpu_state_dict(agent.actor_optimizer.state_dict()),
             'critic_1_optimizer': self._to_cpu_state_dict(agent.critic_1_optimizer.state_dict()),
             'critic_2_optimizer': self._to_cpu_state_dict(agent.critic_2_optimizer.state_dict()),
-            'log_alpha': agent.log_alpha.cpu(),
+            'log_alpha': agent.log_alpha.detach().cpu(),
             'metadata': {
                 'total_steps': agent.total_steps,
                 'learning_steps': agent.learning_steps,

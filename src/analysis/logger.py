@@ -205,6 +205,7 @@ class TensorboardLogger:
     def close(self) -> None:
         """Cierra el writer de TensorBoard y limpia los recursos."""
         if self.writer is not None:
+            self.writer.flush()
             self.writer.close()
             self.writer = None
-            self.logger.info("TensorBoard writer cerrado.")
+            self.logger.info("TensorBoard writer cerrado y logs enviados.")
