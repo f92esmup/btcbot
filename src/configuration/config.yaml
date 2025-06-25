@@ -55,8 +55,8 @@ normalization:
 
 # Configuración para Vertex AI TensorBoard
 tensorboard_vertex_ai:
-  instance_name: "2382342630227836928" # ¡IMPORTANTE: Reemplaza con el nombre de tu instancia!
-  experiment_name: "7916559723728470016"
+  instance_name: "8452737531086110720" # Nueva instancia de TensorBoard creada
+  experiment_name: "btcbot-trading-experiment" # Nuevo experimento creado
   location: "europe-west4" # La región de tu instancia de TensorBoard
 
 # Configuración de indicadores técnicos

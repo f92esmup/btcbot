@@ -405,4 +405,8 @@ def main():
 
 
 if __name__ == "__main__":
+    # AÑADE ESTA LÍNEA AQUÍ DENTRO:
+    # Forzar el método 'spawn' para multiprocessing para evitar problemas de CUDA
+    # en los procesos hijos que guardan los modelos. Es la solución estándar.
+    torch.multiprocessing.set_start_method('spawn', force=True)
     main()
