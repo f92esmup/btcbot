@@ -36,11 +36,12 @@ workerPoolSpecs:
         - '--symbol=BTCUSDT'
         - '--interval=1h'
         - '--start-date=2025-01-01' # Example start date
-        - '--episodes=10'         # Example number of episodes
+        - '--episodes=15'         # Example number of episodes
         - '--eval-frequency=4'
         - '--save-frequency=2'
         - '--eval-episodes=1'
-        - '--checkpoint=BTCUSDT_1h_73_20250625-173818' # <-- El run_id que anotaste antes
+#        - '--checkpoint=BTCUSDT_1h_73_20250625-173818' # <-- El run_id que anotaste antes
+#        - '--fine-tune-mode' # <-- ¡Aquí está la diferencia!
         # IMPORTANT: Do NOT include '--no-cuda' if you want to use the GPU.
         # Your train.py script's setup_device() function will detect and use the GPU.
 
