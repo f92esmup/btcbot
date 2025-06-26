@@ -10,6 +10,7 @@ import tempfile
 from datetime import datetime
 import numpy as np
 import torch
+import torch.distributed as dist
 from pathlib import Path
 from typing import Dict, Any, Optional, Tuple
 import time
@@ -20,7 +21,7 @@ from src.entorno.environment import FuturesTradingEnv
 from src.agente.agent import TransformerSACAgent
 from src.configuration.config import config
 from src.configuration.gcs_utils import GCSUtils
-from src.utils.system import setup_logging, set_seed, setup_device
+from src.utils.system import setup_logging, set_seed, setup_device, setup_environment_and_distribution
 from src.utils.validation import validate_date_format
 from src.utils.cli import parse_arguments
 from src.analysis.logger import TensorboardLogger
@@ -76,7 +77,7 @@ def create_trading_environment(dataframe: Any, logger, run_manager: RunManager, 
     return env
 
 
-def create_sac_agent(env: FuturesTradingEnv, device: torch.device, logger) -> TransformerSACAgent:
+def create_sac_agent(env: FuturesTradingEnv, device: torch.device, logger, is_distributed: bool = False) -> TransformerSACAgent:
     """
     Crea el agente SAC con arquitectura Transformer.
     
@@ -84,6 +85,7 @@ def create_sac_agent(env: FuturesTradingEnv, device: torch.device, logger) -> Tr
         env: Entorno de trading
         device: Device para el entrenamiento
         logger: Logger para mensajes
+        is_distributed: Si el entrenamiento es distribuido
         
     Returns:
         TransformerSACAgent: Agente configurado
@@ -107,7 +109,8 @@ def create_sac_agent(env: FuturesTradingEnv, device: torch.device, logger) -> Tr
         market_features=market_features,
         portfolio_features=portfolio_features,
         sequence_length=sequence_length,
-        device=device
+        device=device,
+        is_distributed=is_distributed
     )
     
     # Contar parámetros del modelo
@@ -124,6 +127,7 @@ def create_sac_agent(env: FuturesTradingEnv, device: torch.device, logger) -> Tr
     logger.info(f"  - Tau: {config.tau}")
     logger.info(f"  - Alpha inicial: {config.initial_log_alpha}")
     logger.info(f"  - Learning rates: Actor={config.actor_learning_rate}, Critic={config.critic_learning_rate}")
+    logger.info(f"  - Entrenamiento distribuido: {'Sí' if is_distributed else 'No'}")
     
     return agent
 
@@ -134,9 +138,32 @@ def create_sac_agent(env: FuturesTradingEnv, device: torch.device, logger) -> Tr
 
 def main():
     """Función principal del script."""
+    # === DETECCIÓN Y CONFIGURACIÓN DEL ENTORNO DISTRIBUIDO ===
+    # Esta debe ser la PRIMERA acción en main() para configurar correctamente
+    # el entorno de ejecución antes de cualquier otra operación
+    is_distributed, world_size, rank, local_rank = setup_environment_and_distribution()
+    
+    # Definir el rol "jefe" (chief) - solo el proceso con rank 0
+    is_chief = (rank == 0)
+    
     # Configurar logging
     setup_logging()
     logger = logging.getLogger(__name__)
+    
+    # Logging informativo del estado del entorno detectado
+    logger.info("=== CONFIGURACIÓN DEL ENTORNO DE EJECUCIÓN ===")
+    if is_distributed:
+        logger.info(f"✅ Entorno DISTRIBUIDO detectado:")
+        logger.info(f"  - World Size: {world_size} procesos")
+        logger.info(f"  - Rank Global: {rank}")
+        logger.info(f"  - Local Rank: {local_rank}")
+        logger.info(f"  - Es Proceso Jefe (Chief): {'Sí' if is_chief else 'No'}")
+    else:
+        logger.info(f"📋 Entorno NO DISTRIBUIDO (un solo proceso):")
+        logger.info(f"  - World Size: {world_size}")
+        logger.info(f"  - Rank Global: {rank}")
+        logger.info(f"  - Local Rank: {local_rank}")
+        logger.info(f"  - Es Proceso Jefe (Chief): {'Sí' if is_chief else 'No'}")
     
     logger.info("=== Iniciando Bot de Trading de Bitcoin ===")
     
@@ -153,89 +180,168 @@ def main():
     
     logger.info(f"Parámetros: Symbol={args.symbol}, Interval={args.interval}, Start Date={args.start_date}, Seed={args.seed}")
 
-    # Generar run_id único incluyendo la semilla
-    current_time = datetime.now().strftime('%Y%m%d-%H%M%S')
-    run_id = f"{args.symbol}_{args.interval}_{args.seed}_{current_time}"
-    logger.info(f"Run ID generado: {run_id}")
+    # === GENERACIÓN Y SINCRONIZACIÓN DEL RUN_ID ===
+    # Solo el proceso jefe genera el run_id, luego lo sincroniza con todos los procesos
+    if is_chief:
+        # Generar run_id único incluyendo la semilla
+        current_time = datetime.now().strftime('%Y%m%d-%H%M%S')
+        run_id = f"{args.symbol}_{args.interval}_{args.seed}_{current_time}"
+        logger.info(f"[Proceso Jefe] Run ID generado: {run_id}")
+    else:
+        # Los procesos no-jefe inicializan run_id como None, se sincronizará después
+        run_id = None
     
-    # Crear instancia única de GCSUtils para todo el proceso
-    gcs_utils = None
-    if config.storage_mode == "gcp":
-        from src.configuration.gcs_utils import gcs_utils
-        logger.info("Usando instancia global de GCSUtils para modo GCP")
+    # Sincronización del run_id en entornos distribuidos
+    if is_distributed:
+        # Configurar dispositivo para la sincronización
+        sync_device = torch.device(f"cuda:{local_rank}" if torch.cuda.is_available() else "cpu")
+        
+        if is_chief:
+            # Codificar el string run_id a un tensor de bytes
+            run_id_bytes = torch.tensor(bytearray(run_id, "utf-8"), dtype=torch.uint8, device=sync_device)
+            # Crear un tensor para el tamaño y transmitirlo
+            size_tensor = torch.tensor([len(run_id_bytes)], dtype=torch.long, device=sync_device)
+            dist.broadcast(size_tensor, src=0)
+            # Transmitir el tensor de bytes
+            dist.broadcast(run_id_bytes, src=0)
+            logger.info(f"[Proceso Jefe] run_id transmitido a todos los procesos")
+        else:
+            # Recibir el tamaño del run_id
+            size_tensor = torch.empty(1, dtype=torch.long, device=sync_device)
+            dist.broadcast(size_tensor, src=0)
+            # Preparar un tensor vacío del tamaño correcto para recibir los bytes
+            run_id_bytes = torch.empty(size_tensor[0].item(), dtype=torch.uint8, device=sync_device)
+            dist.broadcast(run_id_bytes, src=0)
+            # Decodificar los bytes de vuelta a un string
+            run_id = run_id_bytes.cpu().numpy().tobytes().decode("utf-8")
+        
+        # Todos los procesos ahora tienen el mismo run_id
+        logger.info(f"[Proceso {rank}] run_id sincronizado: {run_id}")
+    
+    # === INICIALIZACIÓN DE COMPONENTES DE GESTIÓN ===
+    # Solo el proceso jefe inicializa los componentes de gestión y logging completos
+    if is_chief:
+        logger.info("=== INICIALIZACIÓN DE COMPONENTES (PROCESO JEFE) ===")
+        
+        # Crear instancia única de GCSUtils para todo el proceso
+        gcs_utils = None
+        if config.storage_mode == "gcp":
+            from src.configuration.gcs_utils import gcs_utils
+            logger.info("Usando instancia global de GCSUtils para modo GCP")
 
-    # Determinar base_path según storage_mode
-    if config.storage_mode == "gcp":
-        base_path = f"gs://{config.gcs_bucket_name}/{run_id}"
-        logger.info(f"Modo GCP: Los artefactos se guardarán en {base_path}")
-    else:
-        base_path = Path("Entrenamientos") / run_id
-        base_path.mkdir(parents=True, exist_ok=True)
-        logger.info(f"Modo Local: Los artefactos se guardarán en {base_path}")
+        # Determinar base_path según storage_mode
+        if config.storage_mode == "gcp":
+            base_path = f"gs://{config.gcs_bucket_name}/{run_id}"
+            logger.info(f"Modo GCP: Los artefactos se guardarán en {base_path}")
+        else:
+            base_path = Path("Entrenamientos") / run_id
+            base_path.mkdir(parents=True, exist_ok=True)
+            logger.info(f"Modo Local: Los artefactos se guardarán en {base_path}")
 
-    # Lógica de TensorBoard modificada
-    # Para el modo local, seguimos creando un directorio.
-    # Para el modo GCP, log_dir no es estrictamente necesario, pero lo mantenemos por consistencia.
-    # El logger interno decidirá qué hacer.
-    if config.storage_mode == "local":
-        tensorboard_dir = Path(base_path) / "tensorboard"
-        tensorboard_dir.mkdir(parents=True, exist_ok=True)
-    else:
-        # En modo GCP, los logs se envían directamente a la API de Vertex,
-        # no se necesita un directorio local persistente.
+        # Lógica de TensorBoard modificada
+        # Para el modo local, seguimos creando un directorio.
+        # Para el modo GCP, log_dir no es estrictamente necesario, pero lo mantenemos por consistencia.
+        # El logger interno decidirá qué hacer.
+        if config.storage_mode == "local":
+            tensorboard_dir = Path(base_path) / "tensorboard"
+            tensorboard_dir.mkdir(parents=True, exist_ok=True)
+        else:
+            # En modo GCP, los logs se envían directamente a la API de Vertex,
+            # no se necesita un directorio local persistente.
+            tensorboard_dir = None
+
+        # Inicializar TensorBoard Logger
+        # Pasamos el run_id para que lo use como nombre del "run" en el experimento
+        tb_logger = TensorboardLogger(log_dir=str(tensorboard_dir) if tensorboard_dir else None, run_id=run_id)
+        
+        if config.storage_mode == "local":
+            logger.info(f"TensorBoard logs se guardarán localmente en: {tensorboard_dir}")
+        else:
+            logger.info(f"TensorBoard logs se enviarán directamente a Vertex AI TensorBoard")
+
+        # Registrar Hiperparámetros
+        hparams = {
+            'run_id': run_id,
+            'symbol': args.symbol,
+            'interval': args.interval,
+            'start_date': args.start_date,
+            'seed': args.seed,
+            'episodes': args.episodes,
+            'eval_frequency': args.eval_frequency,
+            'save_frequency': args.save_frequency,
+            'actor_lr': config.actor_learning_rate,
+            'critic_lr': config.critic_learning_rate,
+            'alpha_lr': config.alpha_learning_rate,
+            'gamma': config.gamma,
+            'tau': config.tau,
+            'batch_size': config.batch_size,
+            'buffer_size': config.replay_buffer_size,
+            'd_model': config.d_model,
+            'n_head': config.n_head,
+            'num_encoder_layers': config.num_encoder_layers,
+            'ventana_observacion': config.ventana_observacion_size,
+            'capital_inicial': config.capital_inicial,
+            'apalancamiento': config.apalancamiento,
+            'storage_mode': config.storage_mode,
+            'base_path': str(base_path)
+        }
+        # Log hyperparameters
+        tb_logger.log_hyperparameters(hparams)
+        
+        # Crear instancia única de RunManager para todo el proceso
+        run_manager = RunManager(base_path=str(base_path), run_id=run_id, gcs_utils=gcs_utils)
+        logger.info(f"RunManager centralizado creado - Base path: {base_path}")
+        
+        # Guardar configuración del run usando RunManager
+        try:
+            run_manager.save_run_config(hparams=hparams, args=args)
+        except Exception as e:
+            logger.error(f"Error al guardar config_run.yaml: {e}")
+            # Continuar ejecución ya que este error no es crítico
+    
+    # === COMPARTIR INFORMACIÓN BÁSICA CON TODOS LOS PROCESOS ===
+    # Todos los procesos necesitan acceso a base_path para las operaciones del pipeline
+    if not is_chief:
+        # Los procesos no-jefe calculan su propio base_path usando el run_id sincronizado
+        logger.info(f"=== PROCESO NO-JEFE (RANK {rank}) - INICIALIZACIÓN BÁSICA ===")
+        gcs_utils = None
+        if config.storage_mode == "gcp":
+            base_path = f"gs://{config.gcs_bucket_name}/{run_id}"
+        else:
+            base_path = Path("Entrenamientos") / run_id
+        
+        # Variables de gestión que solo usa el jefe se inicializan a None
         tensorboard_dir = None
-
-    # Inicializar TensorBoard Logger
-    # Pasamos el run_id para que lo use como nombre del "run" en el experimento
-    tb_logger = TensorboardLogger(log_dir=str(tensorboard_dir) if tensorboard_dir else None, run_id=run_id)
-    
-    if config.storage_mode == "local":
-        logger.info(f"TensorBoard logs se guardarán localmente en: {tensorboard_dir}")
-    else:
-        logger.info(f"TensorBoard logs se enviarán directamente a Vertex AI TensorBoard")
-
-    # Registrar Hiperparámetros
-    hparams = {
-        'run_id': run_id,
-        'symbol': args.symbol,
-        'interval': args.interval,
-        'start_date': args.start_date,
-        'seed': args.seed,
-        'episodes': args.episodes,
-        'eval_frequency': args.eval_frequency,
-        'save_frequency': args.save_frequency,
-        'actor_lr': config.actor_learning_rate,
-        'critic_lr': config.critic_learning_rate,
-        'alpha_lr': config.alpha_learning_rate,
-        'gamma': config.gamma,
-        'tau': config.tau,
-        'batch_size': config.batch_size,
-        'buffer_size': config.replay_buffer_size,
-        'd_model': config.d_model,
-        'n_head': config.n_head,
-        'num_encoder_layers': config.num_encoder_layers,
-        'ventana_observacion': config.ventana_observacion_size,
-        'capital_inicial': config.capital_inicial,
-        'apalancamiento': config.apalancamiento,
-        'storage_mode': config.storage_mode,
-        'base_path': str(base_path)
-    }
-    # Log hyperparameters
-    tb_logger.log_hyperparameters(hparams)
-    
-    # Crear instancia única de RunManager para todo el proceso
-    run_manager = RunManager(base_path=str(base_path), run_id=run_id, gcs_utils=gcs_utils)
-    logger.info(f"RunManager centralizado creado - Base path: {base_path}")
-    
-    # Guardar configuración del run usando RunManager
-    try:
-        run_manager.save_run_config(hparams=hparams, args=args)
-    except Exception as e:
-        logger.error(f"Error al guardar config_run.yaml: {e}")
-        # Continuar ejecución ya que este error no es crítico
+        tb_logger = None
+        hparams = None
+        run_manager = None
+        logger.info(f"Variables básicas inicializadas - Base path: {base_path}")
     
     try:
-        logger.info("=== Ejecutando Pipeline de Datos ===")
+        # === FASE 1: EL PROCESO JEFE GENERA Y GUARDA LOS ARTEFACTOS ===
+        if is_chief:
+            logger.info("=== FASE 1: Generando y Guardando Artefactos (PROCESO JEFE) ===")
+            data_pipeline_chief = DataPipeline(
+                symbol=args.symbol,
+                interval=args.interval,
+                start_date=args.start_date,
+                end_date=args.end_date,
+                run_id=run_id,
+                base_path=str(base_path)
+            )
+            # El jefe ejecuta con save_artifacts=True para guardar scalers y metadatos
+            _, _ = data_pipeline_chief.run(save_artifacts=True)
+            logger.info("✅ FASE 1 completada - Artefactos generados y guardados por el proceso jefe")
+        
+        # === FASE 2: SINCRONIZACIÓN CON BARRERA ===
+        # Todos los procesos esperan a que el jefe termine de guardar los artefactos
+        if is_distributed:
+            logger.info(f"[Proceso {rank}] Esperando en barrera de sincronización...")
+            dist.barrier()
+            logger.info(f"[Proceso {rank}] ✅ Sincronización completada - Artefactos disponibles para todos")
+        
+        # === FASE 3: TODOS LOS PROCESOS CARGAN LOS DATOS EN MEMORIA ===
+        logger.info(f"=== FASE 3: Cargando Datos en Memoria [Proceso {rank}] ===")
         data_pipeline = DataPipeline(
             symbol=args.symbol,
             interval=args.interval,
@@ -244,104 +350,147 @@ def main():
             run_id=run_id,
             base_path=str(base_path)
         )
-        normalized_dataframe, price_scaler_path = data_pipeline.run()
-
-        # Actualizar referencia al dataframe
-        dataframe = normalized_dataframe
+        # Todos los procesos (incluido el jefe) ejecutan con save_artifacts=False
+        # Esto carga los datos y los procesa en memoria, usando los scalers ya guardados
+        normalized_dataframe, price_scaler_path = data_pipeline.run(save_artifacts=False)
         
-        # 4. Entrenamiento del Modelo SAC
-        logger.info("=== FASE 4: Entrenamiento del Modelo SAC ===")
+        # Ahora todos los procesos tienen los datos cargados en su memoria
+        dataframe = normalized_dataframe
+        logger.info(f"[Proceso {rank}] ✅ FASE 3 completada - Datos cargados en memoria")
+        
+        # === FASE 4: CREACIÓN DEL ENTORNO Y AGENTE (TODOS LOS PROCESOS) ===
+        logger.info(f"=== FASE 4: Creación del Entorno y Agente [Proceso {rank}] ===")
         
         # Configurar device
         device = setup_device(args.no_cuda)
-        logger.info(f"Usando device: {device}")
+        logger.info(f"[Proceso {rank}] Usando device: {device}")
         
-        # Variables para resumir entrenamiento
-        start_episode = 0
-        
-        # Nueva lógica de carga de checkpoint basada en argumento --checkpoint
-        logger.info("\n=== CONFIGURACIÓN DE CHECKPOINT O EJECUCIÓN NUEVA ===")
-        
-        # Variables para pasar la ruta/blob del price_scaler a create_trading_environment
+        # Variables para configuración de checkpoint (se determinarán después)
         path_price_scaler_a_cargar = None
         blob_name_price_scaler_a_cargar = None
+        start_episode = 0
         
-        if args.checkpoint is None:
-            # No se especificó checkpoint, comenzar desde cero
-            logger.info("Iniciando nueva ejecución (sin checkpoint).")
-            start_episode = 0
-            
-            # Usar la ruta del price_scaler que devolvió el pipeline
-            if config.storage_mode == "gcp":
-                blob_name_price_scaler_a_cargar = f"{run_id}/price_scaler.pkl"
-                logger.info(f"Se cargará price_scaler desde GCS (nueva ejecución): {blob_name_price_scaler_a_cargar}")
-            else:
-                path_price_scaler_a_cargar = price_scaler_path
-                logger.info(f"Se cargará price_scaler desde local (nueva ejecución): {path_price_scaler_a_cargar}")
+        # Usar la ruta del price_scaler que devolvió el pipeline para nueva ejecución por defecto
+        if config.storage_mode == "gcp":
+            blob_name_price_scaler_a_cargar = f"{run_id}/price_scaler.pkl"
         else:
-            # Se especificó un run_id para cargar checkpoint
-            logger.info(f"Intentando reanudar desde checkpoint del run_id: {args.checkpoint}")
-            
-            # Buscar checkpoint en el run_id específico usando RunManager
-            checkpoint_info = run_manager.find_latest_checkpoint(args.checkpoint)
-            
-            if checkpoint_info:
-                checkpoint_prefix, latest_episode = checkpoint_info
-                
-                logger.info(f"✅ Checkpoint encontrado del episodio {latest_episode}")
-                logger.info(f"Ubicación: {checkpoint_prefix}")
-                
-                # Configurar rutas de scalers para cargar desde el run_id específico del checkpoint
-                if config.storage_mode == "gcp":
-                    # Para GCS, construir blob names específicos del run_id del checkpoint
-                    blob_name_price_scaler_a_cargar = f"{args.checkpoint}/price_scaler.pkl"
-                    logger.info(f"Se cargará price_scaler desde GCS (checkpoint): {blob_name_price_scaler_a_cargar}")
-                else:
-                    # Para local, construir paths específicos del run_id del checkpoint
-                    path_price_scaler_a_cargar = f"Entrenamientos/{args.checkpoint}/price_scaler.pkl"
-                    logger.info(f"Se cargará price_scaler desde local (checkpoint): {path_price_scaler_a_cargar}")
-            else:
-                logger.error(f"❌ No se encontraron checkpoints en el run_id: {args.checkpoint}")
-                logger.error("Terminando ejecución. Verifique que el run_id sea válido y contenga checkpoints.")
-                return
+            path_price_scaler_a_cargar = price_scaler_path
         
-        # Crear entorno de trading
+        # Crear entorno de trading (todos los procesos)
+        logger.info(f"[Proceso {rank}] Creando entorno de trading...")
         env = create_trading_environment(
-            dataframe,  # Este debe ser el dataframe normalizado
+            dataframe,  # Disponible en todos los procesos
             logger,
-            run_manager,
+            run_manager if is_chief else None,  # Solo el jefe tiene run_manager
             price_scaler_path=path_price_scaler_a_cargar,
             price_scaler_blob_name=blob_name_price_scaler_a_cargar
         )
         
-        # Crear agente
-        agent = create_sac_agent(env, device, logger)
+        # Crear agente (todos los procesos) - CRUCIAL: Pasar is_distributed
+        logger.info(f"[Proceso {rank}] Creando agente SAC...")
+        agent = create_sac_agent(env, device, logger, is_distributed=is_distributed)
         
-        # Cargar checkpoint si corresponde
-        if args.checkpoint is not None:
-            checkpoint_info = run_manager.find_latest_checkpoint(args.checkpoint)
-            if checkpoint_info:
-                checkpoint_prefix, latest_episode = checkpoint_info
+        # === FASE 5: GESTIÓN DE CHECKPOINTS Y SINCRONIZACIÓN (CENTRALIZADA EN EL JEFE) ===
+        logger.info(f"=== FASE 5: Gestión de Checkpoints [Proceso {rank}] ===")
+        
+        # Solo el proceso jefe maneja la lógica de checkpoints
+        if is_chief:
+            logger.info("[Proceso Jefe] Determinando configuración de checkpoint...")
+            
+            if args.checkpoint is None:
+                # No se especificó checkpoint, comenzar desde cero
+                logger.info("[Proceso Jefe] Iniciando nueva ejecución (sin checkpoint)")
+                start_episode = 0
+            else:
+                # Se especificó un run_id para cargar checkpoint
+                logger.info(f"[Proceso Jefe] Intentando reanudar desde checkpoint del run_id: {args.checkpoint}")
                 
-                try:
-                    logger.info(f"Cargando checkpoint desde: {checkpoint_prefix}")
-                    run_manager.load_agent_from_checkpoint(agent, checkpoint_prefix, reset_optimizers=args.fine_tune_mode)
+                # Buscar checkpoint en el run_id específico usando RunManager
+                checkpoint_info = run_manager.find_latest_checkpoint(args.checkpoint)
+                
+                if checkpoint_info:
+                    checkpoint_prefix, latest_episode = checkpoint_info
                     
-                    start_episode = latest_episode
+                    logger.info(f"✅ Checkpoint encontrado del episodio {latest_episode}")
+                    logger.info(f"Ubicación: {checkpoint_prefix}")
                     
-                    logger.info(f"✅ Checkpoint cargado exitosamente")
-                    logger.info(f"  - Run ID de origen: {args.checkpoint}")
-                    logger.info(f"  - Episodio inicial: {start_episode}")
-                    logger.info(f"  - Total steps: {agent.total_steps}")
-                    logger.info(f"  - Learning steps: {agent.learning_steps}")
-                    logger.info(f"  - Nuevos artefactos se guardarán en run_id: {run_id}")
-                    
-                except Exception as e:
-                    logger.error(f"❌ Error al cargar checkpoint desde run_id {args.checkpoint}: {e}")
+                    try:
+                        logger.info(f"[Proceso Jefe] Cargando checkpoint desde: {checkpoint_prefix}")
+                        run_manager.load_agent_from_checkpoint(agent, checkpoint_prefix, reset_optimizers=args.fine_tune_mode)
+                        
+                        start_episode = latest_episode
+                        
+                        logger.info(f"✅ Checkpoint cargado exitosamente en el proceso jefe")
+                        logger.info(f"  - Run ID de origen: {args.checkpoint}")
+                        logger.info(f"  - Episodio inicial: {start_episode}")
+                        logger.info(f"  - Total steps: {agent.total_steps}")
+                        logger.info(f"  - Learning steps: {agent.learning_steps}")
+                        logger.info(f"  - Nuevos artefactos se guardarán en run_id: {run_id}")
+                        
+                        # Actualizar configuración de price_scaler para cargar desde checkpoint
+                        if config.storage_mode == "gcp":
+                            blob_name_price_scaler_a_cargar = f"{args.checkpoint}/price_scaler.pkl"
+                            logger.info(f"[Proceso Jefe] Actualizando price_scaler desde GCS (checkpoint): {blob_name_price_scaler_a_cargar}")
+                        else:
+                            path_price_scaler_a_cargar = f"Entrenamientos/{args.checkpoint}/price_scaler.pkl"
+                            logger.info(f"[Proceso Jefe] Actualizando price_scaler desde local (checkpoint): {path_price_scaler_a_cargar}")
+                        
+                    except Exception as e:
+                        logger.error(f"❌ Error al cargar checkpoint desde run_id {args.checkpoint}: {e}")
+                        logger.error("Terminando ejecución. Verifique que el run_id sea válido y contenga checkpoints.")
+                        return
+                else:
+                    logger.error(f"❌ No se encontraron checkpoints en el run_id: {args.checkpoint}")
                     logger.error("Terminando ejecución. Verifique que el run_id sea válido y contenga checkpoints.")
                     return
         
-        logger.info(f"\n=== CONFIGURACIÓN FINAL DE ENTRENAMIENTO ===")
+        # === FASE 6: SINCRONIZACIÓN DEL ESTADO INICIAL (DISTRIBUIDO) ===
+        if is_distributed:
+            logger.info(f"=== FASE 6: Sincronización del Estado Inicial [Proceso {rank}] ===")
+            
+            # Sincronizar start_episode desde el jefe a todos los procesos
+            sync_device = torch.device(f"cuda:{local_rank}" if torch.cuda.is_available() else "cpu")
+            start_episode_tensor = torch.tensor([start_episode], dtype=torch.long, device=sync_device)
+            
+            logger.info(f"[Proceso {rank}] Sincronizando start_episode...")
+            dist.broadcast(start_episode_tensor, src=0)
+            
+            # Actualizar la variable en los procesos trabajadores
+            if not is_chief:
+                start_episode = start_episode_tensor.item()
+                logger.info(f"[Proceso {rank}] start_episode sincronizado: {start_episode}")
+            
+            # Sincronizar los pesos del modelo desde el jefe a todos los procesos
+            logger.info(f"[Proceso {rank}] Sincronizando pesos del modelo...")
+            
+            # Sincronizar pesos del Actor
+            for param in agent.actor.parameters():
+                dist.broadcast(param.data, src=0)
+            
+            # Sincronizar pesos de los Critics
+            for param in agent.critic1.parameters():
+                dist.broadcast(param.data, src=0)
+            for param in agent.critic2.parameters():
+                dist.broadcast(param.data, src=0)
+            
+            # Sincronizar pesos de los Critics Target
+            for param in agent.critic1_target.parameters():
+                dist.broadcast(param.data, src=0)
+            for param in agent.critic2_target.parameters():
+                dist.broadcast(param.data, src=0)
+            
+            # Sincronizar parámetro de temperatura (alpha)
+            if hasattr(agent, 'log_alpha'):
+                dist.broadcast(agent.log_alpha.data, src=0)
+            
+            logger.info(f"[Proceso {rank}] ✅ Sincronización de pesos completada")
+            
+            # Barrera final para asegurar que todos los procesos estén sincronizados
+            dist.barrier()
+            logger.info(f"[Proceso {rank}] ✅ Todos los procesos sincronizados y listos para entrenar")
+        
+        # === FASE 7: CONFIGURACIÓN FINAL DE ENTRENAMIENTO (TODOS LOS PROCESOS) ===
+        logger.info(f"=== FASE 7: Configuración Final de Entrenamiento [Proceso {rank}] ===")
         logger.info(f"  - Episodio inicial: {start_episode}")
         logger.info(f"  - Episodios totales: {args.episodes}")
         logger.info(f"  - Episodios por entrenar: {args.episodes - start_episode}")
@@ -353,10 +502,10 @@ def main():
             logger.info("No hay episodios adicionales para entrenar. Terminando...")
             return
         
-        # Crear instancias para el entrenamiento
-        evaluator = AgentEvaluator()
+        # Crear instancias para el entrenamiento (condicionalmente según el proceso)
+        evaluator = AgentEvaluator() if is_chief else None
         
-        # Configuración para el trainer
+        # Configuración para el trainer (todos los procesos)
         trainer_config = {
             'seed': args.seed,
             'batch_size': config.batch_size,
@@ -367,42 +516,59 @@ def main():
             'save_frequency': args.save_frequency,
             'storage_mode': config.storage_mode,
             'run_id': run_id,
-            'tensorboard_dir': tensorboard_dir,
+            'tensorboard_dir': tensorboard_dir if is_chief else None,
             'gcs_bucket_name': getattr(config, 'gcs_bucket_name', None),
-            'gcs_utils': gcs_utils
+            'gcs_utils': gcs_utils if is_chief else None
         }
         
-        # Crear trainer e iniciar entrenamiento
+        # Crear trainer (todos los procesos) con instanciación condicional
         trainer = Trainer(
             agent=agent,
             env=env,
-            evaluator=evaluator,
-            logger=tb_logger,
-            run_manager=run_manager,
+            evaluator=evaluator,  # Solo el jefe tiene evaluador
+            logger=tb_logger if is_chief else None,  # Solo el jefe tiene tb_logger
+            run_manager=run_manager if is_chief else None,  # Solo el jefe tiene run_manager
             trainer_config=trainer_config,
             logger_console=logger
         )
         
-        # Ejecutar entrenamiento
+        # === FASE 8: EJECUCIÓN DEL ENTRENAMIENTO DISTRIBUIDO ===
+        logger.info(f"=== FASE 8: Iniciando Entrenamiento Distribuido [Proceso {rank}] ===")
+        
+        # TODOS los procesos participan en el entrenamiento - DDP maneja la sincronización
         trainer.train(start_episode=start_episode, total_episodes=args.episodes)
         
-        logger.info("=== Proceso Completado Exitosamente ===")
+        logger.info(f"=== Proceso {rank} Completado Exitosamente ===")
         
     except KeyboardInterrupt:
-        logger.info("Proceso interrumpido por el usuario")
-        tb_logger.close()
-        sys.exit(0)
+        logger.info(f"[Proceso {rank}] Proceso interrumpido por el usuario")
         
     except Exception as e:
-        logger.error(f"Error durante la ejecución: {e}")
+        logger.error(f"[Proceso {rank}] Error during execution: {e}")
         logger.exception("Detalles del error:")
-        tb_logger.close()
-        sys.exit(1)
-    
+        
     finally:
-        # Asegurar que el writer se cierre
-        if 'tb_logger' in locals():
-            tb_logger.close()
+        # === LIMPIEZA Y FINALIZACIÓN ORDENADA ===
+        logger.info(f"[Proceso {rank}] Iniciando limpieza final...")
+        
+        # Cerrar TensorBoard logger (solo el jefe)
+        if is_chief and 'tb_logger' in locals() and tb_logger is not None:
+            try:
+                tb_logger.close()
+                logger.info("[Proceso Jefe] TensorBoard logger cerrado exitosamente")
+            except Exception as e:
+                logger.warning(f"[Proceso Jefe] Error al cerrar TensorBoard logger: {e}")
+        
+        # Limpiar el entorno distribuido si es necesario
+        if is_distributed:
+            try:
+                logger.info(f"[Proceso {rank}] Cerrando grupo de procesos distribuidos...")
+                dist.destroy_process_group()
+                logger.info(f"[Proceso {rank}] ✅ Grupo de procesos cerrado exitosamente")
+            except Exception as e:
+                logger.warning(f"[Proceso {rank}] Error al cerrar proceso distribuido: {e}")
+        
+        logger.info(f"[Proceso {rank}] ✅ Limpieza completada - Finalizando proceso")
 
 
 if __name__ == "__main__":

@@ -34,11 +34,11 @@ workerPoolSpecs:
       # Ensure these match the arguments expected by your train.py script.
       args:
         - '--symbol=BTCUSDT'
-        - '--interval=15m'
-        - '--start-date=2023-01-01' # Example start date
-        - '--episodes=2000'         # Example number of episodes
-        - '--eval-frequency=100'
-        - '--save-frequency=50'
+        - '--interval=1h'
+        - '--start-date=2025-01-01' # Example start date
+        - '--episodes=20'         # Example number of episodes
+        - '--eval-frequency=10'
+        - '--save-frequency=15'
         - '--eval-episodes=1'
 #        - '--checkpoint=BTCUSDT_1h_73_20250625-173818' # <-- El run_id que anotaste antes
 #        - '--fine-tune-mode' # <-- ¡Aquí está la diferencia!
