@@ -18,7 +18,7 @@ from ..configuration.gcs_utils import gcs_utils
 class Normalization:
     """Clase para normalizar datos de trading usando MinMaxScaler."""
     
-    def __init__(self, dataframe: pd.DataFrame, base_path: Optional[str] = None, run_id: Optional[str] = None):
+    def __init__(self, dataframe: pd.DataFrame, base_path: Optional[str] = None, run_id: Optional[str] = None, save_artifacts: bool = True):
         """
         Inicializa la clase de normalización.
         
@@ -26,6 +26,7 @@ class Normalization:
             dataframe (pd.DataFrame): DataFrame con datos OHLCV e indicadores técnicos
             base_path (Optional[str]): Ruta base para guardar los artifacts del entrenamiento
             run_id (Optional[str]): Identificador único del entrenamiento
+            save_artifacts (bool): Si True, guarda los scalers; si False, solo los carga
         """
         self.dataframe = dataframe.copy()
         self.initial_length = len(self.dataframe)
@@ -36,6 +37,7 @@ class Normalization:
         # Store run configuration
         self.base_path = base_path
         self.run_id = run_id
+        self.save_artifacts = save_artifacts
         
         # Configurar logging
         logging.basicConfig(level=logging.INFO)
@@ -121,9 +123,10 @@ class Normalization:
         # Paso 3: Crear y ajustar el price_scaler específico
         self._fit_price_scaler()
         
-        # Paso 4: Guardar ambos scalers
-        self._save_scaler()
-        self._save_price_scaler()
+        # Paso 4: Guardar ambos scalers (solo si save_artifacts es True)
+        if self.save_artifacts:
+            self._save_scaler()
+            self._save_price_scaler()
         
         # Paso 5: Transformar el dataset
         normalized_df = self._transform_datasets()
@@ -224,6 +227,10 @@ class Normalization:
     
     def _save_scaler(self):
         """Guardar el objeto scaler ajustado para uso futuro."""
+        if not self.save_artifacts:
+            self.logger.info("save_artifacts=False, omitiendo guardado del scaler")
+            return
+            
         if self.storage_mode == "gcp":
             self.logger.info("Guardando scaler en Google Cloud Storage...")
             
@@ -269,6 +276,10 @@ class Normalization:
     
     def _save_price_scaler(self):
         """Guardar el price_scaler ajustado para uso futuro."""
+        if not self.save_artifacts:
+            self.logger.info("save_artifacts=False, omitiendo guardado del price_scaler")
+            return
+            
         if self.storage_mode == "gcp":
             self.logger.info("Guardando price_scaler en Google Cloud Storage...")
             

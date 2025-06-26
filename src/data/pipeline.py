@@ -16,7 +16,7 @@ from .normalization import Normalization
 class DataPipeline:
     """Clase que unifica todo el preprocesamiento de datos."""
     
-    def __init__(self, symbol: str, interval: str, start_date: str, run_id: str, base_path: str, end_date: str = None):
+    def __init__(self, symbol: str, interval: str, start_date: str, run_id: str, base_path: str, end_date: str = None, save_artifacts: bool = True):
         """
         Inicializa el pipeline de datos.
         
@@ -27,6 +27,7 @@ class DataPipeline:
             run_id (str): Identificador único del entrenamiento
             base_path (str): Ruta base para guardar los artifacts del entrenamiento
             end_date (str, optional): Fecha de fin en formato YYYY-MM-DD
+            save_artifacts (bool): Si True, guarda artefactos como scalers
         """
         self.symbol = symbol
         self.interval = interval
@@ -34,6 +35,7 @@ class DataPipeline:
         self.end_date = end_date
         self.run_id = run_id
         self.base_path = base_path
+        self.save_artifacts = save_artifacts
         
         # Configurar logging
         logging.basicConfig(level=logging.INFO)
@@ -92,7 +94,8 @@ class DataPipeline:
         normalization = Normalization(
             dataframe_with_indicators, 
             base_path=self.base_path, 
-            run_id=self.run_id
+            run_id=self.run_id,
+            save_artifacts=self.save_artifacts
         )
         normalized_dataframe, scaler = normalization.main()
         

@@ -199,8 +199,9 @@ class Trainer:
                         ep_critic2_losses.append(losses['critic_2_loss'])
                         ep_alpha_losses.append(losses['alpha_loss'])
                         
-                        # Log step metrics
-                        self.logger.log_step_metrics(self.agent.learning_steps, losses, self.agent.alpha.item())
+                        # Log step metrics (solo si hay logger)
+                        if self.logger:
+                            self.logger.log_step_metrics(self.agent.learning_steps, losses, self.agent.alpha.item())
                 
                 obs = next_obs
                 episode_return += reward
@@ -233,7 +234,7 @@ class Trainer:
                     elif ultimo_trade['tipo'] == 'CORTO':
                         episode_short_trades += 1
                     
-                    # Log per-trade metrics
+                    # Log per-trade metrics (solo si hay logger)
                     trade_data = {
                         'roe': roe_trade,
                         'pnl_abs': pnl_abs_trade,
@@ -241,7 +242,8 @@ class Trainer:
                         'margen_usado': margen_usado_trade,
                         'tipo': ultimo_trade['tipo']
                     }
-                    self.logger.log_per_trade_metrics(self.global_trade_counter, trade_data)
+                    if self.logger:
+                        self.logger.log_per_trade_metrics(self.global_trade_counter, trade_data)
             
             # Calculate episode profit
             final_balance = self.env.balance_actual
@@ -282,8 +284,9 @@ class Trainer:
                 'initial_balance': initial_balance
             }
             
-            # Log episode metrics
-            self.logger.log_episode_metrics(episode, episode_return, profit_pct, episode_length, trade_metrics, env_metrics)
+            # Log episode metrics (solo si hay logger)
+            if self.logger:
+                self.logger.log_episode_metrics(episode, episode_return, profit_pct, episode_length, trade_metrics, env_metrics)
             
             # Log agent-specific metrics if we have losses
             if ep_actor_losses:
@@ -294,17 +297,19 @@ class Trainer:
                     'alpha_value_at_end': self.agent.alpha.item()
                 }
                 
-                # Use individual metric logging for agent metrics not covered by high-level methods
-                self.logger.writer.add_scalar('Agent_Episode/Mean_Actor_Loss', agent_episode_metrics['mean_actor_loss'], episode)
-                self.logger.writer.add_scalar('Agent_Episode/Mean_Critic_Loss', agent_episode_metrics['mean_critic_loss'], episode)
-                self.logger.writer.add_scalar('Agent_Episode/Mean_Alpha_Loss', agent_episode_metrics['mean_alpha_loss'], episode)
-                self.logger.writer.add_scalar('Agent_Episode/Alpha_Value_at_End', agent_episode_metrics['alpha_value_at_end'], episode)
+                # Use individual metric logging for agent metrics not covered by high-level methods (solo si hay logger)
+                if self.logger:
+                    self.logger.writer.add_scalar('Agent_Episode/Mean_Actor_Loss', agent_episode_metrics['mean_actor_loss'], episode)
+                    self.logger.writer.add_scalar('Agent_Episode/Mean_Critic_Loss', agent_episode_metrics['mean_critic_loss'], episode)
+                    self.logger.writer.add_scalar('Agent_Episode/Mean_Alpha_Loss', agent_episode_metrics['mean_alpha_loss'], episode)
+                    self.logger.writer.add_scalar('Agent_Episode/Alpha_Value_at_End', agent_episode_metrics['alpha_value_at_end'], episode)
             
-            # Additional metrics
-            self.logger.writer.add_scalar('Environment_Episode/Max_Equity_Reached', max_equity_episode, episode)
-            self.logger.writer.add_scalar('Trading_Episode/Win_Rate_Percentage', win_rate_episode, episode)
-            self.logger.writer.add_scalar('Trading_Episode/Average_ROE_per_Trade', avg_roe_episode, episode)
-            self.logger.writer.add_scalar('Agent_Stats/Replay_Buffer_Size', len(self.replay_buffer), episode)
+            # Additional metrics (solo si hay logger)
+            if self.logger:
+                self.logger.writer.add_scalar('Environment_Episode/Max_Equity_Reached', max_equity_episode, episode)
+                self.logger.writer.add_scalar('Trading_Episode/Win_Rate_Percentage', win_rate_episode, episode)
+                self.logger.writer.add_scalar('Trading_Episode/Average_ROE_per_Trade', avg_roe_episode, episode)
+                self.logger.writer.add_scalar('Agent_Stats/Replay_Buffer_Size', len(self.replay_buffer), episode)
             
             episode_time = time.time() - episode_start_time
             
@@ -329,8 +334,8 @@ class Trainer:
                                f"Actor Loss: {actor_losses[-1]:.4f} | "
                                f"Critic Loss: {critic_losses[-1]:.4f}")
             
-            # Periodic evaluation
-            if (episode + 1) % self.config['eval_frequency'] == 0:
+            # Periodic evaluation (solo si hay evaluator)
+            if (episode + 1) % self.config['eval_frequency'] == 0 and self.evaluator:
                 self.logger_console.info(f"\n=== Evaluación en episodio {episode + 1} ===")
                 
                 # Use AgentEvaluator for evaluation
@@ -346,21 +351,24 @@ class Trainer:
                 self.logger_console.info(f"  - Sharpe Ratio: {eval_metrics['sharpe_ratio']:.4f}")
                 self.logger_console.info(f"  - Sortino Ratio: {eval_metrics['sortino_ratio']:.4f}")
                 
-                # Log evaluation metrics to TensorBoard using high-level method
-                self.logger.log_evaluation_metrics(episode + 1, eval_metrics)
+                # Log evaluation metrics to TensorBoard using high-level method (solo si hay logger)
+                if self.logger:
+                    self.logger.log_evaluation_metrics(episode + 1, eval_metrics)
                 
-                # Save best model using RunManager
-                if eval_metrics['mean_return'] > self.best_eval_return:
+                # Save best model using RunManager (solo si hay run_manager)
+                if self.run_manager and eval_metrics['mean_return'] > self.best_eval_return:
                     self.best_eval_return = eval_metrics['mean_return']
                     best_model_path = self.run_manager.save_best_model(self.agent)
                     self.logger_console.info(f"  - Nuevo mejor modelo guardado: {best_model_path}")
             
-            # Periodic checkpoint saving
-            if (episode + 1) % self.config['save_frequency'] == 0:
+            # Periodic checkpoint saving (solo si hay run_manager)
+            if (episode + 1) % self.config['save_frequency'] == 0 and self.run_manager:
                 self.run_manager.save_agent_checkpoint(self.agent, episode + 1)
         
-        # Final save
-        final_model_path = self.run_manager.save_final_model(self.agent)
+        # Final save (solo si hay run_manager)
+        final_model_path = None
+        if self.run_manager:
+            final_model_path = self.run_manager.save_final_model(self.agent)
         
         total_time = time.time() - start_time
         self.logger_console.info(f"\n=== Entrenamiento Completado ===")
@@ -368,7 +376,9 @@ class Trainer:
         self.logger_console.info(f"Return promedio: {np.mean(episode_returns):.2f}")
         self.logger_console.info(f"Profit promedio: {np.mean(episode_profits):.2f}%")
         self.logger_console.info(f"Mejor evaluación: {self.best_eval_return:.2f}")
-        self.logger_console.info(f"Modelo final guardado: {final_model_path}")
+        if final_model_path:
+            self.logger_console.info(f"Modelo final guardado: {final_model_path}")
         
-        # Close TensorBoard writer
-        self.logger.close()
+        # Close TensorBoard writer (solo si hay logger)
+        if self.logger:
+            self.logger.close()

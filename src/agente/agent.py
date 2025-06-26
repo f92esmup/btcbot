@@ -264,13 +264,16 @@ class TransformerSACAgent:
             Acción seleccionada
         """
         with torch.no_grad():
+            # Obtener el modelo actor correcto (envuelto en DDP o no)
+            actor_model = self.actor.module if hasattr(self.actor, 'module') else self.actor
+            
             if deterministic:
                 # Para evaluación: usar la media de la distribución
-                mean, _ = self.actor(market_data, portfolio_data)
+                mean, _ = actor_model(market_data, portfolio_data)
                 action = torch.tanh(mean)
             else:
                 # Para entrenamiento: muestrear de la distribución
-                action, _ = self.actor.sample(market_data, portfolio_data)
+                action, _ = actor_model.sample(market_data, portfolio_data)
         
         return action.cpu().numpy().flatten()
     
@@ -314,12 +317,19 @@ class TransformerSACAgent:
         scaled_rewards = (rewards - rewards.mean()) / (rewards.std() + 1e-8)
         
         with torch.no_grad():
+            # Obtener el modelo actor correcto (envuelto en DDP o no)
+            actor_model = self.actor.module if hasattr(self.actor, 'module') else self.actor
+            
             # Siguiente acción y log_prob usando la política actual
-            next_actions, next_log_probs = self.actor.sample(next_market_data, next_portfolio_data)
+            next_actions, next_log_probs = actor_model.sample(next_market_data, next_portfolio_data)
+            
+            # Obtener las redes target correctas (envueltas en DDP o no)
+            critic_target_1_model = self.critic_target_1.module if hasattr(self.critic_target_1, 'module') else self.critic_target_1
+            critic_target_2_model = self.critic_target_2.module if hasattr(self.critic_target_2, 'module') else self.critic_target_2
             
             # Q-valores objetivo
-            target_q1 = self.critic_target_1(next_market_data, next_portfolio_data, next_actions)
-            target_q2 = self.critic_target_2(next_market_data, next_portfolio_data, next_actions)
+            target_q1 = critic_target_1_model(next_market_data, next_portfolio_data, next_actions)
+            target_q2 = critic_target_2_model(next_market_data, next_portfolio_data, next_actions)
             
             # Tomar el mínimo para reducir sobreestimación
             target_q = torch.min(target_q1, target_q2) - self.alpha * next_log_probs
@@ -329,8 +339,12 @@ class TransformerSACAgent:
         
         # Actualizar críticos
         with torch.cuda.amp.autocast(enabled=(self.device.type == 'cuda')):
-            current_q1 = self.critic_1(market_data, portfolio_data, actions)
-            current_q2 = self.critic_2(market_data, portfolio_data, actions)
+            # Obtener los modelos críticos correctos (envueltos en DDP o no)
+            critic_1_model = self.critic_1.module if hasattr(self.critic_1, 'module') else self.critic_1
+            critic_2_model = self.critic_2.module if hasattr(self.critic_2, 'module') else self.critic_2
+            
+            current_q1 = critic_1_model(market_data, portfolio_data, actions)
+            current_q2 = critic_2_model(market_data, portfolio_data, actions)
             
             critic_1_loss = F.mse_loss(current_q1, q_targets)
             critic_2_loss = F.mse_loss(current_q2, q_targets)
@@ -347,10 +361,16 @@ class TransformerSACAgent:
         
         # Actualizar actor
         with torch.cuda.amp.autocast(enabled=(self.device.type == 'cuda')):
-            new_actions, log_probs = self.actor.sample(market_data, portfolio_data)
+            # Obtener el modelo actor correcto (envuelto en DDP o no)
+            actor_model = self.actor.module if hasattr(self.actor, 'module') else self.actor
+            new_actions, log_probs = actor_model.sample(market_data, portfolio_data)
             
-            q1_new = self.critic_1(market_data, portfolio_data, new_actions)
-            q2_new = self.critic_2(market_data, portfolio_data, new_actions)
+            # Obtener los modelos críticos correctos (envueltos en DDP o no)
+            critic_1_model = self.critic_1.module if hasattr(self.critic_1, 'module') else self.critic_1
+            critic_2_model = self.critic_2.module if hasattr(self.critic_2, 'module') else self.critic_2
+            
+            q1_new = critic_1_model(market_data, portfolio_data, new_actions)
+            q2_new = critic_2_model(market_data, portfolio_data, new_actions)
             q_new = torch.min(q1_new, q2_new)
             
             actor_loss = (self.alpha * log_probs - q_new).mean()
