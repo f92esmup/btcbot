@@ -1,0 +1,40 @@
+# relayonvertex.yaml (Versión Final Simplificada)
+
+workerPoolSpecs:
+  # Pool 0: El Chief (siempre hay solo 1)
+  - machineSpec:
+      machineType: 'n1-standard-8'
+      acceleratorType: 'NVIDIA_TESLA_T4'
+      acceleratorCount: 1
+    replicaCount: 1
+    containerSpec:
+      imageUri: 'europe-southwest1-docker.pkg.dev/btcbot-461022/btcbotrepo/btcbot-train-gpu:latest'
+      command: ["python", "trainvertexai.py"]
+      args:
+        - '--symbol=BTCUSDT'
+        - '--interval=1h'
+        - '--start-date=2025-01-01' # Example start date
+        - '--episodes=20'         # Example number of episodes
+        - '--eval-frequency=10'
+        - '--save-frequency=15'
+        - '--eval-episodes=1'
+
+  # Pool 1: Los Workers
+  - machineSpec:
+      machineType: 'n1-standard-8'
+      acceleratorType: 'NVIDIA_TESLA_T4'
+      acceleratorCount: 1
+    replicaCount: 1
+    containerSpec:
+      imageUri: 'europe-southwest1-docker.pkg.dev/btcbot-461022/btcbotrepo/btcbot-train-gpu:latest'
+      command: ["python", "trainvertexai.py"]
+      args:
+        - '--symbol=BTCUSDT'
+        - '--interval=1h'
+        - '--start-date=2025-01-01' # Example start date
+        - '--episodes=20'         # Example number of episodes
+        - '--eval-frequency=10'
+        - '--save-frequency=15'
+        - '--eval-episodes=1'
+
+serviceAccount: 'btcbot-training-sa@btcbot-461022.iam.gserviceaccount.com'

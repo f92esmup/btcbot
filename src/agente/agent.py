@@ -6,6 +6,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
+from torch.nn.parallel import DistributedDataParallel as DDP
 import numpy as np
 from typing import Dict, Any, Tuple, Optional, Union
 from pathlib import Path
@@ -22,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 class TransformerSACAgent:
     """
-    Agente SAC con arquitectura Transformer para procesar secuencias de mercado.
+    Agente SAC que funciona tanto en modo de un solo nodo como en modo distribuido (con DDP).
     
     Implementa el algoritmo Soft Actor-Critic con:
     - Actor que produce distribución de política
@@ -39,7 +40,8 @@ class TransformerSACAgent:
         portfolio_features: int,
         sequence_length: int,
         device: Optional[torch.device] = None,
-        config_override: Optional[Dict[str, Any]] = None
+        config_override: Optional[Dict[str, Any]] = None,
+        is_distributed: bool = False  # Flag para activar el modo distribuido
     ):
         """
         Inicializa el agente SAC.
@@ -52,8 +54,10 @@ class TransformerSACAgent:
             sequence_length: Longitud de la secuencia (ventana)
             device: Dispositivo de cómputo
             config_override: Configuración opcional para sobrescribir
+            is_distributed: Flag para activar el modo distribuido con DDP
         """
         self.device = device or torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        self.is_distributed = is_distributed
         
         # Parámetros del espacio
         self.observation_space_shape = observation_space_shape
@@ -115,7 +119,7 @@ class TransformerSACAgent:
         # Inicializar GradScaler para Automatic Mixed Precision (AMP)
         self.scaler = torch.cuda.amp.GradScaler(enabled=(self.device.type == 'cuda'))
         
-        logger.info(f"TransformerSACAgent inicializado en {self.device}")
+        logger.info(f"TransformerSACAgent inicializado en {self.device}. Modo distribuido: {self.is_distributed}")
         logger.info(f"  - Observación shape: {observation_space_shape}")
         logger.info(f"  - Acción dim: {self.action_dim}")
         logger.info(f"  - Market features: {market_features}")
@@ -150,7 +154,7 @@ class TransformerSACAgent:
         }
     
     def _init_networks(self) -> None:
-        """Inicializa todas las redes neuronales (sin JIT para mayor estabilidad)."""
+        """Inicializa las redes y las envuelve para DDP si está en modo distribuido."""
         transformer_config = self.config['transformer_config']
         mlp_hidden_dims = self.config['mlp_hidden_dims']
         
@@ -205,9 +209,19 @@ class TransformerSACAgent:
         ).to(self.device)
         logger.info("✅ Critic Target Networks creados (sin JIT).")
 
-        # Copiar pesos a las redes objetivo
-        self.critic_target_1.load_state_dict(self.critic_1.state_dict())
-        self.critic_target_2.load_state_dict(self.critic_2.state_dict())
+        # Envolver con DDP si está en modo distribuido
+        if self.is_distributed:
+            logger.info(f"Envolviendo modelos con DistributedDataParallel en el dispositivo {self.device}.")
+            self.actor = DDP(self.actor, device_ids=[self.device.index])
+            self.critic_1 = DDP(self.critic_1, device_ids=[self.device.index])
+            self.critic_2 = DDP(self.critic_2, device_ids=[self.device.index])
+
+        # Copiar pesos a las redes objetivo, accediendo a .module si es distribuido
+        critic1_state = self.critic_1.module.state_dict() if self.is_distributed else self.critic_1.state_dict()
+        critic2_state = self.critic_2.module.state_dict() if self.is_distributed else self.critic_2.state_dict()
+        
+        self.critic_target_1.load_state_dict(critic1_state)
+        self.critic_target_2.load_state_dict(critic2_state)
         
         # Congelar redes objetivo
         for param in self.critic_target_1.parameters():
@@ -379,12 +393,15 @@ class TransformerSACAgent:
         return metrics
     
     def _soft_update_target_networks(self) -> None:
-        """Actualización suave de las redes objetivo."""
-        for target_param, param in zip(self.critic_target_1.parameters(), self.critic_1.parameters()):
-            target_param.data.copy_(self.tau * param.data + (1 - self.tau) * target_param.data)
+        """Actualización suave, accediendo a .module si es distribuido."""
+        critic1_params = self.critic_1.module.parameters() if self.is_distributed else self.critic_1.parameters()
+        critic2_params = self.critic_2.module.parameters() if self.is_distributed else self.critic_2.parameters()
         
-        for target_param, param in zip(self.critic_target_2.parameters(), self.critic_2.parameters()):
-            target_param.data.copy_(self.tau * param.data + (1 - self.tau) * target_param.data)
+        for target_param, param in zip(self.critic_target_1.parameters(), critic1_params):
+            target_param.data.copy_(self.tau * param.data + (1.0 - self.tau) * target_param.data)
+        
+        for target_param, param in zip(self.critic_target_2.parameters(), critic2_params):
+            target_param.data.copy_(self.tau * param.data + (1.0 - self.tau) * target_param.data)
     
     def eval_mode(self) -> None:
         """
