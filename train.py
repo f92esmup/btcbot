@@ -327,10 +327,11 @@ def main():
                 start_date=args.start_date,
                 end_date=args.end_date,
                 run_id=run_id,
-                base_path=str(base_path)
+                base_path=str(base_path),
+                save_artifacts=True
             )
             # El jefe ejecuta con save_artifacts=True para guardar scalers y metadatos
-            _, _ = data_pipeline_chief.run(save_artifacts=True)
+            _, _ = data_pipeline_chief.run()
             logger.info("✅ FASE 1 completada - Artefactos generados y guardados por el proceso jefe")
         
         # === FASE 2: SINCRONIZACIÓN CON BARRERA ===
@@ -348,11 +349,12 @@ def main():
             start_date=args.start_date,
             end_date=args.end_date,
             run_id=run_id,
-            base_path=str(base_path)
+            base_path=str(base_path),
+            save_artifacts=False
         )
         # Todos los procesos (incluido el jefe) ejecutan con save_artifacts=False
         # Esto carga los datos y los procesa en memoria, usando los scalers ya guardados
-        normalized_dataframe, price_scaler_path = data_pipeline.run(save_artifacts=False)
+        normalized_dataframe, price_scaler_path = data_pipeline.run()
         
         # Ahora todos los procesos tienen los datos cargados en su memoria
         dataframe = normalized_dataframe
