@@ -4,9 +4,11 @@ Funciones de utilidad relacionadas con el sistema, logging y configuración de d
 
 import logging
 import sys
+import os
 import random
 import numpy as np
 import torch
+import torch.distributed as dist
 
 
 def setup_logging():
@@ -68,3 +70,101 @@ def setup_device(no_cuda: bool = False) -> torch.device:
         torch.backends.cudnn.benchmark = True
     
     return device
+
+
+def setup_environment_and_distribution() -> tuple[bool, int, int, int]:
+    """
+    Detecta si el script se está ejecutando en un entorno de entrenamiento distribuido,
+    configura PyTorch distributed si es necesario, y devuelve la configuración del entorno.
+    
+    Esta función adhiere al Principio de Responsabilidad Única: su única responsabilidad
+    es la detección y configuración del entorno distribuido.
+    
+    La función inspecciona las variables de entorno estándar de PyTorch (RANK, WORLD_SIZE, LOCAL_RANK)
+    para determinar si debe inicializar el entrenamiento distribuido.
+    
+    Returns:
+        tuple[bool, int, int, int]: Una tupla con:
+            - is_distributed (bool): True si el entorno es distribuido, False en caso contrario
+            - world_size (int): El número total de procesos (1 en modo no distribuido)
+            - rank (int): El ID global del proceso actual (0 en modo no distribuido)
+            - local_rank (int): El ID local del proceso en su máquina (0 en modo no distribuido)
+    """
+    # Obtener logger para esta función
+    logger = logging.getLogger(__name__)
+    
+    # Verificar si las variables de entorno de distribución están presentes
+    rank_env = os.getenv('RANK')
+    world_size_env = os.getenv('WORLD_SIZE')
+    local_rank_env = os.getenv('LOCAL_RANK')
+    
+    # Verificar si estamos en un entorno distribuido
+    if rank_env is not None and world_size_env is not None and local_rank_env is not None:
+        try:
+            # Convertir variables de entorno a enteros
+            rank = int(rank_env)
+            world_size = int(world_size_env)
+            local_rank = int(local_rank_env)
+            
+            # Validar que los valores sean coherentes
+            if rank < 0 or world_size <= 0 or local_rank < 0:
+                raise ValueError(f"Valores inválidos en variables de entorno: RANK={rank}, WORLD_SIZE={world_size}, LOCAL_RANK={local_rank}")
+            
+            if rank >= world_size:
+                raise ValueError(f"RANK ({rank}) debe ser menor que WORLD_SIZE ({world_size})")
+            
+            logger.info(f"Entorno distribuido detectado: RANK={rank}, WORLD_SIZE={world_size}, LOCAL_RANK={local_rank}")
+            
+            # Verificar si CUDA está disponible antes de configurar dispositivos
+            if not torch.cuda.is_available():
+                logger.warning("CUDA no está disponible, pero se detectó entorno distribuido. Esto puede causar problemas.")
+            elif local_rank >= torch.cuda.device_count():
+                logger.warning(f"LOCAL_RANK ({local_rank}) es mayor que el número de GPUs disponibles ({torch.cuda.device_count()})")
+            
+            # Inicializar el grupo de procesos distribuido usando backend NCCL (optimizado para GPUs NVIDIA)
+            try:
+                if not dist.is_initialized():
+                    logger.info("Inicializando grupo de procesos distribuido con backend NCCL...")
+                    dist.init_process_group(backend='nccl')
+                    
+                    # Asignar el dispositivo CUDA correcto al proceso actual
+                    if torch.cuda.is_available():
+                        torch.cuda.set_device(local_rank)
+                        logger.info(f"Dispositivo CUDA {local_rank} asignado al proceso con RANK {rank}")
+                    
+                    logger.info(f"Entrenamiento distribuido inicializado exitosamente para proceso {rank}/{world_size}")
+                else:
+                    logger.info("El grupo de procesos distribuido ya está inicializado")
+                    
+            except Exception as e:
+                logger.error(f"Error al inicializar el entrenamiento distribuido: {e}")
+                logger.info("Continuando en modo no distribuido...")
+                return False, 1, 0, 0
+            
+            return True, world_size, rank, local_rank
+            
+        except ValueError as e:
+            logger.error(f"Error al procesar variables de entorno de distribución: {e}")
+            logger.info("Continuando en modo no distribuido...")
+            return False, 1, 0, 0
+            
+        except Exception as e:
+            logger.error(f"Error inesperado al configurar entorno distribuido: {e}")
+            logger.info("Continuando en modo no distribuido...")
+            return False, 1, 0, 0
+    
+    else:
+        # Entorno no distribuido (ejecución local en un solo proceso)
+        missing_vars = []
+        if rank_env is None:
+            missing_vars.append('RANK')
+        if world_size_env is None:
+            missing_vars.append('WORLD_SIZE')
+        if local_rank_env is None:
+            missing_vars.append('LOCAL_RANK')
+        
+        if missing_vars:
+            logger.info(f"Variables de entorno distribuido no encontradas: {', '.join(missing_vars)}")
+        
+        logger.info("Ejecutando en modo no distribuido (un solo proceso)")
+        return False, 1, 0, 0

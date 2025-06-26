@@ -212,16 +212,24 @@ class TransformerSACAgent:
         # Envolver con DDP si está en modo distribuido
         if self.is_distributed:
             logger.info(f"Envolviendo modelos con DistributedDataParallel en el dispositivo {self.device}.")
-            self.actor = DDP(self.actor, device_ids=[self.device.index])
-            self.critic_1 = DDP(self.critic_1, device_ids=[self.device.index])
-            self.critic_2 = DDP(self.critic_2, device_ids=[self.device.index])
+            if self.device.type == 'cuda':
+                # Para dispositivos CUDA, especificar device_ids
+                device_ids = [self.device.index] if self.device.index is not None else None
+                self.actor = DDP(self.actor, device_ids=device_ids)
+                self.critic_1 = DDP(self.critic_1, device_ids=device_ids)
+                self.critic_2 = DDP(self.critic_2, device_ids=device_ids)
+            else:
+                # Para CPU, no especificar device_ids
+                self.actor = DDP(self.actor)
+                self.critic_1 = DDP(self.critic_1)
+                self.critic_2 = DDP(self.critic_2)
 
-        # Copiar pesos a las redes objetivo, accediendo a .module si es distribuido
-        critic1_state = self.critic_1.module.state_dict() if self.is_distributed else self.critic_1.state_dict()
-        critic2_state = self.critic_2.module.state_dict() if self.is_distributed else self.critic_2.state_dict()
+        # Copiar pesos a las redes objetivo
+        critic1_model = self._get_critic_model(self.critic_1)
+        critic2_model = self._get_critic_model(self.critic_2)
         
-        self.critic_target_1.load_state_dict(critic1_state)
-        self.critic_target_2.load_state_dict(critic2_state)
+        self.critic_target_1.load_state_dict(critic1_model.state_dict())
+        self.critic_target_2.load_state_dict(critic2_model.state_dict())
         
         # Congelar redes objetivo
         for param in self.critic_target_1.parameters():
@@ -248,8 +256,16 @@ class TransformerSACAgent:
     
     @property
     def alpha(self) -> torch.Tensor:
-        """Parámetro de temperatura actual."""
-        return torch.exp(self.log_alpha)
+        """Valor actual del parámetro de temperatura alpha."""
+        return self.log_alpha.exp()
+    
+    def _get_actor_model(self):
+        """Obtiene el modelo actor subyacente (sin envoltura DDP)."""
+        return self.actor.module if self.is_distributed else self.actor
+    
+    def _get_critic_model(self, critic_network):
+        """Obtiene el modelo crítico subyacente (sin envoltura DDP)."""
+        return critic_network.module if self.is_distributed else critic_network
     
     def select_action(self, market_data: torch.Tensor, portfolio_data: torch.Tensor, deterministic: bool = False) -> np.ndarray:
         """
@@ -264,8 +280,8 @@ class TransformerSACAgent:
             Acción seleccionada
         """
         with torch.no_grad():
-            # Obtener el modelo actor correcto (envuelto en DDP o no)
-            actor_model = self.actor.module if hasattr(self.actor, 'module') else self.actor
+            # Obtener el modelo actor subyacente
+            actor_model = self._get_actor_model()
             
             if deterministic:
                 # Para evaluación: usar la media de la distribución
@@ -317,19 +333,15 @@ class TransformerSACAgent:
         scaled_rewards = (rewards - rewards.mean()) / (rewards.std() + 1e-8)
         
         with torch.no_grad():
-            # Obtener el modelo actor correcto (envuelto en DDP o no)
-            actor_model = self.actor.module if hasattr(self.actor, 'module') else self.actor
+            # Obtener el modelo actor subyacente
+            actor_model = self._get_actor_model()
             
             # Siguiente acción y log_prob usando la política actual
             next_actions, next_log_probs = actor_model.sample(next_market_data, next_portfolio_data)
             
-            # Obtener las redes target correctas (envueltas en DDP o no)
-            critic_target_1_model = self.critic_target_1.module if hasattr(self.critic_target_1, 'module') else self.critic_target_1
-            critic_target_2_model = self.critic_target_2.module if hasattr(self.critic_target_2, 'module') else self.critic_target_2
-            
-            # Q-valores objetivo
-            target_q1 = critic_target_1_model(next_market_data, next_portfolio_data, next_actions)
-            target_q2 = critic_target_2_model(next_market_data, next_portfolio_data, next_actions)
+            # Q-valores objetivo (las redes objetivo nunca están envueltas en DDP)
+            target_q1 = self.critic_target_1(next_market_data, next_portfolio_data, next_actions)
+            target_q2 = self.critic_target_2(next_market_data, next_portfolio_data, next_actions)
             
             # Tomar el mínimo para reducir sobreestimación
             target_q = torch.min(target_q1, target_q2) - self.alpha * next_log_probs
@@ -339,9 +351,9 @@ class TransformerSACAgent:
         
         # Actualizar críticos
         with torch.cuda.amp.autocast(enabled=(self.device.type == 'cuda')):
-            # Obtener los modelos críticos correctos (envueltos en DDP o no)
-            critic_1_model = self.critic_1.module if hasattr(self.critic_1, 'module') else self.critic_1
-            critic_2_model = self.critic_2.module if hasattr(self.critic_2, 'module') else self.critic_2
+            # Obtener los modelos críticos subyacentes
+            critic_1_model = self._get_critic_model(self.critic_1)
+            critic_2_model = self._get_critic_model(self.critic_2)
             
             current_q1 = critic_1_model(market_data, portfolio_data, actions)
             current_q2 = critic_2_model(market_data, portfolio_data, actions)
@@ -361,13 +373,13 @@ class TransformerSACAgent:
         
         # Actualizar actor
         with torch.cuda.amp.autocast(enabled=(self.device.type == 'cuda')):
-            # Obtener el modelo actor correcto (envuelto en DDP o no)
-            actor_model = self.actor.module if hasattr(self.actor, 'module') else self.actor
+            # Obtener los modelos subyacentes
+            actor_model = self._get_actor_model()
             new_actions, log_probs = actor_model.sample(market_data, portfolio_data)
             
-            # Obtener los modelos críticos correctos (envueltos en DDP o no)
-            critic_1_model = self.critic_1.module if hasattr(self.critic_1, 'module') else self.critic_1
-            critic_2_model = self.critic_2.module if hasattr(self.critic_2, 'module') else self.critic_2
+            # Obtener los modelos críticos subyacentes
+            critic_1_model = self._get_critic_model(self.critic_1)
+            critic_2_model = self._get_critic_model(self.critic_2)
             
             q1_new = critic_1_model(market_data, portfolio_data, new_actions)
             q2_new = critic_2_model(market_data, portfolio_data, new_actions)
@@ -413,14 +425,14 @@ class TransformerSACAgent:
         return metrics
     
     def _soft_update_target_networks(self) -> None:
-        """Actualización suave, accediendo a .module si es distribuido."""
-        critic1_params = self.critic_1.module.parameters() if self.is_distributed else self.critic_1.parameters()
-        critic2_params = self.critic_2.module.parameters() if self.is_distributed else self.critic_2.parameters()
+        """Actualización suave de las redes objetivo."""
+        critic1_model = self._get_critic_model(self.critic_1)
+        critic2_model = self._get_critic_model(self.critic_2)
         
-        for target_param, param in zip(self.critic_target_1.parameters(), critic1_params):
+        for target_param, param in zip(self.critic_target_1.parameters(), critic1_model.parameters()):
             target_param.data.copy_(self.tau * param.data + (1.0 - self.tau) * target_param.data)
         
-        for target_param, param in zip(self.critic_target_2.parameters(), critic2_params):
+        for target_param, param in zip(self.critic_target_2.parameters(), critic2_model.parameters()):
             target_param.data.copy_(self.tau * param.data + (1.0 - self.tau) * target_param.data)
     
     def eval_mode(self) -> None:

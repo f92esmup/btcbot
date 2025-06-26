@@ -45,6 +45,7 @@ class DataPipeline:
         self.logger.info(f"Período: desde {start_date}" + (f" hasta {end_date}" if end_date else " hasta ahora"))
         self.logger.info(f"Run ID: {run_id}")
         self.logger.info(f"Base path: {base_path}")
+        self.logger.info(f"Guardar artefactos: {save_artifacts}")
     
     def run(self) -> Tuple[pd.DataFrame, str]:
         """
@@ -102,8 +103,13 @@ class DataPipeline:
         self.logger.info(f"Normalización completada exitosamente:")
         self.logger.info(f"  - Forma del DataFrame normalizado: {normalized_dataframe.shape}")
         self.logger.info(f"  - Rango de valores: [{normalized_dataframe.min().min():.6f}, {normalized_dataframe.max().max():.6f}]")
-        self.logger.info(f"  - Scaler guardado en: {normalization.scaler_path}")
-        self.logger.info(f"  - Price scaler guardado en: {normalization.price_scaler_path}")
+        
+        if self.save_artifacts:
+            self.logger.info(f"  - Scaler guardado en: {normalization.scaler_path}")
+            self.logger.info(f"  - Price scaler guardado en: {normalization.price_scaler_path}")
+        else:
+            self.logger.info("  - Artefactos no guardados (save_artifacts=False)")
+            
         self.logger.info(f"  - Memoria utilizada: {normalized_dataframe.memory_usage(deep=True).sum() / 1024**2:.2f} MB")
         
         # Mostrar información del scaler
