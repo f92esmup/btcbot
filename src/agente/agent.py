@@ -261,11 +261,19 @@ class TransformerSACAgent:
     
     def _get_actor_model(self):
         """Obtiene el modelo actor subyacente (sin envoltura DDP)."""
-        return self.actor.module if self.is_distributed else self.actor
+        # Verificar si la red específica tiene el atributo 'module' (está envuelta con DDP)
+        if hasattr(self.actor, 'module'):
+            return self.actor.module
+        else:
+            return self.actor
     
     def _get_critic_model(self, critic_network):
         """Obtiene el modelo crítico subyacente (sin envoltura DDP)."""
-        return critic_network.module if self.is_distributed else critic_network
+        # Verificar si la red específica tiene el atributo 'module' (está envuelta con DDP)
+        if hasattr(critic_network, 'module'):
+            return critic_network.module
+        else:
+            return critic_network
     
     def select_action(self, market_data: torch.Tensor, portfolio_data: torch.Tensor, deterministic: bool = False) -> np.ndarray:
         """
