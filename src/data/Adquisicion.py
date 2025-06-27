@@ -108,7 +108,7 @@ def _download_kline_chunk(start_timestamp: int, symbol: str, interval: str,
 class Adquisicion:
     """Clase para adquirir y procesar datos OHLCV de Binance."""
     
-    def __init__(self, symbol: str, interval: str, start_date: str):
+    def __init__(self, symbol: str, interval: str, start_date: str, end_date: str = None):
         """
         Inicializa la clase de adquisición.
         
@@ -116,10 +116,12 @@ class Adquisicion:
             symbol (str): Símbolo del par de trading (ej: 'BTCUSDT')
             interval (str): Intervalo de tiempo (ej: '1h', '4h', '1d')
             start_date (str): Fecha de inicio en formato 'YYYY-MM-DD'
+            end_date (str, optional): Fecha de fin en formato 'YYYY-MM-DD'
         """
         self.symbol = symbol
         self.interval = interval
         self.start_date = start_date
+        self.end_date = end_date
         self.raw_data = []
         self.dataframe = None
         
@@ -226,13 +228,24 @@ class Adquisicion:
         # Convertir fecha de inicio a timestamp en milisegundos
         start_date_obj = datetime.strptime(self.start_date, '%Y-%m-%d')
         start_timestamp = int(start_date_obj.replace(tzinfo=timezone.utc).timestamp() * 1000)
-        current_timestamp = int(datetime.now(timezone.utc).timestamp() * 1000)
+        
+        # Calcular timestamp final
+        if self.end_date is not None:
+            # Si se especifica end_date, usarlo como límite
+            end_date_obj = datetime.strptime(self.end_date, '%Y-%m-%d')
+            end_timestamp = int(end_date_obj.replace(tzinfo=timezone.utc).timestamp() * 1000)
+        else:
+            # Si no se especifica end_date, usar el timestamp actual
+            end_timestamp = int(datetime.now(timezone.utc).timestamp() * 1000)
+        
+        current_timestamp = end_timestamp
         
         all_klines = []
         current_start = start_timestamp
         call_count = 0
         
-        self.logger.info(f"Descargando datos desde {self.start_date} hasta ahora...")
+        end_date_display = self.end_date if self.end_date else "ahora"
+        self.logger.info(f"Descargando datos desde {self.start_date} hasta {end_date_display}...")
         self.logger.info(f"Límite por llamada: {config.api_call_limit} velas")
         
         while current_start < current_timestamp:
@@ -325,7 +338,17 @@ class Adquisicion:
         # Convertir fecha de inicio a timestamp en milisegundos
         start_date_obj = datetime.strptime(self.start_date, '%Y-%m-%d')
         start_timestamp = int(start_date_obj.replace(tzinfo=timezone.utc).timestamp() * 1000)
-        current_timestamp = int(datetime.now(timezone.utc).timestamp() * 1000)
+        
+        # Calcular timestamp final
+        if self.end_date is not None:
+            # Si se especifica end_date, usarlo como límite
+            end_date_obj = datetime.strptime(self.end_date, '%Y-%m-%d')
+            end_timestamp = int(end_date_obj.replace(tzinfo=timezone.utc).timestamp() * 1000)
+        else:
+            # Si no se especifica end_date, usar el timestamp actual
+            end_timestamp = int(datetime.now(timezone.utc).timestamp() * 1000)
+        
+        current_timestamp = end_timestamp
         
         # Calcular el intervalo en milisegundos para determinar el tamaño de los trozos
         interval_ms = self._get_interval_in_ms()
@@ -340,7 +363,8 @@ class Adquisicion:
             current_start += chunk_size_ms
         
         self.logger.info(f"Dividiendo descarga en {len(start_timestamps)} trozos")
-        self.logger.info(f"Rango total: {self.start_date} hasta ahora")
+        end_date_display = self.end_date if self.end_date else "ahora"
+        self.logger.info(f"Rango total: {self.start_date} hasta {end_date_display}")
         
         # Determinar número de procesos (usar CPU count pero limitado para no sobrecargar la API)
         num_workers = min(cpu_count(), len(start_timestamps), 8)  # Máximo 8 workers para no saturar la API

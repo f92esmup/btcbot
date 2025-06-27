@@ -53,6 +53,12 @@ normalization:
   scaler_path: "models/scaler.pkl"  # Ruta donde guardar el scaler (modo local)
   storage_mode: "gcp"        # Modo de almacenamiento: "local" o "gcp"
 
+# Configuración para Vertex AI TensorBoard
+tensorboard_vertex_ai:
+  instance_name: "8452737531086110720" # Nueva instancia de TensorBoard creada
+  experiment_name: "BTCBot Trading Experiment" # Nuevo experimento creado
+  location: "europe-west4" # La región de tu instancia de TensorBoard
+
 # Configuración de indicadores técnicos
 indicators:
   # Indicadores de tendencia

@@ -294,25 +294,26 @@ class RunManager:
                 # Search for checkpoint metadata files in the specific run
                 bucket = self.gcs_utils._get_bucket()
                 blobs = bucket.list_blobs(prefix=checkpoint_prefix)
-                metadata_pattern = re.compile(r"checkpoint_episode_(\d+)_metadata\.pkl$")
+                
+                # Regex para encontrar el número de episodio en la ruta
+                # Ej: .../checkpoints/checkpoint_episode_123/checkpoint_episode_123_metadata.pth
+                metadata_pattern = re.compile(r"checkpoint_episode_(\d+)/checkpoint_episode_\1_metadata\.pth$")
                 
                 latest_episode = -1
-                latest_checkpoint = None
                 
                 for blob in blobs:
-                    filename = blob.name.split('/')[-1]
-                    match = metadata_pattern.search(filename)
+                    match = metadata_pattern.search(blob.name)
                     if match:
                         episode_num = int(match.group(1))
                         if episode_num > latest_episode:
                             latest_episode = episode_num
-                            latest_checkpoint = f"{run_id_to_check}/checkpoints/checkpoint_episode_{episode_num}"
                 
-                if latest_checkpoint:
-                    self.logger.info(f"Checkpoint found in GCS: {latest_checkpoint} (episode {latest_episode})")
-                    return (latest_checkpoint, latest_episode)
+                if latest_episode != -1:
+                    latest_checkpoint_prefix = f"{run_id_to_check}/checkpoints/checkpoint_episode_{latest_episode}"
+                    self.logger.info(f"Último checkpoint encontrado en GCS: {latest_checkpoint_prefix} (episodio {latest_episode})")
+                    return (latest_checkpoint_prefix, latest_episode)
                 else:
-                    self.logger.info(f"No checkpoints found in run {run_id_to_check} in GCS")
+                    self.logger.info(f"No se encontraron checkpoints válidos en el run {run_id_to_check} en GCS")
                     return None
                     
             else:
@@ -325,14 +326,14 @@ class RunManager:
                     return None
                 
                 # Search for checkpoint metadata files
-                metadata_files = list(checkpoint_dir.glob("checkpoint_episode_*_metadata.pkl"))
+                metadata_files = list(checkpoint_dir.glob("checkpoint_episode_*_metadata.pth"))
                 
                 if not metadata_files:
                     self.logger.info(f"No metadata files found in: {checkpoint_dir}")
                     return None
                 
                 # Regex pattern to extract episode number
-                metadata_pattern = re.compile(r"checkpoint_episode_(\d+)_metadata\.pkl$")
+                metadata_pattern = re.compile(r"checkpoint_episode_(\d+)_metadata\.pth$")
                 
                 latest_episode_number = -1
                 latest_checkpoint_path = None
@@ -436,16 +437,17 @@ class RunManager:
             Path where checkpoint will be saved
         """
         # Extract state dictionaries and move to CPU for multiprocessing safety
+        # Using "Clean Save" principle: get underlying models without DDP wrappers
         agent_state = {
-            'actor': self._to_cpu_state_dict(agent.actor.state_dict()),
-            'critic_1': self._to_cpu_state_dict(agent.critic_1.state_dict()),
-            'critic_2': self._to_cpu_state_dict(agent.critic_2.state_dict()),
-            'critic_target_1': self._to_cpu_state_dict(agent.critic_target_1.state_dict()),
-            'critic_target_2': self._to_cpu_state_dict(agent.critic_target_2.state_dict()),
+            'actor': self._to_cpu_state_dict(agent._get_actor_model().state_dict()),
+            'critic_1': self._to_cpu_state_dict(agent._get_critic_model(agent.critic_1).state_dict()),
+            'critic_2': self._to_cpu_state_dict(agent._get_critic_model(agent.critic_2).state_dict()),
+            'critic_target_1': self._to_cpu_state_dict(agent._get_critic_model(agent.critic_target_1).state_dict()),
+            'critic_target_2': self._to_cpu_state_dict(agent._get_critic_model(agent.critic_target_2).state_dict()),
             'actor_optimizer': self._to_cpu_state_dict(agent.actor_optimizer.state_dict()),
             'critic_1_optimizer': self._to_cpu_state_dict(agent.critic_1_optimizer.state_dict()),
             'critic_2_optimizer': self._to_cpu_state_dict(agent.critic_2_optimizer.state_dict()),
-            'log_alpha': agent.log_alpha.cpu(),
+            'log_alpha': agent.log_alpha.detach().cpu(),
             'metadata': {
                 'episode': episode + 1,
                 'total_steps': agent.total_steps,
@@ -483,15 +485,19 @@ class RunManager:
         
         return checkpoint_path
     
-    def load_agent_from_checkpoint(self, agent: TransformerSACAgent, checkpoint_prefix: str) -> None:
+    def load_agent_from_checkpoint(self, agent: TransformerSACAgent, checkpoint_prefix: str, reset_optimizers: bool = False) -> None:
         """
         Load agent from a checkpoint.
         
         Args:
             agent: The agent to load into
             checkpoint_prefix: Prefix/path of the checkpoint to load
+            reset_optimizers: If True, skip loading optimizer states for fine-tuning
         """
         self.logger.info(f"Loading checkpoint from: {checkpoint_prefix}")
+        
+        if reset_optimizers:
+            self.logger.warning("⚠️  MODO FINE-TUNING ACTIVADO: Los optimizadores serán reiniciados con los hiperparámetros actuales")
         
         try:
             if self.storage_mode == "gcp":
@@ -536,15 +542,16 @@ class RunManager:
                     agent.critic_target_1.load_state_dict(torch.load(os.path.join(temp_dir, "critic_target_1.pth"), map_location=agent.device))
                     agent.critic_target_2.load_state_dict(torch.load(os.path.join(temp_dir, "critic_target_2.pth"), map_location=agent.device))
                     
-                    # Load optimizer state dictionaries
-                    agent.actor_optimizer.load_state_dict(torch.load(os.path.join(temp_dir, "actor_optimizer.pth"), map_location=agent.device))
-                    agent.critic_1_optimizer.load_state_dict(torch.load(os.path.join(temp_dir, "critic_1_optimizer.pth"), map_location=agent.device))
-                    agent.critic_2_optimizer.load_state_dict(torch.load(os.path.join(temp_dir, "critic_2_optimizer.pth"), map_location=agent.device))
-                    
-                    # Load alpha and its optimizer
-                    agent.log_alpha = torch.load(os.path.join(temp_dir, "log_alpha.pth"), map_location=agent.device)
-                    if agent.learn_alpha and os.path.exists(os.path.join(temp_dir, "alpha_optimizer.pth")):
-                        agent.alpha_optimizer.load_state_dict(torch.load(os.path.join(temp_dir, "alpha_optimizer.pth"), map_location=agent.device))
+                    # Load optimizer state dictionaries and log_alpha only if not in fine-tuning mode
+                    if not reset_optimizers:
+                        agent.actor_optimizer.load_state_dict(torch.load(os.path.join(temp_dir, "actor_optimizer.pth"), map_location=agent.device))
+                        agent.critic_1_optimizer.load_state_dict(torch.load(os.path.join(temp_dir, "critic_1_optimizer.pth"), map_location=agent.device))
+                        agent.critic_2_optimizer.load_state_dict(torch.load(os.path.join(temp_dir, "critic_2_optimizer.pth"), map_location=agent.device))
+                        
+                        # Load alpha and its optimizer
+                        agent.log_alpha = torch.load(os.path.join(temp_dir, "log_alpha.pth"), map_location=agent.device)
+                        if agent.learn_alpha and os.path.exists(os.path.join(temp_dir, "alpha_optimizer.pth")):
+                            agent.alpha_optimizer.load_state_dict(torch.load(os.path.join(temp_dir, "alpha_optimizer.pth"), map_location=agent.device))
                         
             else:
                 # Local mode: load directly from files
@@ -565,15 +572,16 @@ class RunManager:
                 agent.critic_target_1.load_state_dict(torch.load(f"{prefix}_critic_target_1.pth", map_location=agent.device))
                 agent.critic_target_2.load_state_dict(torch.load(f"{prefix}_critic_target_2.pth", map_location=agent.device))
                 
-                # Load optimizer state dictionaries
-                agent.actor_optimizer.load_state_dict(torch.load(f"{prefix}_actor_optimizer.pth", map_location=agent.device))
-                agent.critic_1_optimizer.load_state_dict(torch.load(f"{prefix}_critic_1_optimizer.pth", map_location=agent.device))
-                agent.critic_2_optimizer.load_state_dict(torch.load(f"{prefix}_critic_2_optimizer.pth", map_location=agent.device))
-                
-                # Load alpha and its optimizer
-                agent.log_alpha = torch.load(f"{prefix}_log_alpha.pth", map_location=agent.device)
-                if agent.learn_alpha and os.path.exists(f"{prefix}_alpha_optimizer.pth"):
-                    agent.alpha_optimizer.load_state_dict(torch.load(f"{prefix}_alpha_optimizer.pth", map_location=agent.device))
+                # Load optimizer state dictionaries and log_alpha only if not in fine-tuning mode
+                if not reset_optimizers:
+                    agent.actor_optimizer.load_state_dict(torch.load(f"{prefix}_actor_optimizer.pth", map_location=agent.device))
+                    agent.critic_1_optimizer.load_state_dict(torch.load(f"{prefix}_critic_1_optimizer.pth", map_location=agent.device))
+                    agent.critic_2_optimizer.load_state_dict(torch.load(f"{prefix}_critic_2_optimizer.pth", map_location=agent.device))
+                    
+                    # Load alpha and its optimizer
+                    agent.log_alpha = torch.load(f"{prefix}_log_alpha.pth", map_location=agent.device)
+                    if agent.learn_alpha and os.path.exists(f"{prefix}_alpha_optimizer.pth"):
+                        agent.alpha_optimizer.load_state_dict(torch.load(f"{prefix}_alpha_optimizer.pth", map_location=agent.device))
             
             self.logger.info("✅ Checkpoint loaded successfully")
             
@@ -592,16 +600,17 @@ class RunManager:
             Path where model will be saved
         """
         # Extract state dictionaries and move to CPU for multiprocessing safety
+        # Using "Clean Save" principle: get underlying models without DDP wrappers
         agent_state = {
-            'actor': self._to_cpu_state_dict(agent.actor.state_dict()),
-            'critic_1': self._to_cpu_state_dict(agent.critic_1.state_dict()),
-            'critic_2': self._to_cpu_state_dict(agent.critic_2.state_dict()),
-            'critic_target_1': self._to_cpu_state_dict(agent.critic_target_1.state_dict()),
-            'critic_target_2': self._to_cpu_state_dict(agent.critic_target_2.state_dict()),
+            'actor': self._to_cpu_state_dict(agent._get_actor_model().state_dict()),
+            'critic_1': self._to_cpu_state_dict(agent._get_critic_model(agent.critic_1).state_dict()),
+            'critic_2': self._to_cpu_state_dict(agent._get_critic_model(agent.critic_2).state_dict()),
+            'critic_target_1': self._to_cpu_state_dict(agent._get_critic_model(agent.critic_target_1).state_dict()),
+            'critic_target_2': self._to_cpu_state_dict(agent._get_critic_model(agent.critic_target_2).state_dict()),
             'actor_optimizer': self._to_cpu_state_dict(agent.actor_optimizer.state_dict()),
             'critic_1_optimizer': self._to_cpu_state_dict(agent.critic_1_optimizer.state_dict()),
             'critic_2_optimizer': self._to_cpu_state_dict(agent.critic_2_optimizer.state_dict()),
-            'log_alpha': agent.log_alpha.cpu(),
+            'log_alpha': agent.log_alpha.detach().cpu(),
             'metadata': {
                 'total_steps': agent.total_steps,
                 'learning_steps': agent.learning_steps,
@@ -649,16 +658,17 @@ class RunManager:
             Path where model will be saved
         """
         # Extract state dictionaries and move to CPU for multiprocessing safety
+        # Using "Clean Save" principle: get underlying models without DDP wrappers
         agent_state = {
-            'actor': self._to_cpu_state_dict(agent.actor.state_dict()),
-            'critic_1': self._to_cpu_state_dict(agent.critic_1.state_dict()),
-            'critic_2': self._to_cpu_state_dict(agent.critic_2.state_dict()),
-            'critic_target_1': self._to_cpu_state_dict(agent.critic_target_1.state_dict()),
-            'critic_target_2': self._to_cpu_state_dict(agent.critic_target_2.state_dict()),
+            'actor': self._to_cpu_state_dict(agent._get_actor_model().state_dict()),
+            'critic_1': self._to_cpu_state_dict(agent._get_critic_model(agent.critic_1).state_dict()),
+            'critic_2': self._to_cpu_state_dict(agent._get_critic_model(agent.critic_2).state_dict()),
+            'critic_target_1': self._to_cpu_state_dict(agent._get_critic_model(agent.critic_target_1).state_dict()),
+            'critic_target_2': self._to_cpu_state_dict(agent._get_critic_model(agent.critic_target_2).state_dict()),
             'actor_optimizer': self._to_cpu_state_dict(agent.actor_optimizer.state_dict()),
             'critic_1_optimizer': self._to_cpu_state_dict(agent.critic_1_optimizer.state_dict()),
             'critic_2_optimizer': self._to_cpu_state_dict(agent.critic_2_optimizer.state_dict()),
-            'log_alpha': agent.log_alpha.cpu(),
+            'log_alpha': agent.log_alpha.detach().cpu(),
             'metadata': {
                 'total_steps': agent.total_steps,
                 'learning_steps': agent.learning_steps,
@@ -717,3 +727,66 @@ class RunManager:
             self.base_path = f"Entrenamientos/{self.run_id}"
         
         self.logger.info(f"RunManager context updated - run_id: {self.run_id}, base_path: {self.base_path}")
+
+    def download_and_load_yaml_config(self, run_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Download and load YAML configuration file for a specific run.
+        
+        This method handles both GCS and local storage modes, downloading the
+        config_run.yaml file and returning its contents as a Python dictionary.
+        
+        Args:
+            run_id: The run ID for which to load the configuration
+            
+        Returns:
+            Dict containing the configuration, or None if file doesn't exist or error occurs
+        """
+        self.logger.info(f"Loading configuration for run: {run_id}")
+        
+        try:
+            if self.storage_mode == "gcp":
+                # Construct GCS blob name
+                blob_name = f"{run_id}/config_run.yaml"
+                self.logger.info(f"Downloading config from GCS: {blob_name}")
+                
+                # Use GCS utils to download the file
+                if self.gcs_utils is None:
+                    raise ValueError("GCS utils not available but storage mode is GCP")
+                
+                # Download blob content directly to memory
+                bucket = self.gcs_utils.client.bucket(self.gcs_utils.bucket_name)
+                blob = bucket.blob(blob_name)
+                
+                if not blob.exists():
+                    self.logger.warning(f"Configuration file not found in GCS: {blob_name}")
+                    return None
+                
+                # Download as string and parse YAML
+                yaml_content = blob.download_as_string().decode('utf-8')
+                self.logger.info("Configuration downloaded successfully from GCS")
+                
+                # Load YAML content
+                config_data = yaml.safe_load(yaml_content)
+                self.logger.info("Configuration loaded successfully from GCS")
+                return config_data
+                            
+            else:
+                # Local storage mode
+                config_path = Path(f"Entrenamientos/{run_id}/config_run.yaml")
+                self.logger.info(f"Loading config from local path: {config_path}")
+                
+                if not config_path.exists():
+                    self.logger.warning(f"Configuration file not found locally: {config_path}")
+                    return None
+                
+                with open(config_path, 'r', encoding='utf-8') as f:
+                    config_data = yaml.safe_load(f)
+                
+                self.logger.info("Configuration loaded successfully from local storage")
+                return config_data
+                
+        except Exception as e:
+            self.logger.error(f"Error loading configuration for run {run_id}: {str(e)}")
+            import traceback
+            self.logger.error(f"Traceback: {traceback.format_exc()}")
+            return None

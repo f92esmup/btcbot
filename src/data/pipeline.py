@@ -16,7 +16,7 @@ from .normalization import Normalization
 class DataPipeline:
     """Clase que unifica todo el preprocesamiento de datos."""
     
-    def __init__(self, symbol: str, interval: str, start_date: str, run_id: str, base_path: str):
+    def __init__(self, symbol: str, interval: str, start_date: str, run_id: str, base_path: str, end_date: str = None, save_artifacts: bool = True):
         """
         Inicializa el pipeline de datos.
         
@@ -26,21 +26,26 @@ class DataPipeline:
             start_date (str): Fecha de inicio en formato YYYY-MM-DD
             run_id (str): Identificador único del entrenamiento
             base_path (str): Ruta base para guardar los artifacts del entrenamiento
+            end_date (str, optional): Fecha de fin en formato YYYY-MM-DD
+            save_artifacts (bool): Si True, guarda artefactos como scalers
         """
         self.symbol = symbol
         self.interval = interval
         self.start_date = start_date
+        self.end_date = end_date
         self.run_id = run_id
         self.base_path = base_path
+        self.save_artifacts = save_artifacts
         
         # Configurar logging
         logging.basicConfig(level=logging.INFO)
         self.logger = logging.getLogger(__name__)
         
         self.logger.info(f"Pipeline de datos inicializado para {symbol} ({interval})")
-        self.logger.info(f"Período: desde {start_date}")
+        self.logger.info(f"Período: desde {start_date}" + (f" hasta {end_date}" if end_date else " hasta ahora"))
         self.logger.info(f"Run ID: {run_id}")
         self.logger.info(f"Base path: {base_path}")
+        self.logger.info(f"Guardar artefactos: {save_artifacts}")
     
     def run(self) -> Tuple[pd.DataFrame, str]:
         """
@@ -56,7 +61,8 @@ class DataPipeline:
         adquisicion = Adquisicion(
             symbol=self.symbol,
             interval=self.interval,
-            start_date=self.start_date
+            start_date=self.start_date,
+            end_date=self.end_date
         )
         #dataframe = adquisicion.main()
         dataframe = adquisicion.main_parallel()
@@ -89,15 +95,21 @@ class DataPipeline:
         normalization = Normalization(
             dataframe_with_indicators, 
             base_path=self.base_path, 
-            run_id=self.run_id
+            run_id=self.run_id,
+            save_artifacts=self.save_artifacts
         )
         normalized_dataframe, scaler = normalization.main()
         
         self.logger.info(f"Normalización completada exitosamente:")
         self.logger.info(f"  - Forma del DataFrame normalizado: {normalized_dataframe.shape}")
         self.logger.info(f"  - Rango de valores: [{normalized_dataframe.min().min():.6f}, {normalized_dataframe.max().max():.6f}]")
-        self.logger.info(f"  - Scaler guardado en: {normalization.scaler_path}")
-        self.logger.info(f"  - Price scaler guardado en: {normalization.price_scaler_path}")
+        
+        if self.save_artifacts:
+            self.logger.info(f"  - Scaler guardado en: {normalization.scaler_path}")
+            self.logger.info(f"  - Price scaler guardado en: {normalization.price_scaler_path}")
+        else:
+            self.logger.info("  - Artefactos no guardados (save_artifacts=False)")
+            
         self.logger.info(f"  - Memoria utilizada: {normalized_dataframe.memory_usage(deep=True).sum() / 1024**2:.2f} MB")
         
         # Mostrar información del scaler

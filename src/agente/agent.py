@@ -6,6 +6,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
+from torch.nn.parallel import DistributedDataParallel as DDP
 import numpy as np
 from typing import Dict, Any, Tuple, Optional, Union
 from pathlib import Path
@@ -22,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 class TransformerSACAgent:
     """
-    Agente SAC con arquitectura Transformer para procesar secuencias de mercado.
+    Agente SAC que funciona tanto en modo de un solo nodo como en modo distribuido (con DDP).
     
     Implementa el algoritmo Soft Actor-Critic con:
     - Actor que produce distribución de política
@@ -39,7 +40,8 @@ class TransformerSACAgent:
         portfolio_features: int,
         sequence_length: int,
         device: Optional[torch.device] = None,
-        config_override: Optional[Dict[str, Any]] = None
+        config_override: Optional[Dict[str, Any]] = None,
+        is_distributed: bool = False  # Flag para activar el modo distribuido
     ):
         """
         Inicializa el agente SAC.
@@ -52,8 +54,10 @@ class TransformerSACAgent:
             sequence_length: Longitud de la secuencia (ventana)
             device: Dispositivo de cómputo
             config_override: Configuración opcional para sobrescribir
+            is_distributed: Flag para activar el modo distribuido con DDP
         """
         self.device = device or torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        self.is_distributed = is_distributed
         
         # Parámetros del espacio
         self.observation_space_shape = observation_space_shape
@@ -115,7 +119,7 @@ class TransformerSACAgent:
         # Inicializar GradScaler para Automatic Mixed Precision (AMP)
         self.scaler = torch.cuda.amp.GradScaler(enabled=(self.device.type == 'cuda'))
         
-        logger.info(f"TransformerSACAgent inicializado en {self.device}")
+        logger.info(f"TransformerSACAgent inicializado en {self.device}. Modo distribuido: {self.is_distributed}")
         logger.info(f"  - Observación shape: {observation_space_shape}")
         logger.info(f"  - Acción dim: {self.action_dim}")
         logger.info(f"  - Market features: {market_features}")
@@ -150,7 +154,7 @@ class TransformerSACAgent:
         }
     
     def _init_networks(self) -> None:
-        """Inicializa todas las redes neuronales."""
+        """Inicializa las redes y las envuelve para DDP si está en modo distribuido."""
         transformer_config = self.config['transformer_config']
         mlp_hidden_dims = self.config['mlp_hidden_dims']
         
@@ -163,13 +167,10 @@ class TransformerSACAgent:
             action_dim=self.action_dim,
             max_seq_len=self.sequence_length
         ).to(self.device)
-        
-        # Note: Actor is not JIT-compiled because it uses additional methods (sample, log_prob)
-        # beyond forward() that are not easily traceable by JIT
-        logger.info("✅ ActorNetwork creado (sin JIT compilation debido a métodos adicionales)")
-        
-        # Redes de los Críticos (2 redes)
-        critic_1_network = CriticNetwork(
+        logger.info("✅ ActorNetwork creado.")
+
+        # Redes de los Críticos (sin JIT)
+        self.critic_1 = CriticNetwork(
             market_features=self.market_features,
             portfolio_features=self.portfolio_features,
             action_dim=self.action_dim,
@@ -178,14 +179,18 @@ class TransformerSACAgent:
             max_seq_len=self.sequence_length
         ).to(self.device)
         
-        try:
-            self.critic_1 = torch.jit.script(critic_1_network)
-            logger.info("✅ JIT compilation aplicada exitosamente al CriticNetwork 1")
-        except Exception as e:
-            logger.warning(f"⚠️ JIT compilation falló para CriticNetwork 1: {e}. Usando red normal.")
-            self.critic_1 = critic_1_network
-        
-        critic_2_network = CriticNetwork(
+        self.critic_2 = CriticNetwork(
+            market_features=self.market_features,
+            portfolio_features=self.portfolio_features,
+            action_dim=self.action_dim,
+            transformer_config=transformer_config,
+            mlp_hidden_dims=mlp_hidden_dims,
+            max_seq_len=self.sequence_length
+        ).to(self.device)
+        logger.info("✅ CriticNetworks creados (sin JIT).")
+
+        # Redes objetivo (copias de los críticos, sin JIT)
+        self.critic_target_1 = CriticNetwork(
             market_features=self.market_features,
             portfolio_features=self.portfolio_features,
             action_dim=self.action_dim,
@@ -194,15 +199,7 @@ class TransformerSACAgent:
             max_seq_len=self.sequence_length
         ).to(self.device)
         
-        try:
-            self.critic_2 = torch.jit.script(critic_2_network)
-            logger.info("✅ JIT compilation aplicada exitosamente al CriticNetwork 2")
-        except Exception as e:
-            logger.warning(f"⚠️ JIT compilation falló para CriticNetwork 2: {e}. Usando red normal.")
-            self.critic_2 = critic_2_network
-        
-        # Redes objetivo (copias de los críticos)
-        critic_target_1_network = CriticNetwork(
+        self.critic_target_2 = CriticNetwork(
             market_features=self.market_features,
             portfolio_features=self.portfolio_features,
             action_dim=self.action_dim,
@@ -210,33 +207,29 @@ class TransformerSACAgent:
             mlp_hidden_dims=mlp_hidden_dims,
             max_seq_len=self.sequence_length
         ).to(self.device)
-        
-        try:
-            self.critic_target_1 = torch.jit.script(critic_target_1_network)
-            logger.info("✅ JIT compilation aplicada exitosamente al CriticNetwork Target 1")
-        except Exception as e:
-            logger.warning(f"⚠️ JIT compilation falló para CriticNetwork Target 1: {e}. Usando red normal.")
-            self.critic_target_1 = critic_target_1_network
-        
-        critic_target_2_network = CriticNetwork(
-            market_features=self.market_features,
-            portfolio_features=self.portfolio_features,
-            action_dim=self.action_dim,
-            transformer_config=transformer_config,
-            mlp_hidden_dims=mlp_hidden_dims,
-            max_seq_len=self.sequence_length
-        ).to(self.device)
-        
-        try:
-            self.critic_target_2 = torch.jit.script(critic_target_2_network)
-            logger.info("✅ JIT compilation aplicada exitosamente al CriticNetwork Target 2")
-        except Exception as e:
-            logger.warning(f"⚠️ JIT compilation falló para CriticNetwork Target 2: {e}. Usando red normal.")
-            self.critic_target_2 = critic_target_2_network
-        
+        logger.info("✅ Critic Target Networks creados (sin JIT).")
+
+        # Envolver con DDP si está en modo distribuido
+        if self.is_distributed:
+            logger.info(f"Envolviendo modelos con DistributedDataParallel en el dispositivo {self.device}.")
+            if self.device.type == 'cuda':
+                # Para dispositivos CUDA, especificar device_ids
+                device_ids = [self.device.index] if self.device.index is not None else None
+                self.actor = DDP(self.actor, device_ids=device_ids)
+                self.critic_1 = DDP(self.critic_1, device_ids=device_ids)
+                self.critic_2 = DDP(self.critic_2, device_ids=device_ids)
+            else:
+                # Para CPU, no especificar device_ids
+                self.actor = DDP(self.actor)
+                self.critic_1 = DDP(self.critic_1)
+                self.critic_2 = DDP(self.critic_2)
+
         # Copiar pesos a las redes objetivo
-        self.critic_target_1.load_state_dict(self.critic_1.state_dict())
-        self.critic_target_2.load_state_dict(self.critic_2.state_dict())
+        critic1_model = self._get_critic_model(self.critic_1)
+        critic2_model = self._get_critic_model(self.critic_2)
+        
+        self.critic_target_1.load_state_dict(critic1_model.state_dict())
+        self.critic_target_2.load_state_dict(critic2_model.state_dict())
         
         # Congelar redes objetivo
         for param in self.critic_target_1.parameters():
@@ -263,8 +256,24 @@ class TransformerSACAgent:
     
     @property
     def alpha(self) -> torch.Tensor:
-        """Parámetro de temperatura actual."""
-        return torch.exp(self.log_alpha)
+        """Valor actual del parámetro de temperatura alpha."""
+        return self.log_alpha.exp()
+    
+    def _get_actor_model(self):
+        """Obtiene el modelo actor subyacente (sin envoltura DDP)."""
+        # Verificar si la red específica tiene el atributo 'module' (está envuelta con DDP)
+        if hasattr(self.actor, 'module'):
+            return self.actor.module
+        else:
+            return self.actor
+    
+    def _get_critic_model(self, critic_network):
+        """Obtiene el modelo crítico subyacente (sin envoltura DDP)."""
+        # Verificar si la red específica tiene el atributo 'module' (está envuelta con DDP)
+        if hasattr(critic_network, 'module'):
+            return critic_network.module
+        else:
+            return critic_network
     
     def select_action(self, market_data: torch.Tensor, portfolio_data: torch.Tensor, deterministic: bool = False) -> np.ndarray:
         """
@@ -279,13 +288,16 @@ class TransformerSACAgent:
             Acción seleccionada
         """
         with torch.no_grad():
+            # Obtener el modelo actor subyacente
+            actor_model = self._get_actor_model()
+            
             if deterministic:
                 # Para evaluación: usar la media de la distribución
-                mean, _ = self.actor(market_data, portfolio_data)
+                mean, _ = actor_model(market_data, portfolio_data)
                 action = torch.tanh(mean)
             else:
                 # Para entrenamiento: muestrear de la distribución
-                action, _ = self.actor.sample(market_data, portfolio_data)
+                action, _ = actor_model.sample(market_data, portfolio_data)
         
         return action.cpu().numpy().flatten()
     
@@ -329,10 +341,13 @@ class TransformerSACAgent:
         scaled_rewards = (rewards - rewards.mean()) / (rewards.std() + 1e-8)
         
         with torch.no_grad():
-            # Siguiente acción y log_prob usando la política actual
-            next_actions, next_log_probs = self.actor.sample(next_market_data, next_portfolio_data)
+            # Obtener el modelo actor subyacente
+            actor_model = self._get_actor_model()
             
-            # Q-valores objetivo
+            # Siguiente acción y log_prob usando la política actual
+            next_actions, next_log_probs = actor_model.sample(next_market_data, next_portfolio_data)
+            
+            # Q-valores objetivo (las redes objetivo nunca están envueltas en DDP)
             target_q1 = self.critic_target_1(next_market_data, next_portfolio_data, next_actions)
             target_q2 = self.critic_target_2(next_market_data, next_portfolio_data, next_actions)
             
@@ -344,8 +359,12 @@ class TransformerSACAgent:
         
         # Actualizar críticos
         with torch.cuda.amp.autocast(enabled=(self.device.type == 'cuda')):
-            current_q1 = self.critic_1(market_data, portfolio_data, actions)
-            current_q2 = self.critic_2(market_data, portfolio_data, actions)
+            # Obtener los modelos críticos subyacentes
+            critic_1_model = self._get_critic_model(self.critic_1)
+            critic_2_model = self._get_critic_model(self.critic_2)
+            
+            current_q1 = critic_1_model(market_data, portfolio_data, actions)
+            current_q2 = critic_2_model(market_data, portfolio_data, actions)
             
             critic_1_loss = F.mse_loss(current_q1, q_targets)
             critic_2_loss = F.mse_loss(current_q2, q_targets)
@@ -362,10 +381,16 @@ class TransformerSACAgent:
         
         # Actualizar actor
         with torch.cuda.amp.autocast(enabled=(self.device.type == 'cuda')):
-            new_actions, log_probs = self.actor.sample(market_data, portfolio_data)
+            # Obtener los modelos subyacentes
+            actor_model = self._get_actor_model()
+            new_actions, log_probs = actor_model.sample(market_data, portfolio_data)
             
-            q1_new = self.critic_1(market_data, portfolio_data, new_actions)
-            q2_new = self.critic_2(market_data, portfolio_data, new_actions)
+            # Obtener los modelos críticos subyacentes
+            critic_1_model = self._get_critic_model(self.critic_1)
+            critic_2_model = self._get_critic_model(self.critic_2)
+            
+            q1_new = critic_1_model(market_data, portfolio_data, new_actions)
+            q2_new = critic_2_model(market_data, portfolio_data, new_actions)
             q_new = torch.min(q1_new, q2_new)
             
             actor_loss = (self.alpha * log_probs - q_new).mean()
@@ -409,11 +434,14 @@ class TransformerSACAgent:
     
     def _soft_update_target_networks(self) -> None:
         """Actualización suave de las redes objetivo."""
-        for target_param, param in zip(self.critic_target_1.parameters(), self.critic_1.parameters()):
-            target_param.data.copy_(self.tau * param.data + (1 - self.tau) * target_param.data)
+        critic1_model = self._get_critic_model(self.critic_1)
+        critic2_model = self._get_critic_model(self.critic_2)
         
-        for target_param, param in zip(self.critic_target_2.parameters(), self.critic_2.parameters()):
-            target_param.data.copy_(self.tau * param.data + (1 - self.tau) * target_param.data)
+        for target_param, param in zip(self.critic_target_1.parameters(), critic1_model.parameters()):
+            target_param.data.copy_(self.tau * param.data + (1.0 - self.tau) * target_param.data)
+        
+        for target_param, param in zip(self.critic_target_2.parameters(), critic2_model.parameters()):
+            target_param.data.copy_(self.tau * param.data + (1.0 - self.tau) * target_param.data)
     
     def eval_mode(self) -> None:
         """

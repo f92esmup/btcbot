@@ -215,6 +215,27 @@ class Config:
     def gcs_price_scaler_blob_name(self) -> str:
         """Nombre del archivo price_scaler en GCS."""
         return self._config.get('gcp', {}).get('storage', {}).get('price_scaler_blob_name', 'price_scaler.pkl')
+
+    # Propiedades para Vertex AI TensorBoard
+    @property
+    def tensorboard_vertex_ai_config(self) -> Dict[str, Any]:
+        """Configuración completa de Vertex AI TensorBoard."""
+        return self._config.get('tensorboard_vertex_ai', {})
+
+    @property
+    def tensorboard_instance_name(self) -> Optional[str]:
+        """Nombre de la instancia de Vertex AI TensorBoard."""
+        return self.tensorboard_vertex_ai_config.get('instance_name')
+
+    @property
+    def tensorboard_experiment_name(self) -> str:
+        """Nombre del experimento de TensorBoard."""
+        return self.tensorboard_vertex_ai_config.get('experiment_name', 'default-experiment')
+
+    @property
+    def tensorboard_location(self) -> Optional[str]:
+        """Ubicación/región de la instancia de TensorBoard."""
+        return self.tensorboard_vertex_ai_config.get('location')
     
     # Propiedades para indicadores técnicos
     @property
