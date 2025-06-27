@@ -219,24 +219,30 @@ def main():
         logger.info(f"[Proceso {rank}] run_id sincronizado: {run_id}")
     
     # === INICIALIZACIÓN DE COMPONENTES DE GESTIÓN ===
-    # Solo el proceso jefe inicializa los componentes de gestión y logging completos
-    if is_chief:
-        logger.info("=== INICIALIZACIÓN DE COMPONENTES (PROCESO JEFE) ===")
-        
-        # Crear instancia única de GCSUtils para todo el proceso
-        gcs_utils = None
-        if config.storage_mode == "gcp":
-            from src.configuration.gcs_utils import gcs_utils
-            logger.info("Usando instancia global de GCSUtils para modo GCP")
+    # Crear instancia única de RunManager para TODOS los procesos (lectura)
+    # pero solo el jefe realizará operaciones de escritura
+    gcs_utils = None
+    if config.storage_mode == "gcp":
+        from src.configuration.gcs_utils import gcs_utils
+        logger.info(f"[Proceso {rank}] Usando instancia global de GCSUtils para modo GCP")
 
-        # Determinar base_path según storage_mode
-        if config.storage_mode == "gcp":
-            base_path = f"gs://{config.gcs_bucket_name}/{run_id}"
-            logger.info(f"Modo GCP: Los artefactos se guardarán en {base_path}")
-        else:
-            base_path = Path("Entrenamientos") / run_id
+    # Determinar base_path según storage_mode (todos los procesos)
+    if config.storage_mode == "gcp":
+        base_path = f"gs://{config.gcs_bucket_name}/{run_id}"
+        logger.info(f"[Proceso {rank}] Modo GCP: Los artefactos se accederán desde {base_path}")
+    else:
+        base_path = Path("Entrenamientos") / run_id
+        if is_chief:
             base_path.mkdir(parents=True, exist_ok=True)
-            logger.info(f"Modo Local: Los artefactos se guardarán en {base_path}")
+        logger.info(f"[Proceso {rank}] Modo Local: Los artefactos se accederán desde {base_path}")
+
+    # Crear instancia de RunManager para TODOS los procesos
+    run_manager = RunManager(base_path=str(base_path), run_id=run_id, gcs_utils=gcs_utils)
+    logger.info(f"[Proceso {rank}] RunManager creado - Base path: {base_path}")
+    
+    # Solo el proceso jefe inicializa los componentes de logging y configuración
+    if is_chief:
+        logger.info("=== INICIALIZACIÓN DE COMPONENTES ADICIONALES (PROCESO JEFE) ===")
 
         # Lógica de TensorBoard modificada
         # Para el modo local, seguimos creando un directorio.
@@ -288,34 +294,18 @@ def main():
         # Log hyperparameters
         tb_logger.log_hyperparameters(hparams)
         
-        # Crear instancia única de RunManager para todo el proceso
-        run_manager = RunManager(base_path=str(base_path), run_id=run_id, gcs_utils=gcs_utils)
-        logger.info(f"RunManager centralizado creado - Base path: {base_path}")
-        
-        # Guardar configuración del run usando RunManager
+        # Guardar configuración del run usando RunManager (SOLO EL JEFE ESCRIBE)
         try:
             run_manager.save_run_config(hparams=hparams, args=args)
         except Exception as e:
             logger.error(f"Error al guardar config_run.yaml: {e}")
             # Continuar ejecución ya que este error no es crítico
-    
-    # === COMPARTIR INFORMACIÓN BÁSICA CON TODOS LOS PROCESOS ===
-    # Todos los procesos necesitan acceso a base_path para las operaciones del pipeline
-    if not is_chief:
-        # Los procesos no-jefe calculan su propio base_path usando el run_id sincronizado
-        logger.info(f"=== PROCESO NO-JEFE (RANK {rank}) - INICIALIZACIÓN BÁSICA ===")
-        gcs_utils = None
-        if config.storage_mode == "gcp":
-            base_path = f"gs://{config.gcs_bucket_name}/{run_id}"
-        else:
-            base_path = Path("Entrenamientos") / run_id
-        
-        # Variables de gestión que solo usa el jefe se inicializan a None
+    else:
+        # Los procesos no-jefe inicializan variables de gestión que no usan a None
         tensorboard_dir = None
         tb_logger = None
         hparams = None
-        run_manager = None
-        logger.info(f"Variables básicas inicializadas - Base path: {base_path}")
+        logger.info(f"[Proceso {rank}] Variables de logging inicializadas como None")
     
     try:
         # === FASE 1: EL PROCESO JEFE GENERA Y GUARDA LOS ARTEFACTOS ===
@@ -383,7 +373,7 @@ def main():
         env = create_trading_environment(
             dataframe,  # Disponible en todos los procesos
             logger,
-            run_manager if is_chief else None,  # Solo el jefe tiene run_manager
+            run_manager,  # Ahora todos los procesos tienen run_manager
             price_scaler_path=path_price_scaler_a_cargar,
             price_scaler_blob_name=blob_name_price_scaler_a_cargar
         )
@@ -407,7 +397,7 @@ def main():
                 # Se especificó un run_id para cargar checkpoint
                 logger.info(f"[Proceso Jefe] Intentando reanudar desde checkpoint del run_id: {args.checkpoint}")
                 
-                # Buscar checkpoint en el run_id específico usando RunManager
+                # Buscar checkpoint en el run_id específico usando RunManager (SOLO LECTURA)
                 checkpoint_info = run_manager.find_latest_checkpoint(args.checkpoint)
                 
                 if checkpoint_info:
@@ -418,6 +408,7 @@ def main():
                     
                     try:
                         logger.info(f"[Proceso Jefe] Cargando checkpoint desde: {checkpoint_prefix}")
+                        # CARGA DE CHECKPOINT - Solo el jefe carga el estado del agente
                         run_manager.load_agent_from_checkpoint(agent, checkpoint_prefix, reset_optimizers=args.fine_tune_mode)
                         
                         start_episode = latest_episode
@@ -470,15 +461,15 @@ def main():
                 dist.broadcast(param.data, src=0)
             
             # Sincronizar pesos de los Critics
-            for param in agent.critic1.parameters():
+            for param in agent.critic_1.parameters():
                 dist.broadcast(param.data, src=0)
-            for param in agent.critic2.parameters():
+            for param in agent.critic_2.parameters():
                 dist.broadcast(param.data, src=0)
             
             # Sincronizar pesos de los Critics Target
-            for param in agent.critic1_target.parameters():
+            for param in agent.critic_target_1.parameters():
                 dist.broadcast(param.data, src=0)
-            for param in agent.critic2_target.parameters():
+            for param in agent.critic_target_2.parameters():
                 dist.broadcast(param.data, src=0)
             
             # Sincronizar parámetro de temperatura (alpha)
@@ -529,7 +520,7 @@ def main():
             env=env,
             evaluator=evaluator,  # Solo el jefe tiene evaluador
             logger=tb_logger if is_chief else None,  # Solo el jefe tiene tb_logger
-            run_manager=run_manager if is_chief else None,  # Solo el jefe tiene run_manager
+            run_manager=run_manager if is_chief else None,  # Solo el jefe usa run_manager para escritura
             trainer_config=trainer_config,
             logger_console=logger
         )
