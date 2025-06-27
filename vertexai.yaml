@@ -17,7 +17,7 @@ workerPoolSpecs:
       acceleratorType: 'NVIDIA_TESLA_T4'
 
       # acceleratorCount: The number of GPUs to attach to the machine.
-      acceleratorCount: 2
+      acceleratorCount: 1
     
     # replicaCount: The number of worker replicas in this pool.
     # For single-machine training, this is 1.
@@ -31,7 +31,7 @@ workerPoolSpecs:
       imageUri: 'europe-southwest1-docker.pkg.dev/btcbot-461022/btcbotrepo/btcbot-train-gpu:latest'
       
       # Forma CORRECTA para multi-GPU en un nodo
-      command: ["torchrun", "--nproc_per_node=2", "train.py"]
+      #command: ["torchrun", "--nproc_per_node=2", "train.py"]
 
 
       # args: Arguments to pass to the ENTRYPOINT of your Docker container (train.py).
@@ -40,11 +40,11 @@ workerPoolSpecs:
         - '--symbol=BTCUSDT'
         - '--interval=1h'
         - '--start-date=2025-01-01' # Example start date
-        - '--episodes=20'         # Example number of episodes
-        - '--eval-frequency=10'
-        - '--save-frequency=15'
+        - '--episodes=10'         # Example number of episodes
+        - '--eval-frequency=7'
+        - '--save-frequency=3'
         - '--eval-episodes=1'
-#        - '--checkpoint=BTCUSDT_1h_73_20250626-234528' # <-- El run_id que anotaste antes
+#        - '--checkpoint=BTCUSDT_1h_73_20250627-115512' # <-- El run_id que anotaste antes
 #        - '--fine-tune-mode' # <-- ¡Aquí está la diferencia!
         # IMPORTANT: Do NOT include '--no-cuda' if you want to use the GPU.
         # Your train.py script's setup_device() function will detect and use the GPU.

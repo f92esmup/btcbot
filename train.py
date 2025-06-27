@@ -565,7 +565,10 @@ def main():
 
 
 if __name__ == "__main__":
+    # Forzar a NCCL a usar una interfaz de red común en entornos cloud para evitar timeouts.
+    os.environ['NCCL_SOCKET_IFNAME'] = 'eth0'
     # AÑADE ESTA LÍNEA AQUÍ DENTRO:
+
     # Forzar el método 'spawn' para multiprocessing para evitar problemas de CUDA
     # en los procesos hijos que guardan los modelos. Es la solución estándar.
     torch.multiprocessing.set_start_method('spawn', force=True)

@@ -437,12 +437,13 @@ class RunManager:
             Path where checkpoint will be saved
         """
         # Extract state dictionaries and move to CPU for multiprocessing safety
+        # Using "Clean Save" principle: get underlying models without DDP wrappers
         agent_state = {
-            'actor': self._to_cpu_state_dict(agent.actor.state_dict()),
-            'critic_1': self._to_cpu_state_dict(agent.critic_1.state_dict()),
-            'critic_2': self._to_cpu_state_dict(agent.critic_2.state_dict()),
-            'critic_target_1': self._to_cpu_state_dict(agent.critic_target_1.state_dict()),
-            'critic_target_2': self._to_cpu_state_dict(agent.critic_target_2.state_dict()),
+            'actor': self._to_cpu_state_dict(agent._get_actor_model().state_dict()),
+            'critic_1': self._to_cpu_state_dict(agent._get_critic_model(agent.critic_1).state_dict()),
+            'critic_2': self._to_cpu_state_dict(agent._get_critic_model(agent.critic_2).state_dict()),
+            'critic_target_1': self._to_cpu_state_dict(agent._get_critic_model(agent.critic_target_1).state_dict()),
+            'critic_target_2': self._to_cpu_state_dict(agent._get_critic_model(agent.critic_target_2).state_dict()),
             'actor_optimizer': self._to_cpu_state_dict(agent.actor_optimizer.state_dict()),
             'critic_1_optimizer': self._to_cpu_state_dict(agent.critic_1_optimizer.state_dict()),
             'critic_2_optimizer': self._to_cpu_state_dict(agent.critic_2_optimizer.state_dict()),
@@ -599,12 +600,13 @@ class RunManager:
             Path where model will be saved
         """
         # Extract state dictionaries and move to CPU for multiprocessing safety
+        # Using "Clean Save" principle: get underlying models without DDP wrappers
         agent_state = {
-            'actor': self._to_cpu_state_dict(agent.actor.state_dict()),
-            'critic_1': self._to_cpu_state_dict(agent.critic_1.state_dict()),
-            'critic_2': self._to_cpu_state_dict(agent.critic_2.state_dict()),
-            'critic_target_1': self._to_cpu_state_dict(agent.critic_target_1.state_dict()),
-            'critic_target_2': self._to_cpu_state_dict(agent.critic_target_2.state_dict()),
+            'actor': self._to_cpu_state_dict(agent._get_actor_model().state_dict()),
+            'critic_1': self._to_cpu_state_dict(agent._get_critic_model(agent.critic_1).state_dict()),
+            'critic_2': self._to_cpu_state_dict(agent._get_critic_model(agent.critic_2).state_dict()),
+            'critic_target_1': self._to_cpu_state_dict(agent._get_critic_model(agent.critic_target_1).state_dict()),
+            'critic_target_2': self._to_cpu_state_dict(agent._get_critic_model(agent.critic_target_2).state_dict()),
             'actor_optimizer': self._to_cpu_state_dict(agent.actor_optimizer.state_dict()),
             'critic_1_optimizer': self._to_cpu_state_dict(agent.critic_1_optimizer.state_dict()),
             'critic_2_optimizer': self._to_cpu_state_dict(agent.critic_2_optimizer.state_dict()),
@@ -656,12 +658,13 @@ class RunManager:
             Path where model will be saved
         """
         # Extract state dictionaries and move to CPU for multiprocessing safety
+        # Using "Clean Save" principle: get underlying models without DDP wrappers
         agent_state = {
-            'actor': self._to_cpu_state_dict(agent.actor.state_dict()),
-            'critic_1': self._to_cpu_state_dict(agent.critic_1.state_dict()),
-            'critic_2': self._to_cpu_state_dict(agent.critic_2.state_dict()),
-            'critic_target_1': self._to_cpu_state_dict(agent.critic_target_1.state_dict()),
-            'critic_target_2': self._to_cpu_state_dict(agent.critic_target_2.state_dict()),
+            'actor': self._to_cpu_state_dict(agent._get_actor_model().state_dict()),
+            'critic_1': self._to_cpu_state_dict(agent._get_critic_model(agent.critic_1).state_dict()),
+            'critic_2': self._to_cpu_state_dict(agent._get_critic_model(agent.critic_2).state_dict()),
+            'critic_target_1': self._to_cpu_state_dict(agent._get_critic_model(agent.critic_target_1).state_dict()),
+            'critic_target_2': self._to_cpu_state_dict(agent._get_critic_model(agent.critic_target_2).state_dict()),
             'actor_optimizer': self._to_cpu_state_dict(agent.actor_optimizer.state_dict()),
             'critic_1_optimizer': self._to_cpu_state_dict(agent.critic_1_optimizer.state_dict()),
             'critic_2_optimizer': self._to_cpu_state_dict(agent.critic_2_optimizer.state_dict()),

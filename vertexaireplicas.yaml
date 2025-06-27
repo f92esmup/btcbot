@@ -30,7 +30,7 @@ workerPoolSpecs:
     
     containerSpec:
       imageUri: 'europe-southwest1-docker.pkg.dev/btcbot-461022/btcbotrepo/btcbot-train-gpu:latest'
-      command: ["python", "train.py"]
+      command: ["torchrun", "--nproc_per_node=1", "train.py"]
       args:
         - '--symbol=BTCUSDT'
         - '--interval=1h'
@@ -64,7 +64,7 @@ workerPoolSpecs:
       
       # --- INSTRUCCIÓN 3: COMANDO DE EJECUCIÓN ---
       # - Si `acceleratorCount` es 1 (como ahora), usa el comando simple.
-      command: ["python", "train.py"]
+      command: ["torchrun", "--nproc_per_node=1", "train.py"]
       
       # - Si `acceleratorCount` es > 1 (p. ej., 2), COMENTA la línea de arriba y
       #   DESCOMENTA Y USA la siguiente, ajustando el número en `nproc_per_node`.
