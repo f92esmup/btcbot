@@ -13,7 +13,15 @@
 
 ## Merge 4: Deployment de modelo entrenado en vertex ai
 *Objetivo: Lanzar un deployment en vertex ai para recibir peticiones y enviar las predicciones.*
-- [ ] Tarea 4.1: Crear un deployment funcional  del modelo entrenado correspondiente (falta discutir) vertex ai.
+- [ ] Tarea 4.1: Crear un `deployment.py` que sirva como un endpoint de inferencia puro en Vertex AI.
+  - [ ] 4.1.1: Actualizar `requirements.txt` con `fastapi`, `uvicorn`, `pydantic`, y `google-cloud-storage`.
+  - [ ] 4.1.2: Implementar el script `deployment.py` con FastAPI.
+    - El endpoint cargará el agente y la configuración desde GCS al iniciar.
+    - Expondrá un endpoint `/predict` que recibe un vector de estado ya procesado y normalizado.
+    - Validará la dimensión del estado de entrada.
+    - Devolverá la acción predicha por el agente en modo determinista.
+  - [ ] 4.1.3: Crear un `Dockerfile.deploy` para contenerizar la aplicación de inferencia.
+  - [ ] 4.1.4: Desplegar el contenedor en un Vertex AI Endpoint.
 - [ ] Tarea 4.2: Configurar o corregir la instancia de Tensorboard.
 - [ ] Tarea 4.3: Solucionar el que no funciona la configuración de varias máquinas, crea el acceso vpc que solicita.
 
