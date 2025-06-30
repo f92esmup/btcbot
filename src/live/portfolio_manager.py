@@ -97,3 +97,37 @@ class LivePortfolioManager:
         }
         print(f"✅ Orden enviada: {order_type.value} {adjusted_quantity} {self.symbol} a precio ~{price}")
         return order_response
+    
+    def close_current_position(self, price: float):
+        """
+        Cierra la posición actual con una orden de mercado.
+        """
+        # Verificar si hay una posición abierta
+        if self.current_position is None:
+            print("No hay posición actual para cerrar")
+            return
+        
+        # Determinar la order_side opuesta
+        if self.current_position['type'] == 'BUY':
+            order_side = 'SELL'
+        else:
+            order_side = 'BUY'
+        
+        # Obtener la cantidad a cerrar
+        quantity = self.current_position['quantity']
+        
+        print(f"Cerrando posición {self.current_position['type']} de {quantity} {self.symbol}...")
+        
+        # Enviar orden de cierre
+        order_response = self.client.futures_create_order(
+            symbol=self.symbol,
+            side=order_side,
+            type='MARKET',
+            quantity=quantity
+        )
+        
+        # Restablecer la posición actual
+        self.current_position = None
+        
+        print(f"✅ Posición cerrada exitosamente con orden {order_side} de {quantity} {self.symbol} a precio ~{price}")
+        return order_response
