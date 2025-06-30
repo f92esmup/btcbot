@@ -376,6 +376,8 @@ class RunManager:
             if self.storage_mode == "gcp":
                 # GCP mode: load from Google Cloud Storage
                 self.logger.info("Loading scaler from Google Cloud Storage...")
+                if blob_name is None:
+                    blob_name = f"{self.run_id}/scaler.pkl"
                 return self.gcs_utils.load_scaler_from_gcs(blob_name)
             else:
                 # Local mode
@@ -408,6 +410,8 @@ class RunManager:
             if self.storage_mode == "gcp":
                 # GCP mode: load from Google Cloud Storage
                 self.logger.info("Loading price_scaler from Google Cloud Storage...")
+                if blob_name is None:
+                    blob_name = f"{self.run_id}/price_scaler.pkl"
                 return self.gcs_utils.load_price_scaler_from_gcs(blob_name)
             else:
                 # Local mode
