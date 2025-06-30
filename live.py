@@ -6,7 +6,11 @@ Este script inicializa y ejecuta el LiveTradingManager, que orquesta
 todos los componentes necesarios para operar en tiempo real en testnet o producción.
 
 Uso:
-    python live.py --run-id <ID_DEL_RUN_ENTRENADO>
+    python live.py --run-id <ID_DEL_RUN_ENTRENADO> [--mode {testnet,live}]
+    
+    Ejemplos:
+    python live.py --run-id BTCUSDT_1h_12345_20250630 --mode testnet
+    python live.py --run-id BTCUSDT_1h_12345_20250630 --mode live
 """
 
 import argparse
@@ -26,6 +30,13 @@ def parse_arguments():
         type=str,
         required=True,
         help="El ID del entrenamiento cuyo modelo se va a utilizar. El script extraerá el símbolo y la temporalidad de este ID."
+    )
+    parser.add_argument(
+        "--mode",
+        type=str,
+        choices=['testnet', 'live'],
+        default='testnet',
+        help="El modo de operación: 'testnet' para operar con dinero de prueba, 'live' para operar con dinero real."
     )
     return parser.parse_args()
 
@@ -47,6 +58,7 @@ def main():
             logger.info("Parámetros extraídos del run_id:")
             logger.info(f"  - Símbolo: {symbol}")
             logger.info(f"  - Intervalo: {interval}")
+            logger.info(f"  - Modo de operación: {args.mode}")
 
         except IndexError:
             logger.error(f"El formato del run-id '{args.run_id}' no es válido. Debe ser 'SYMBOL_INTERVAL_SEED_TIMESTAMP'.")
@@ -57,7 +69,8 @@ def main():
         # Crear e iniciar el gestor de trading
         manager = LiveTradingManager(
             run_id=args.run_id,
-            symbol=symbol
+            symbol=symbol,
+            mode=args.mode
         )
         manager.run()
 

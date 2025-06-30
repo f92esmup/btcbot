@@ -13,13 +13,15 @@ from src.configuration.config import config
 
 
 class LiveTradingManager:
-    def __init__(self, run_id: str, symbol: str):
+    def __init__(self, run_id: str, symbol: str, mode: str):
         self.run_id = run_id
         self.symbol = symbol
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.is_trading_halted = False
 
         print("--- Iniciando Live Trading Manager ---")
+        print(f"🔧 Modo de operación: {mode.upper()}")
+        print(f"🎯 Conectando a: {'Testnet' if mode == 'testnet' else 'Producción'}")
 
         # --- Inicialización de Componentes ---
         # --- Telegram Notifier Initialization ---
@@ -41,7 +43,7 @@ class LiveTradingManager:
         # ... etc ...
         api_key = config.binance_api_key
         api_secret = config.binance_api_secret
-        is_testnet = config.is_testnet
+        is_testnet = (mode == 'testnet')
         self.portfolio_manager = LivePortfolioManager(api_key, api_secret, is_testnet, self.symbol)
         max_drawdown = config.max_drawdown_configurado_cuenta
         max_consecutive_losses = config.max_consecutive_losses
