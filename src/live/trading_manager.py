@@ -59,6 +59,10 @@ class LiveTradingManager:
 
     def on_new_candle(self, live_dataframe: pd.DataFrame):
         print(f"\n--- Nueva Vela Recibida: {live_dataframe.index[-1]} ---")
+        
+        # Incrementar pasos si hay una posición abierta
+        if self.portfolio_manager.current_position:
+            self.portfolio_manager.current_position['pasos_en_posicion'] += 1
 
         # 1. Actualizar estado de riesgo y PNL no realizado (lógica de PNL pendiente)
         current_equity = self.portfolio_manager.balance # Placeholder, mejorará cuando implementemos PNL

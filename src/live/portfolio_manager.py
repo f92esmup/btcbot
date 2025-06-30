@@ -1,4 +1,5 @@
 from binance.client import Client
+from binance.exceptions import BinanceAPIException
 from enum import Enum
 from src.configuration.config import config
 import math
@@ -93,7 +94,9 @@ class LivePortfolioManager:
         self.current_position = {
             'type': order_type.value,
             'quantity': adjusted_quantity,
-            'entry_price': price
+            'entry_price': price,
+            'margen_usado': margen_a_usar,
+            'pasos_en_posicion': 1
         }
         print(f"✅ Orden enviada: {order_type.value} {adjusted_quantity} {self.symbol} a precio ~{price}")
         return order_response
@@ -135,14 +138,43 @@ class LivePortfolioManager:
     def get_current_state(self):
         """
         Obtener el estado actual del portafolio para la construcción de la observación.
-        
-        Returns:
-            dict: Diccionario con el estado actual del portafolio incluyendo tipo de posición,
-                  PnL no realizado, pasos en posición y precio de entrada.
+        Consulta la API de Binance para obtener PnL en tiempo real si hay una posición abierta.
         """
+        # Si no hay ninguna posición abierta gestionada internamente, devuelve un estado neutral.
+        if not self.current_position:
+            return {
+                'tipo_posicion': 'NEUTRAL',
+                'pnl_no_realizado_roe': 0.0,
+                'pasos_en_posicion': 0,
+                'precio_entrada': 0.0
+            }
+
+        pnl_no_realizado_roe = 0.0
+        
+        try:
+            # Consultar la información de la posición desde la API de Binance
+            positions = self.client.futures_position_information(symbol=self.symbol)
+            
+            if positions:
+                position_info = positions[0]
+                unrealized_pnl = float(position_info.get('unrealizedProfit', 0.0))
+                
+                # Calcular ROE usando el margen guardado al abrir la posición
+                margen_usado = self.current_position.get('margen_usado', 0.0)
+                if margen_usado > 0:
+                    pnl_no_realizado_roe = unrealized_pnl / margen_usado
+                
+        except BinanceAPIException as e:
+            print(f"Error de API al obtener PnL para {self.symbol}: {e}. Usando ROE=0.0")
+            pnl_no_realizado_roe = 0.0
+        except Exception as e:
+            print(f"Error inesperado al obtener PnL: {e}. Usando ROE=0.0")
+            pnl_no_realizado_roe = 0.0
+
+        # Construir el estado final con los datos actualizados
         return {
-            'tipo_posicion': self.current_position['type'] if self.current_position else 'NEUTRAL',
-            'pnl_no_realizado_roe': 0.0,
-            'pasos_en_posicion': 0,
-            'precio_entrada': self.current_position['entry_price'] if self.current_position else 0.0
+            'tipo_posicion': self.current_position['type'],
+            'pnl_no_realizado_roe': pnl_no_realizado_roe,
+            'pasos_en_posicion': self.current_position.get('pasos_en_posicion', 0),
+            'precio_entrada': self.current_position['entry_price']
         }
