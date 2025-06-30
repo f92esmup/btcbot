@@ -9,80 +9,69 @@ from src.live.risk_manager import RiskManager
 from src.live.telegram_notifier import TelegramNotifier
 from src.live.bigquery_logger import BigQueryLogger
 from src.training.run_manager import RunManager
-from src.configuration.config import config
+from src.configuration.config import config as secrets_config # Renombrado para claridad
 
 
 class LiveTradingManager:
-    def __init__(self, run_id: str, symbol: str, mode: str):
+    def __init__(self, run_id: str, symbol: str, mode: str, run_config: dict):
         self.run_id = run_id
         self.symbol = symbol
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.is_trading_halted = False
+        self.run_config = run_config
 
         print("--- Iniciando Live Trading Manager ---")
         print(f"🔧 Modo de operación: {mode.upper()}")
         print(f"🎯 Conectando a: {'Testnet' if mode == 'testnet' else 'Producción'}")
 
-        # --- Carga de Configuración Centralizada ---
-        print(f"🔩 Cargando configuración para el run_id: {self.run_id}")
-        run_manager = RunManager()
-        run_manager.set_run_context(run_id=self.run_id)
-        run_config = run_manager.download_and_load_yaml_config(self.run_id)
-        if run_config is None:
-            raise ValueError(f"No se pudo cargar la configuración para el run_id: '{self.run_id}'")
-        
         # Extraer las configuraciones específicas del snapshot del entrenamiento
-        env_config = run_config['config_snapshot']['environment']
+        env_config_snapshot = self.run_config['config_snapshot']['environment']
         
         print("✅ Configuración del run cargada exitosamente.")
 
         # --- Inicialización de Componentes con Configuración del Run ---
         
-        # Notificador de Telegram (usa credenciales globales)
+        # Notificador de Telegram (usa credenciales globales de secrets_config)
         try:
-            bot_token = config.telegram_bot_token
-            chat_id = config.telegram_chat_id
+            bot_token = secrets_config.telegram_bot_token
+            chat_id = secrets_config.telegram_chat_id
             self.notifier = TelegramNotifier(bot_token=bot_token, chat_id=chat_id)
             print("✅ TelegramNotifier inicializado correctamente.")
         except Exception as e:
             print(f"⚠️  Advertencia: No se pudo inicializar TelegramNotifier. {e}")
             self.notifier = None
 
-        # Observation Builder (ahora pasamos el run_manager que ya tiene el contexto)
+        # Observation Builder y Decision Maker
+        run_manager = RunManager()
+        run_manager.set_run_context(run_id=self.run_id)
         self.observation_builder = LiveObservationBuilder(run_manager)
-
-        # Decision Maker
         self.decision_maker = DecisionMaker(self.run_id, self.device)
         
         # Portfolio Manager (usa credenciales globales y config del run)
-        api_key = config.binance_api_key
-        api_secret = config.binance_api_secret
+        api_key = secrets_config.binance_api_key
+        api_secret = secrets_config.binance_api_secret
         is_testnet = (mode == 'testnet')
         self.portfolio_manager = LivePortfolioManager(
             api_key=api_key, 
             api_secret=api_secret, 
             is_testnet=is_testnet, 
             symbol=self.symbol,
-            # Pasamos los parámetros de trading desde la config del run
-            leverage=env_config['apalancamiento'],
-            max_investment_pct=env_config['porcentaje_max_inversion_por_trade']
+            portfolio_config=env_config_snapshot # Inyección de configuración
         )
 
         # Risk Manager (usa config del run)
         self.risk_manager = RiskManager(
             portfolio_manager=self.portfolio_manager, 
-            # Pasamos los parámetros de riesgo desde la config del run
-            max_drawdown_pct=env_config['max_drawdown_configurado_cuenta'], 
-            max_consecutive_losses=env_config.get('max_consecutive_losses', 5) # Usamos .get con default para compatibilidad con runs antiguos
+            risk_config=env_config_snapshot # Inyección de configuración
         )
 
         # Data Reader
         warm_up_candles = 200 # Este valor puede ser más estático
         self.data_reader = BinanceLiveDataReader(self.symbol, '1h', self, warm_up_candles)
         
-        # BigQuery Logger (usa credenciales globales)
+        # BigQuery Logger (usa credenciales globales de secrets_config)
         try:
-            project_id = config.project_id
+            project_id = secrets_config.project_id
             dataset_id = 'trading_logs' # Podríamos añadir esto a config.yaml global
             self.bq_logger = BigQueryLogger(project_id=project_id, dataset_id=dataset_id)
             print("✅ BigQueryLogger inicializado correctamente")

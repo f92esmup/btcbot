@@ -6,24 +6,23 @@ class RiskManager:
     Supervisa el riesgo del portfolio de forma independiente, principalmente el drawdown.
     Actúa como un freno de emergencia si se superan los umbrales de riesgo.
     """
-    def __init__(self, portfolio_manager: LivePortfolioManager, max_drawdown_pct: float, max_consecutive_losses: int):
+    def __init__(self, portfolio_manager: LivePortfolioManager, risk_config: dict):
         """
         Inicializa el gestor de riesgo.
 
         Args:
             portfolio_manager: El gestor del portfolio para obtener el estado actual.
-            max_drawdown_pct: El drawdown máximo permitido como un flotante (ej. 0.2 para 20%).
-            max_consecutive_losses: El número máximo de pérdidas consecutivas permitidas.
+            risk_config: Diccionario con la configuración de riesgo.
         """
         self.portfolio_manager = portfolio_manager
-        self.max_drawdown_pct = max_drawdown_pct
-        self.max_consecutive_losses = max_consecutive_losses
+        self.max_drawdown_pct = risk_config['max_drawdown_configurado_cuenta']
+        self.max_consecutive_losses = risk_config['max_consecutive_losses']
         self.consecutive_losses_counter = 0
         self.initial_equity = 0.0
         self.max_equity_so_far = 0.0
         self.is_initialized = False
-        print(f"RiskManager inicializado con un max_drawdown_pct de {max_drawdown_pct:.2%}")
-        print(f"Contador de pérdidas consecutivas inicializado (máximo permitido: {max_consecutive_losses})")
+        print(f"RiskManager inicializado con un max_drawdown_pct de {self.max_drawdown_pct:.2%}")
+        print(f"Contador de pérdidas consecutivas inicializado (máximo permitido: {self.max_consecutive_losses})")
 
     def update_state(self, current_equity: float):
         """

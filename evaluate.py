@@ -26,8 +26,6 @@ from src.agente.agent import TransformerSACAgent
 from src.training.run_manager import RunManager
 from src.training.evaluator import AgentEvaluator
 from src.utils.system import setup_logging, setup_device
-from src.configuration.config import config
-
 
 def parse_arguments() -> argparse.Namespace:
     """
@@ -124,20 +122,6 @@ def validate_dates(start_date: str, end_date: str) -> bool:
         raise
 
 
-def load_run_config(run_manager: RunManager, run_id: str) -> Optional[Dict[str, Any]]:
-    """
-    Carga la configuración del entrenamiento desde config_run.yaml.
-    
-    Args:
-        run_manager: Instancia del RunManager
-        run_id: ID del entrenamiento
-        
-    Returns:
-        Dict con la configuración o None si no se puede cargar
-    """
-    return run_manager.download_and_load_yaml_config(run_id)
-
-
 def create_agent_from_config(
     observation_space_shape: tuple,
     action_space_shape: tuple,
@@ -145,7 +129,7 @@ def create_agent_from_config(
     portfolio_features: int,
     sequence_length: int,
     device,
-    run_config: Optional[Dict[str, Any]] = None
+    agent_config: Dict[str, Any]
 ) -> TransformerSACAgent:
     """
     Crea una instancia del agente usando la configuración del entrenamiento.
@@ -157,52 +141,13 @@ def create_agent_from_config(
         portfolio_features: Número de características de portfolio
         sequence_length: Longitud de la secuencia
         device: Dispositivo (CPU/GPU)
-        run_config: Configuración del entrenamiento (opcional)
+        agent_config: Configuración del agente desde el run de entrenamiento.
         
     Returns:
         TransformerSACAgent: Instancia del agente
     """
     logger = logging.getLogger(__name__)
-    
-    # Si tenemos configuración del run, úsala; si no, usa configuración por defecto
-    config_override = None
-    if run_config and 'hyperparameters' in run_config:
-        # Usar configuración del entrenamiento original y completar con valores por defecto
-        saved_config = run_config['hyperparameters'].copy()
-        
-        # Valores por defecto necesarios para el agente (tomados de config global)
-        default_config = {
-            'gamma': config.gamma,
-            'tau': config.tau,
-            'batch_size': config.batch_size,
-            'actor_learning_rate': config.actor_learning_rate,
-            'critic_learning_rate': config.critic_learning_rate,
-            'alpha_learning_rate': config.alpha_learning_rate,
-            'learn_alpha': config.learn_alpha,
-            'target_entropy': config.target_entropy,
-            'initial_log_alpha': config.initial_log_alpha,
-            'learning_frequency': config.learning_frequency,
-            'update_target_frequency': config.update_target_frequency,
-            'transformer_config': {
-                'd_model': config.d_model,
-                'n_head': config.n_head,
-                'num_encoder_layers': config.num_encoder_layers,
-                'dim_feedforward': config.dim_feedforward,
-                'dropout_rate': config.dropout_rate
-            },
-            'mlp_hidden_dims': config.hidden_dims
-        }
-        
-        # Completar configuración con valores por defecto para parámetros faltantes
-        for key, value in default_config.items():
-            if key not in saved_config:
-                saved_config[key] = value
-                logger.info(f"Parámetro faltante '{key}' completado con valor por defecto: {value}")
-        
-        config_override = saved_config
-        logger.info("Usando configuración del agente desde el entrenamiento original (completada con valores por defecto)")
-    else:
-        logger.info("Usando configuración por defecto del agente")
+    logger.info("Usando configuración del agente desde el entrenamiento original.")
     
     return TransformerSACAgent(
         observation_space_shape=observation_space_shape,
@@ -211,7 +156,7 @@ def create_agent_from_config(
         portfolio_features=portfolio_features,
         sequence_length=sequence_length,
         device=device,
-        config_override=config_override
+        config_override=agent_config # Inyección directa
     )
 
 
@@ -289,12 +234,18 @@ def main():
         device = setup_device(args.no_cuda)
         logger.info(f"Dispositivo configurado: {device}")
         
-        # Instanciar RunManager
+        # Instanciar RunManager y cargar configuración del run
         run_manager = RunManager()
-        logger.info("RunManager inicializado")
-        
-        # Configurar el contexto del run para cargar artefactos
         run_manager.set_run_context(args.run_id)
+        run_config = run_manager.download_and_load_yaml_config(args.run_id)
+        if not run_config:
+            logger.error(f"No se pudo cargar la configuración para el run_id: {args.run_id}. Abortando.")
+            sys.exit(1)
+        logger.info("Configuración del run cargada exitosamente.")
+
+        # Extraer configuraciones específicas
+        env_config = run_config['config_snapshot']['environment']
+        agent_config = run_config['config_snapshot']['agent']
         
         # Pipeline de datos
         logger.info("📊 Ejecutando pipeline de datos...")
@@ -304,28 +255,26 @@ def main():
             start_date=args.start_date,
             end_date=args.end_date,
             run_id=f"evaluation_{args.run_id}",
-            base_path="temp_evaluation"
+            base_path="temp_evaluation",
+            save_artifacts=False # No guardar artefactos durante la evaluación
         )
         
-        normalized_dataframe, temp_scaler_path = data_pipeline.run()
+        normalized_dataframe, _ = data_pipeline.run()
         logger.info(f"Pipeline completado. Datos: {normalized_dataframe.shape}")
         
         # Cargar price_scaler del entrenamiento original
-        logger.info("📦 Cargando artefactos del modelo...")
+        logger.info("📦 Cargando price_scaler del entrenamiento original...")
         price_scaler = run_manager.load_price_scaler(
-            price_scaler_path=f"Entrenamientos/{args.run_id}/price_scaler.pkl",
             blob_name=f"{args.run_id}/price_scaler.pkl"
         )
         logger.info("Price scaler cargado exitosamente")
         
-        # Cargar configuración del entrenamiento (opcional)
-        run_config = load_run_config(run_manager, args.run_id)
-        
-        # Crear entorno
+        # Crear entorno con la configuración inyectada
         logger.info("🏗️ Creando entorno de trading...")
         env = FuturesTradingEnv(
             data_df=normalized_dataframe,
-            price_scaler=price_scaler
+            price_scaler=price_scaler,
+            env_config=env_config # Inyección de configuración
         )
         
         # Obtener información del entorno para crear el agente
@@ -334,43 +283,10 @@ def main():
         action_space_shape = env.action_space.shape
         
         # Obtener características del agente desde la configuración del run
-        if run_config and 'hyperparameters' in run_config:
-            logger.info("Usando configuración del agente desde el entrenamiento original")
-            hyperparams = run_config['hyperparameters']
-            
-            # CRÍTICO: Usar la configuración exacta del entrenamiento original
-            market_features = hyperparams.get('market_features', 12)
-            portfolio_features = hyperparams.get('portfolio_features', 4)
-            
-            # Buscar sequence_length en múltiples ubicaciones para máxima compatibilidad
-            sequence_length = None
-            
-            # Prioridad 1: En hyperparameters directamente
-            if 'sequence_length' in hyperparams:
-                sequence_length = hyperparams['sequence_length']
-                logger.info(f"sequence_length encontrado en hyperparameters: {sequence_length}")
-            
-            # Prioridad 2: En config_snapshot.environment.ventana_observacion_size
-            elif 'config_snapshot' in run_config and 'environment' in run_config['config_snapshot']:
-                sequence_length = run_config['config_snapshot']['environment'].get('ventana_observacion_size', 24)
-                logger.info(f"sequence_length obtenido de ventana_observacion_size: {sequence_length}")
-            
-            # Fallback: valor por defecto basado en el error observado
-            else:
-                sequence_length = 24
-                logger.warning(f"sequence_length no encontrado, usando valor por defecto: {sequence_length}")
-            
-            logger.info(f"Configuración del entrenamiento original:")
-            logger.info(f"  - market_features: {market_features}")
-            logger.info(f"  - portfolio_features: {portfolio_features}")
-            logger.info(f"  - sequence_length: {sequence_length}")
-        else:
-            logger.warning("Configuración del run no disponible, calculando características desde el entorno")
-            # Fallback: calcular desde el entorno como antes
-            ventana_size = env.config_entorno['ventana_observacion_size']
-            market_features = len(env.column_names)
-            portfolio_features = len(obs) - (ventana_size * market_features)
-            sequence_length = ventana_size
+        hyperparams = run_config.get('hyperparameters', {})
+        market_features = hyperparams.get('market_features', len(env.column_names))
+        portfolio_features = hyperparams.get('portfolio_features', 4)
+        sequence_length = env_config.get('ventana_observacion_size', 24)
         
         logger.info(f"Espacio de observación: {observation_space_shape}")
         logger.info(f"Espacio de acción: {action_space_shape}")
@@ -387,14 +303,15 @@ def main():
             portfolio_features=portfolio_features,
             sequence_length=sequence_length,
             device=device,
-            run_config=run_config
+            agent_config=agent_config # Inyección de configuración
         )
         
         # Cargar pesos del modelo
         logger.info("📥 Cargando pesos del modelo...")
-        model_prefix = f"{args.run_id}/{args.model_type}_model"
+        # Corregir la ruta para que apunte al directorio de entrenamientos
+        model_prefix = f"Entrenamientos/{args.run_id}/{args.model_type}_model/{args.model_type}_model"
         logger.info(f"Cargando modelo con prefijo: {model_prefix}")
-        run_manager.load_agent_from_checkpoint(agent, model_prefix)
+        run_manager.load_agent_from_checkpoint(agent, model_prefix, reset_optimizers=True)
         logger.info("Modelo cargado exitosamente")
         
         # Ejecutar evaluación

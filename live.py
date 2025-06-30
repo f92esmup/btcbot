@@ -18,6 +18,7 @@ import sys
 import logging
 from src.live.trading_manager import LiveTradingManager
 from src.utils.system import setup_logging
+from src.training.run_manager import RunManager # Importar RunManager
 
 def parse_arguments():
     """Parsea los argumentos de línea de comandos para el modo live."""
@@ -53,7 +54,6 @@ def main():
             parts = args.run_id.split('_')
             symbol = parts[0]
             interval = parts[1]
-            # Podríamos extraer también la semilla y la fecha si fuera necesario
             
             logger.info("Parámetros extraídos del run_id:")
             logger.info(f"  - Símbolo: {symbol}")
@@ -66,11 +66,21 @@ def main():
 
         logger.info(f"🚀 Lanzando bot en modo LIVE para el run-id: {args.run_id}")
 
-        # Crear e iniciar el gestor de trading
+        # Cargar la configuración específica del run como única fuente de verdad
+        logger.info(f"Cargando configuración para el run_id: {args.run_id}...")
+        run_manager = RunManager()
+        run_config = run_manager.download_and_load_yaml_config(args.run_id)
+        if run_config is None:
+            logger.error(f"No se pudo cargar la configuración para el run_id: {args.run_id}. Abortando.")
+            sys.exit(1)
+        logger.info("Configuración del run cargada exitosamente.")
+
+        # Crear e iniciar el gestor de trading, inyectando la configuración
         manager = LiveTradingManager(
             run_id=args.run_id,
             symbol=symbol,
-            mode=args.mode
+            mode=args.mode,
+            run_config=run_config # Inyección de la configuración
         )
         manager.run()
 

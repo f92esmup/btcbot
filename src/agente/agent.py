@@ -70,9 +70,12 @@ class TransformerSACAgent:
         # Configuración
         self.config = config_override or self._load_config_from_yaml()
         
+        # Extraer sub-configuraciones para claridad
+        sac_params = self.config.get('hiperparametros_sac', {})
+        
         # Hiperparámetros
-        self.gamma = self.config['gamma']
-        self.tau = self.config['tau']
+        self.gamma = sac_params['gamma']
+        self.tau = sac_params['tau']
         self.batch_size = self.config['batch_size']
         self.learning_frequency = self.config['learning_frequency']
         self.update_target_frequency = self.config['update_target_frequency']
@@ -88,10 +91,10 @@ class TransformerSACAgent:
         self._init_optimizers()
         
         # Parámetro de temperatura alpha (entropía)
-        self.learn_alpha = self.config['learn_alpha']
+        self.learn_alpha = sac_params['learn_alpha']
         
         # Manejar target_entropy: puede ser 'auto' o un valor numérico
-        target_entropy_config = self.config['target_entropy']
+        target_entropy_config = sac_params['target_entropy']
         if target_entropy_config == 'auto':
             # Calcular automáticamente como -dim_action
             self.target_entropy = -float(self.action_dim)
@@ -103,15 +106,15 @@ class TransformerSACAgent:
         
         if self.learn_alpha:
             self.log_alpha = torch.tensor(
-                self.config['initial_log_alpha'], 
+                sac_params['initial_log_alpha'], 
                 dtype=torch.float32, 
                 requires_grad=True, 
                 device=self.device
             )
-            self.alpha_optimizer = optim.Adam([self.log_alpha], lr=self.config['alpha_learning_rate'])
+            self.alpha_optimizer = optim.Adam([self.log_alpha], lr=sac_params['alpha_learning_rate'])
         else:
             self.log_alpha = torch.tensor(
-                self.config['initial_log_alpha'], 
+                sac_params['initial_log_alpha'], 
                 dtype=torch.float32, 
                 device=self.device
             )
@@ -155,8 +158,8 @@ class TransformerSACAgent:
     
     def _init_networks(self) -> None:
         """Inicializa las redes y las envuelve para DDP si está en modo distribuido."""
-        transformer_config = self.config['transformer_config']
-        mlp_hidden_dims = self.config['mlp_hidden_dims']
+        transformer_config = self.config['transformer']
+        mlp_hidden_dims = self.config['mlp_heads']['hidden_dims']
         
         # Red del Actor
         self.actor = ActorNetwork(
@@ -239,19 +242,20 @@ class TransformerSACAgent:
     
     def _init_optimizers(self) -> None:
         """Inicializa los optimizadores."""
+        sac_params = self.config.get('hiperparametros_sac', {})
         self.actor_optimizer = optim.Adam(
             self.actor.parameters(), 
-            lr=self.config['actor_learning_rate']
+            lr=sac_params['actor_learning_rate']
         )
         
         self.critic_1_optimizer = optim.Adam(
             self.critic_1.parameters(), 
-            lr=self.config['critic_learning_rate']
+            lr=sac_params['critic_learning_rate']
         )
         
         self.critic_2_optimizer = optim.Adam(
             self.critic_2.parameters(), 
-            lr=self.config['critic_learning_rate']
+            lr=sac_params['critic_learning_rate']
         )
     
     @property

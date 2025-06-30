@@ -226,29 +226,9 @@ class RunManager:
             },
             'hyperparameters': {k: v for k, v in hparams.items() if k not in ['run_id', 'storage_mode', 'base_path']},
             'config_snapshot': {
-                'normalization': config.normalization_config,
-                'environment': {
-                    'capital_inicial': config.capital_inicial,
-                    'apalancamiento': config.apalancamiento,
-                    'porcentaje_max_inversion_por_trade': config.porcentaje_max_inversion_por_trade,
-                    'max_drawdown_configurado_cuenta': config.max_drawdown_configurado_cuenta,
-                    'comision_taker_porcentaje': config.comision_taker_porcentaje,
-                    'slippage_porcentaje': config.slippage_porcentaje,
-                    'ventana_observacion_size': config.ventana_observacion_size,
-                    'max_pasos_en_posicion': config.max_pasos_en_posicion
-                },
-                'agent': {
-                    'gamma': config.gamma,
-                    'tau': config.tau,
-                    'batch_size': config.batch_size,
-                    'replay_buffer_size': config.replay_buffer_size,
-                    'actor_learning_rate': config.actor_learning_rate,
-                    'critic_learning_rate': config.critic_learning_rate,
-                    'alpha_learning_rate': config.alpha_learning_rate,
-                    'd_model': config.d_model,
-                    'n_head': config.n_head,
-                    'num_encoder_layers': config.num_encoder_layers
-                }
+                'normalization': hparams.get('normalization', {}),
+                'environment': hparams.get('environment', {}),
+                'agent': hparams.get('agent', {})
             }
         }
         

@@ -14,9 +14,6 @@ from enum import Enum
 import logging
 from sklearn.preprocessing import MinMaxScaler
 
-# Importar configuración
-from ..configuration.config import config
-
 # Configurar logging
 logger = logging.getLogger(__name__)
 
@@ -45,7 +42,7 @@ class FuturesTradingEnv(gym.Env):
         self,
         data_df: pd.DataFrame,
         price_scaler: MinMaxScaler,
-        config_entorno: Optional[Dict[str, Any]] = None
+        env_config: Dict[str, Any]
     ):
         """
         Inicializa el entorno de trading.
@@ -53,14 +50,14 @@ class FuturesTradingEnv(gym.Env):
         Args:
             data_df: DataFrame con datos OHLCV + indicadores normalizados [0,1]
             price_scaler: Scaler ajustado para normalizar precios
-            config_entorno: Diccionario de configuración (opcional, usa config.yaml si no se provee)
+            env_config: Diccionario con la configuración específica para el entorno.
         """
         super().__init__()
         
         # Guardar datos y configuración
         self.data_df = data_df.copy()
         self.price_scaler = price_scaler
-        self.config_entorno = config_entorno or self._load_default_config()
+        self.config_entorno = env_config
         
         # Convertir DataFrame a array de NumPy para acceso más rápido
         self.data_array = self.data_df.to_numpy(dtype=np.float32)
@@ -92,28 +89,6 @@ class FuturesTradingEnv(gym.Env):
         self._initialize_state()
         
         logger.info(f"Entorno inicializado con {len(self.data_array)} filas de datos")
-    
-    def _load_default_config(self) -> Dict[str, Any]:
-        """Carga configuración por defecto desde config.yaml."""
-        return {
-            'capital_inicial': config.capital_inicial,
-            'apalancamiento': config.apalancamiento,
-            'porcentaje_max_inversion_por_trade': config.porcentaje_max_inversion_por_trade,
-            'max_drawdown_configurado_cuenta': config.max_drawdown_configurado_cuenta,
-            'comision_taker_porcentaje': config.comision_taker_porcentaje,
-            'slippage_porcentaje': config.slippage_porcentaje,
-            'ventana_observacion_size': config.ventana_observacion_size,
-            'max_pasos_en_posicion': config.max_pasos_en_posicion,
-            'min_clip_pnl_roe': config.min_clip_pnl_roe,
-            'max_clip_pnl_roe': config.max_clip_pnl_roe,
-            'zona_muerta_mantener': config.zona_muerta_mantener,
-            'peso_recompensa_paso': config.peso_recompensa_paso,
-            'peso_recompensa_cierre': config.peso_recompensa_cierre,
-            'peso_recompensa_episodio': config.peso_recompensa_episodio,
-            'usar_log1p_en_pnl': config.usar_log1p_en_pnl,
-            'usar_max_pasos_episodio': config.usar_max_pasos_episodio,
-            'max_pasos_episodio': config.max_pasos_episodio
-        }
     
     def _setup_spaces(self):
         """Configura los espacios de acción y observación."""

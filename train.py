@@ -16,10 +16,11 @@ from typing import Dict, Any, Optional, Tuple
 import time
 import re
 
+import yaml
+
 from src.data.pipeline import DataPipeline
 from src.entorno.environment import FuturesTradingEnv
 from src.agente.agent import TransformerSACAgent
-from src.configuration.config import config
 from src.configuration.gcs_utils import GCSUtils
 from src.utils.system import setup_logging, set_seed, setup_device, setup_environment_and_distribution
 from src.utils.validation import validate_date_format
@@ -28,7 +29,7 @@ from src.analysis.logger import TensorboardLogger
 from src.training import RunManager, AgentEvaluator, Trainer
 
 
-def create_trading_environment(dataframe: Any, logger, run_manager: RunManager, price_scaler_path: Optional[str] = None, price_scaler_blob_name: Optional[str] = None) -> FuturesTradingEnv:
+def create_trading_environment(dataframe: Any, logger, run_manager: RunManager, env_config: dict, price_scaler_path: Optional[str] = None, price_scaler_blob_name: Optional[str] = None) -> FuturesTradingEnv:
     """
     Crea el entorno de trading con los datos procesados.
     
@@ -36,6 +37,7 @@ def create_trading_environment(dataframe: Any, logger, run_manager: RunManager, 
         dataframe: DataFrame con datos normalizados
         logger: Logger para mensajes
         run_manager: Instancia centralizada de RunManager
+        env_config: Diccionario con la configuración del entorno
         price_scaler_path: Ruta específica del price_scaler (opcional, para checkpoint loading)
         price_scaler_blob_name: Blob name específico en GCS (opcional, para checkpoint loading)
         
@@ -64,20 +66,21 @@ def create_trading_environment(dataframe: Any, logger, run_manager: RunManager, 
     
     env = FuturesTradingEnv(
         data_df=dataframe,
-        price_scaler=price_scaler
+        price_scaler=price_scaler,
+        env_config=env_config # Inyección de configuración
     )
     
     logger.info(f"Entorno creado:")
-    logger.info(f"  - Balance inicial: ${config.capital_inicial:,.2f}")
-    logger.info(f"  - Apalancamiento: {config.apalancamiento}x")
-    logger.info(f"  - Ventana observación: {config.ventana_observacion_size}")
+    logger.info(f"  - Balance inicial: ${env_config['capital_inicial']:,.2f}")
+    logger.info(f"  - Apalancamiento: {env_config['apalancamiento']}x")
+    logger.info(f"  - Ventana observación: {env_config['ventana_observacion_size']}")
     logger.info(f"  - Espacio de observación: {env.observation_space}")
     logger.info(f"  - Espacio de acción: {env.action_space}")
     
     return env
 
 
-def create_sac_agent(env: FuturesTradingEnv, device: torch.device, logger, is_distributed: bool = False) -> TransformerSACAgent:
+def create_sac_agent(env: FuturesTradingEnv, device: torch.device, logger, agent_config: dict, is_distributed: bool = False) -> TransformerSACAgent:
     """
     Crea el agente SAC con arquitectura Transformer.
     
@@ -85,6 +88,7 @@ def create_sac_agent(env: FuturesTradingEnv, device: torch.device, logger, is_di
         env: Entorno de trading
         device: Device para el entrenamiento
         logger: Logger para mensajes
+        agent_config: Diccionario con la configuración del agente
         is_distributed: Si el entrenamiento es distribuido
         
     Returns:
@@ -97,7 +101,7 @@ def create_sac_agent(env: FuturesTradingEnv, device: torch.device, logger, is_di
     action_space_shape = env.action_space.shape
     
     # Calcular características de mercado y portfolio
-    ventana_size = config.ventana_observacion_size
+    ventana_size = env.config_entorno['ventana_observacion_size']
     num_features_mercado = len(env.column_names)
     market_features = num_features_mercado
     portfolio_features = 4  # tipo_posicion, pnl_roe, pasos_posicion, precio_entrada
@@ -110,6 +114,7 @@ def create_sac_agent(env: FuturesTradingEnv, device: torch.device, logger, is_di
         portfolio_features=portfolio_features,
         sequence_length=sequence_length,
         device=device,
+        config_override=agent_config, # Inyección de configuración
         is_distributed=is_distributed
     )
     
@@ -123,10 +128,10 @@ def create_sac_agent(env: FuturesTradingEnv, device: torch.device, logger, is_di
     logger.info(f"  - Market features: {market_features}")
     logger.info(f"  - Portfolio features: {portfolio_features}")
     logger.info(f"  - Sequence length: {sequence_length}")
-    logger.info(f"  - Gamma: {config.gamma}")
-    logger.info(f"  - Tau: {config.tau}")
-    logger.info(f"  - Alpha inicial: {config.initial_log_alpha}")
-    logger.info(f"  - Learning rates: Actor={config.actor_learning_rate}, Critic={config.critic_learning_rate}")
+    logger.info(f"  - Gamma: {agent_config['hiperparametros_sac']['gamma']}")
+    logger.info(f"  - Tau: {agent_config['hiperparametros_sac']['tau']}")
+    logger.info(f"  - Alpha inicial: {agent_config['hiperparametros_sac']['initial_log_alpha']}")
+    logger.info(f"  - Learning rates: Actor={agent_config['hiperparametros_sac']['actor_learning_rate']}, Critic={agent_config['hiperparametros_sac']['critic_learning_rate']}")
     logger.info(f"  - Entrenamiento distribuido: {'Sí' if is_distributed else 'No'}")
     
     return agent
@@ -180,6 +185,15 @@ def main():
     
     logger.info(f"Parámetros: Symbol={args.symbol}, Interval={args.interval}, Start Date={args.start_date}, Seed={args.seed}")
 
+    # Cargar la configuración local como la fuente de verdad para este nuevo run
+    try:
+        with open('src/configuration/config.yaml', 'r') as f:
+            local_config_dict = yaml.safe_load(f)
+        logger.info("Configuración local 'config.yaml' cargada exitosamente.")
+    except FileNotFoundError:
+        logger.error("No se encontró el archivo 'src/configuration/config.yaml'. Abortando.")
+        sys.exit(1)
+
     # === GENERACIÓN Y SINCRONIZACIÓN DEL RUN_ID ===
     # Solo el proceso jefe genera el run_id, luego lo sincroniza con todos los procesos
     if is_chief:
@@ -222,13 +236,15 @@ def main():
     # Crear instancia única de RunManager para TODOS los procesos (lectura)
     # pero solo el jefe realizará operaciones de escritura
     gcs_utils = None
-    if config.storage_mode == "gcp":
+    storage_mode = local_config_dict.get('normalization', {}).get('storage_mode', 'local')
+    if storage_mode == "gcp":
         from src.configuration.gcs_utils import gcs_utils
         logger.info(f"[Proceso {rank}] Usando instancia global de GCSUtils para modo GCP")
 
     # Determinar base_path según storage_mode (todos los procesos)
-    if config.storage_mode == "gcp":
-        base_path = f"gs://{config.gcs_bucket_name}/{run_id}"
+    if storage_mode == "gcp":
+        gcs_bucket_name = local_config_dict.get('gcp', {}).get('storage', {}).get('bucket_name')
+        base_path = f"gs://{gcs_bucket_name}/{run_id}"
         logger.info(f"[Proceso {rank}] Modo GCP: Los artefactos se accederán desde {base_path}")
     else:
         base_path = Path("Entrenamientos") / run_id
@@ -245,22 +261,16 @@ def main():
         logger.info("=== INICIALIZACIÓN DE COMPONENTES ADICIONALES (PROCESO JEFE) ===")
 
         # Lógica de TensorBoard modificada
-        # Para el modo local, seguimos creando un directorio.
-        # Para el modo GCP, log_dir no es estrictamente necesario, pero lo mantenemos por consistencia.
-        # El logger interno decidirá qué hacer.
-        if config.storage_mode == "local":
+        if storage_mode == "local":
             tensorboard_dir = Path(base_path) / "tensorboard"
             tensorboard_dir.mkdir(parents=True, exist_ok=True)
         else:
-            # En modo GCP, los logs se envían directamente a la API de Vertex,
-            # no se necesita un directorio local persistente.
             tensorboard_dir = None
 
         # Inicializar TensorBoard Logger
-        # Pasamos el run_id para que lo use como nombre del "run" en el experimento
         tb_logger = TensorboardLogger(log_dir=str(tensorboard_dir) if tensorboard_dir else None, run_id=run_id)
         
-        if config.storage_mode == "local":
+        if storage_mode == "local":
             logger.info(f"TensorBoard logs se guardarán localmente en: {tensorboard_dir}")
         else:
             logger.info(f"TensorBoard logs se enviarán directamente a Vertex AI TensorBoard")
@@ -275,20 +285,20 @@ def main():
             'episodes': args.episodes,
             'eval_frequency': args.eval_frequency,
             'save_frequency': args.save_frequency,
-            'actor_lr': config.actor_learning_rate,
-            'critic_lr': config.critic_learning_rate,
-            'alpha_lr': config.alpha_learning_rate,
-            'gamma': config.gamma,
-            'tau': config.tau,
-            'batch_size': config.batch_size,
-            'buffer_size': config.replay_buffer_size,
-            'd_model': config.d_model,
-            'n_head': config.n_head,
-            'num_encoder_layers': config.num_encoder_layers,
-            'ventana_observacion': config.ventana_observacion_size,
-            'capital_inicial': config.capital_inicial,
-            'apalancamiento': config.apalancamiento,
-            'storage_mode': config.storage_mode,
+            'actor_lr': local_config_dict['agent']['hiperparametros_sac']['actor_learning_rate'],
+            'critic_lr': local_config_dict['agent']['hiperparametros_sac']['critic_learning_rate'],
+            'alpha_lr': local_config_dict['agent']['hiperparametros_sac']['alpha_learning_rate'],
+            'gamma': local_config_dict['agent']['hiperparametros_sac']['gamma'],
+            'tau': local_config_dict['agent']['hiperparametros_sac']['tau'],
+            'batch_size': local_config_dict['agent']['batch_size'],
+            'buffer_size': local_config_dict['agent']['replay_buffer_size'],
+            'd_model': local_config_dict['agent']['transformer']['d_model'],
+            'n_head': local_config_dict['agent']['transformer']['n_head'],
+            'num_encoder_layers': local_config_dict['agent']['transformer']['num_encoder_layers'],
+            'ventana_observacion': local_config_dict['environment']['ventana_observacion_size'],
+            'capital_inicial': local_config_dict['environment']['capital_inicial'],
+            'apalancamiento': local_config_dict['environment']['apalancamiento'],
+            'storage_mode': storage_mode,
             'base_path': str(base_path)
         }
         # Log hyperparameters
@@ -296,7 +306,8 @@ def main():
         
         # Guardar configuración del run usando RunManager (SOLO EL JEFE ESCRIBE)
         try:
-            run_manager.save_run_config(hparams=hparams, args=args)
+            # En lugar de pasar hparams, pasamos el diccionario completo para un snapshot fiel
+            run_manager.save_run_config(hparams=local_config_dict, args=args)
         except Exception as e:
             logger.error(f"Error al guardar config_run.yaml: {e}")
             # Continuar ejecución ya que este error no es crítico
@@ -363,7 +374,7 @@ def main():
         start_episode = 0
         
         # Usar la ruta del price_scaler que devolvió el pipeline para nueva ejecución por defecto
-        if config.storage_mode == "gcp":
+        if storage_mode == "gcp":
             blob_name_price_scaler_a_cargar = f"{run_id}/price_scaler.pkl"
         else:
             path_price_scaler_a_cargar = price_scaler_path
@@ -374,13 +385,14 @@ def main():
             dataframe,  # Disponible en todos los procesos
             logger,
             run_manager,  # Ahora todos los procesos tienen run_manager
+            env_config=local_config_dict['environment'], # Inyección
             price_scaler_path=path_price_scaler_a_cargar,
             price_scaler_blob_name=blob_name_price_scaler_a_cargar
         )
         
         # Crear agente (todos los procesos) - CRUCIAL: Pasar is_distributed
         logger.info(f"[Proceso {rank}] Creando agente SAC...")
-        agent = create_sac_agent(env, device, logger, is_distributed=is_distributed)
+        agent = create_sac_agent(env, device, logger, agent_config=local_config_dict['agent'], is_distributed=is_distributed)
         
         # === FASE 5: GESTIÓN DE CHECKPOINTS Y SINCRONIZACIÓN (CENTRALIZADA EN EL JEFE) ===
         logger.info(f"=== FASE 5: Gestión de Checkpoints [Proceso {rank}] ===")
@@ -421,7 +433,7 @@ def main():
                         logger.info(f"  - Nuevos artefactos se guardarán en run_id: {run_id}")
                         
                         # Actualizar configuración de price_scaler para cargar desde checkpoint
-                        if config.storage_mode == "gcp":
+                        if storage_mode == "gcp":
                             blob_name_price_scaler_a_cargar = f"{args.checkpoint}/price_scaler.pkl"
                             logger.info(f"[Proceso Jefe] Actualizando price_scaler desde GCS (checkpoint): {blob_name_price_scaler_a_cargar}")
                         else:
@@ -501,16 +513,16 @@ def main():
         # Configuración para el trainer (todos los procesos)
         trainer_config = {
             'seed': args.seed,
-            'batch_size': config.batch_size,
-            'min_buffer_for_learning': config.min_buffer_for_learning,
-            'replay_buffer_size': config.replay_buffer_size,
+            'batch_size': local_config_dict['agent']['batch_size'],
+            'min_buffer_for_learning': local_config_dict['agent']['min_buffer_for_learning'],
+            'replay_buffer_size': local_config_dict['agent']['replay_buffer_size'],
             'eval_frequency': args.eval_frequency,
             'eval_episodes': args.eval_episodes,
             'save_frequency': args.save_frequency,
-            'storage_mode': config.storage_mode,
+            'storage_mode': storage_mode,
             'run_id': run_id,
             'tensorboard_dir': tensorboard_dir if is_chief else None,
-            'gcs_bucket_name': getattr(config, 'gcs_bucket_name', None),
+            'gcs_bucket_name': gcs_bucket_name if storage_mode == 'gcp' else None,
             'gcs_utils': gcs_utils if is_chief else None
         }
         

@@ -11,14 +11,14 @@ class OrderType(Enum):
 
 
 class LivePortfolioManager:
-    def __init__(self, api_key: str, api_secret: str, is_testnet: bool, symbol: str = "BTCUSDT", leverage: int = None, max_investment_pct: float = None):
+    def __init__(self, api_key: str, api_secret: str, is_testnet: bool, symbol: str, portfolio_config: dict):
         self.client = Client(api_key, api_secret, testnet=is_testnet)
         self.symbol = symbol
         self.balance = 0.0
         self.current_position = None
         self.pnl = 0.0
-        self.leverage = leverage if leverage is not None else config.apalancamiento
-        self.max_investment_pct = max_investment_pct if max_investment_pct is not None else config.porcentaje_max_inversion_por_trade
+        self.leverage = portfolio_config['apalancamiento']
+        self.max_investment_pct = portfolio_config['porcentaje_max_inversion_por_trade']
         self.quantity_precision = self._get_quantity_precision()
     
     def _get_quantity_precision(self) -> int:
