@@ -136,6 +136,25 @@ class Config:
             raise RuntimeError("API secret no disponible. Verifica la configuración de Google Cloud Secret Manager.")
         return self._api_keys['api_secret']
     
+    # Propiedades para Telegram
+    @property
+    def telegram_bot_token(self) -> str:
+        """Token del bot de Telegram desde Google Secret Manager."""
+        try:
+            return self._get_secret('TELEGRAM_BOT_TOKEN')
+        except Exception as e:
+            logger.error(f"Error al cargar el token del bot de Telegram: {e}")
+            raise RuntimeError("Token del bot de Telegram no disponible. Verifica que el secreto 'TELEGRAM_BOT_TOKEN' exista en Google Cloud Secret Manager.")
+    
+    @property
+    def telegram_chat_id(self) -> str:
+        """ID del chat de Telegram desde Google Secret Manager."""
+        try:
+            return self._get_secret('TELEGRAM_CHAT_ID')
+        except Exception as e:
+            logger.error(f"Error al cargar el ID del chat de Telegram: {e}")
+            raise RuntimeError("ID del chat de Telegram no disponible. Verifica que el secreto 'TELEGRAM_CHAT_ID' exista en Google Cloud Secret Manager.")
+
     # Propiedades para datos
     @property
     def ohlcv_columns(self) -> List[str]:
@@ -353,6 +372,11 @@ class Config:
     def max_pasos_episodio(self) -> int:
         """Máximo pasos por episodio."""
         return self.environment_config.get('max_pasos_episodio', 1000)
+
+    @property
+    def max_consecutive_losses(self) -> int:
+        """Máximo de pérdidas consecutivas antes de activar el kill switch."""
+        return self.environment_config.get('max_consecutive_losses', 5)
 
     # Propiedades para configuración del agente SAC
     @property

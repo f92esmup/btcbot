@@ -22,11 +22,16 @@ class LiveTradingManager:
         print("--- Iniciando Live Trading Manager ---")
 
         # --- Inicialización de Componentes ---
-        # (Aquí irían las claves de Telegram, en una versión final desde un gestor de secretos)
-        # bot_token = "TU_BOT_TOKEN"
-        # chat_id = "TU_CHAT_ID"
-        # self.notifier = TelegramNotifier(bot_token, chat_id)
-        self.notifier = None # Desactivado por ahora para no requerir claves
+        # --- Telegram Notifier Initialization ---
+        try:
+            bot_token = config.telegram_bot_token
+            chat_id = config.telegram_chat_id
+            self.notifier = TelegramNotifier(bot_token=bot_token, chat_id=chat_id)
+            print("✅ TelegramNotifier inicializado correctamente.")
+        except Exception as e:
+            print(f"⚠️  Advertencia: No se pudo inicializar TelegramNotifier. {e}")
+            print("El bot continuará funcionando sin notificaciones de Telegram.")
+            self.notifier = None
 
         # ... (resto de la inicialización de componentes como estaba) ...
         run_manager = RunManager()
