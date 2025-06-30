@@ -20,52 +20,38 @@ class DecisionMaker:
         """
         self.run_id = run_id
         self.device = device
-        self.agent = None
         
-        self._load_agent()
-    
-    def _load_agent(self):
-        """
-        Método privado para cargar el agente desde el run_id especificado.
-        """
-        # 1. Cargar configuración y artefactos
+        # 1. Instanciar RunManager y establecer contexto
         run_manager = RunManager()
-        run_manager.set_run_context(self.run_id)
-        run_config = run_manager.download_and_load_yaml_config(self.run_id)
-        if run_config is None:
-            raise ValueError(f"No se pudo cargar la configuración para el run_id: {self.run_id}")
+        run_manager.set_run_context(run_id)
         
-        # El scaler se carga para obtener el número de características de la observación
-        scaler = run_manager.load_scaler()
+        # 2. Cargar configuración del run
+        self.run_config = run_manager.download_and_load_yaml_config(run_id)
+        if self.run_config is None:
+            raise ValueError(f"No se pudo cargar la configuración para el run_id: {run_id}")
         
-        # 2. Extraer parámetros de la arquitectura de forma robusta
-        try:
-            env_config = run_config['config_snapshot']['environment']
-            agent_config_snapshot = run_config['config_snapshot']['agent']
-            
-            # El número total de características de la observación lo sabe el scaler
-            num_total_features = scaler.n_features_in_
-            sequence_length = env_config['ventana_observacion_size']
-            
-            # La forma de la observación es (L, num_features), donde L es la longitud de la secuencia
-            observation_space_shape = (num_total_features,)
-            
-            # Las características del portfolio son fijas (4)
-            portfolio_features = 4
-            
-            # Las características del mercado son el total menos las del portfolio
-            market_features = num_total_features - portfolio_features
-            
-            # La forma del espacio de acción es fija (1)
-            action_space_shape = (1,)
-            
-            # Usamos la configuración guardada en el snapshot para asegurar consistencia
-            config_override = agent_config_snapshot
-            
-        except KeyError as e:
-            raise ValueError(f"Parámetro de configuración faltante en el run_config.yaml: {e}")
+        # 3. Cargar scaler del entrenamiento
+        self.scaler = run_manager.load_scaler()
         
-        # 3. Instanciar el agente con los parámetros correctos
+        # 4. Extraer configuraciones del entorno y agente
+        env_config = self.run_config['config_snapshot']['environment']
+        agent_config = self.run_config['config_snapshot']['agent']
+        
+        # 5. Inferir parámetros del scaler y run_config
+        num_total_features = self.scaler.n_features_in_
+        sequence_length = env_config['ventana_observacion_size']
+        portfolio_features = 4  # Las características del portfolio son fijas
+        market_features = num_total_features - portfolio_features
+        
+        # 6. Guardar parámetros inferidos como atributos de la clase
+        self.market_features = market_features
+        self.portfolio_features = portfolio_features
+        self.sequence_length = sequence_length
+        
+        # 7. Instanciar el agente con config_override
+        observation_space_shape = (num_total_features,)
+        action_space_shape = (1,)
+        
         self.agent = TransformerSACAgent(
             observation_space_shape=observation_space_shape,
             action_space_shape=action_space_shape,
@@ -73,27 +59,22 @@ class DecisionMaker:
             portfolio_features=portfolio_features,
             sequence_length=sequence_length,
             device=self.device,
-            config_override=config_override,
+            config_override=agent_config,
             is_distributed=False
         )
         
-        # 4. Cargar los pesos del modelo (usamos "best_model" como el objetivo estándar para live)
-        model_prefix = f"{self.run_id}/best_model"
+        # 8. Cargar checkpoint con model_prefix correcto
+        model_prefix = f"{run_id}/best_model"
         run_manager.load_agent_from_checkpoint(
             agent=self.agent,
             checkpoint_prefix=model_prefix,
             reset_optimizers=True
         )
         
-        # 5. Finalizar
+        # 9. Finalizar
         self.agent.eval_mode()
         
-        # Guardar parámetros para parsear observaciones
-        self.market_features = market_features
-        self.portfolio_features = portfolio_features
-        self.sequence_length = sequence_length
-        
-        print(f"✅ Agente cargado exitosamente desde run_id: {self.run_id}")
+        print(f"✅ Agente cargado exitosamente desde run_id: {run_id}")
         print(f"   - Arquitectura inferida del scaler: {num_total_features} features total.")
     
     def _parse_observation(self, observation: np.ndarray) -> tuple[torch.Tensor, torch.Tensor]:

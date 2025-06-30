@@ -3,6 +3,8 @@ import numpy as np
 from src.training.run_manager import RunManager
 from src.data.indicadores import Indicadores
 from src.data.normalization import Normalization
+from src.entorno.environment import TipoOperacion
+from src.configuration.config import config
 
 
 class LiveObservationBuilder:
@@ -13,27 +15,64 @@ class LiveObservationBuilder:
     y los utiliza para procesar los datos de mercado en tiempo real,
     asegurando que la entrada al agente sea consistente con el entrenamiento.
     """
-    def __init__(self, run_id: str):
+    def __init__(self, run_manager: RunManager):
         """
         Inicializa el constructor de observaciones.
         
         Args:
-            run_id (str): El ID del entrenamiento cuyos artefactos (scalers) se deben cargar.
+            run_manager (RunManager): El gestor del run de entrenamiento cuyos artefactos (scalers) se deben cargar.
         """
-        self.run_id = run_id
-        print(f"LiveObservationBuilder: Inicializando para run_id '{self.run_id}'...")
-        run_manager = RunManager()
-        run_manager.set_run_context(run_id=self.run_id)
-        self.scaler = run_manager.load_scaler()
-        self.price_scaler = run_manager.load_price_scaler()
-        print("Scalers cargados exitosamente.")
+        self.run_manager = run_manager
+        print(f"LiveObservationBuilder: Inicializando para run_id '{self.run_manager.run_id}'...")
+        
+        # Cargar configuración del run
+        self.run_config = self.run_manager.download_and_load_yaml_config(self.run_manager.run_id)
+        if self.run_config is None:
+            raise ValueError(f"No se pudo cargar la configuración para el run_id '{self.run_manager.run_id}'")
+        
+        # Cargar scalers
+        self.scaler = self.run_manager.load_scaler()
+        self.price_scaler = self.run_manager.load_price_scaler()
+        
+        # Acceder a la configuración del entorno
+        self.env_config = self.run_config['config_snapshot']['environment']
+        
+        print("Scalers y configuración cargados exitosamente.")
     
-    def build(self, live_dataframe: pd.DataFrame) -> np.ndarray:
+    def build(self, live_market_dataframe: pd.DataFrame, live_portfolio_state: dict) -> np.ndarray:
         """
-        Construye el vector de observación a partir de un DataFrame de datos de mercado en vivo.
+        Construye el vector de observación a partir de los datos de mercado y el estado del portafolio.
+        
+        Args:
+            live_market_dataframe (pd.DataFrame): DataFrame con datos de mercado en vivo
+            live_portfolio_state (dict): Estado actual del portafolio
+            
+        Returns:
+            np.ndarray: Vector de observación normalizado
+        """
+        # 1. Procesar la parte del MERCADO
+        market_obs_vector = self._build_market_observation(live_market_dataframe)
+
+        # 2. Procesar la parte del PORTAFOLIO
+        portfolio_obs_vector = self._build_portfolio_observation(live_portfolio_state)
+
+        # 3. Concatenar ambos vectores para crear la observación final
+        final_observation = np.concatenate([market_obs_vector, portfolio_obs_vector])
+        
+        return final_observation.astype(np.float32)
+
+    def _build_market_observation(self, live_market_dataframe: pd.DataFrame) -> np.ndarray:
+        """
+        Construye el vector de observación del mercado a partir de un DataFrame de datos de mercado en vivo.
+        
+        Args:
+            live_market_dataframe (pd.DataFrame): DataFrame con datos de mercado en vivo
+            
+        Returns:
+            np.ndarray: Vector de características de mercado normalizado
         """
         # 1. Calcular los indicadores técnicos sobre los datos en vivo.
-        indicadores = Indicadores(live_dataframe)
+        indicadores = Indicadores(live_market_dataframe)
         df_with_indicators = indicadores.main()
         
         # 2. Asegurar que las columnas estén en el mismo orden que en el entrenamiento.
@@ -53,3 +92,51 @@ class LiveObservationBuilder:
         
         # 5. Devolver el vector de estado.
         return state_vector
+
+    def _build_portfolio_observation(self, portfolio_state: dict) -> np.ndarray:
+        """
+        Construye el vector de observación del portafolio normalizando el estado del portafolio.
+        
+        Args:
+            portfolio_state (dict): Estado actual del portafolio
+            
+        Returns:
+            np.ndarray: Vector de características del portafolio normalizado
+        """
+        # 1. Tipo de posición normalizado
+        tipo_posicion = portfolio_state['tipo_posicion']
+        if tipo_posicion == 'BUY':
+            tipo_posicion_norm = 1.0
+        elif tipo_posicion == 'NEUTRAL':
+            tipo_posicion_norm = 0.5
+        else:  # 'SELL'
+            tipo_posicion_norm = 0.0
+        
+        # 2. PNL ROE normalizado y clipeado
+        pnl_roe = portfolio_state['pnl_no_realizado_roe']
+        pnl_roe_clipped = np.clip(
+            pnl_roe,
+            self.env_config['min_clip_pnl_roe'],
+            self.env_config['max_clip_pnl_roe']
+        )
+        
+        # Normalizar a [0, 1]
+        min_roe = self.env_config['min_clip_pnl_roe']
+        max_roe = self.env_config['max_clip_pnl_roe']
+        if max_roe != min_roe:
+            pnl_roe_norm = (pnl_roe_clipped - min_roe) / (max_roe - min_roe)
+        else:
+            pnl_roe_norm = 0.5
+        
+        # 3. Pasos en posición normalizado
+        pasos_norm = min(1.0, portfolio_state['pasos_en_posicion'] / self.env_config['max_pasos_en_posicion'])
+        
+        # 4. Precio de entrada normalizado
+        if portfolio_state['tipo_posicion'] != 'NEUTRAL' and portfolio_state['precio_entrada'] > 0:
+            # Usar el price_scaler para normalizar el precio de entrada
+            precio_entrada_scaled = self.price_scaler.transform([[portfolio_state['precio_entrada']]])[0][0]
+            precio_entrada_norm = np.clip(precio_entrada_scaled, 0.0, 1.0)
+        else:
+            precio_entrada_norm = 0.5  # Valor neutral
+        
+        return np.array([tipo_posicion_norm, pnl_roe_norm, pasos_norm, precio_entrada_norm], dtype=np.float32)

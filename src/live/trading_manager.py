@@ -7,6 +7,7 @@ from src.live.decision_maker import DecisionMaker
 from src.live.portfolio_manager import LivePortfolioManager, OrderType
 from src.live.risk_manager import RiskManager
 from src.live.telegram_notifier import TelegramNotifier
+from src.training.run_manager import RunManager
 from src.configuration.config import config
 
 
@@ -27,7 +28,9 @@ class LiveTradingManager:
         self.notifier = None # Desactivado por ahora para no requerir claves
 
         # ... (resto de la inicialización de componentes como estaba) ...
-        self.observation_builder = LiveObservationBuilder(self.run_id)
+        run_manager = RunManager()
+        run_manager.set_run_context(run_id=self.run_id)
+        self.observation_builder = LiveObservationBuilder(run_manager)
         self.decision_maker = DecisionMaker(self.run_id, self.device)
         # ... etc ...
         api_key = config.binance_api_key
@@ -71,14 +74,17 @@ class LiveTradingManager:
                 print("La operativa está detenida por riesgo. No se tomarán más acciones.")
             return
 
-        # 3. Construir la observación
-        observation_vector = self.observation_builder.build(live_dataframe)
+        # 3. Obtener el estado del portafolio
+        live_portfolio_state = self.portfolio_manager.get_current_state()
+
+        # 4. Construir la observación
+        observation_vector = self.observation_builder.build(live_market_dataframe=live_dataframe, live_portfolio_state=live_portfolio_state)
         
-        # 4. Tomar una decisión
+        # 5. Tomar una decisión
         action = self.decision_maker.get_action(observation_vector)
         print(f"Decisión del agente: {action:.4f}")
         
-        # 5. Interpretar y ejecutar la acción
+        # 6. Interpretar y ejecutar la acción
         # Lógica de ejecución de órdenes
         zona_muerta = config.zona_muerta_mantener
         price = live_dataframe['Close'].iloc[-1]

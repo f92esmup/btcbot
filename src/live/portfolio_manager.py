@@ -126,8 +126,23 @@ class LivePortfolioManager:
             quantity=quantity
         )
         
-        # Restablecer la posición actual
+        # Restablecer la posición current_position
         self.current_position = None
         
         print(f"✅ Posición cerrada exitosamente con orden {order_side} de {quantity} {self.symbol} a precio ~{price}")
         return order_response
+    
+    def get_current_state(self):
+        """
+        Obtener el estado actual del portafolio para la construcción de la observación.
+        
+        Returns:
+            dict: Diccionario con el estado actual del portafolio incluyendo tipo de posición,
+                  PnL no realizado, pasos en posición y precio de entrada.
+        """
+        return {
+            'tipo_posicion': self.current_position['type'] if self.current_position else 'NEUTRAL',
+            'pnl_no_realizado_roe': 0.0,
+            'pasos_en_posicion': 0,
+            'precio_entrada': self.current_position['entry_price'] if self.current_position else 0.0
+        }
