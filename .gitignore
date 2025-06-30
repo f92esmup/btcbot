@@ -7,3 +7,4 @@ models/
 runs/
 .conda/
 Entrenamientos/
+.env
