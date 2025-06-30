@@ -102,6 +102,7 @@ environment:
   apalancamiento: 10        # Apalancamiento máximo (ej. 10x)
   porcentaje_max_inversion_por_trade: 0.05  # 5% del balance como margen por trade
   max_drawdown_configurado_cuenta: 0.5      # 50% de drawdown máximo antes de terminated
+  max_consecutive_losses: 5  # Número máximo de pérdidas consecutivas permitidas
   
   # Costos de trading
   comision_taker_porcentaje: 0.0004    # 0.04% sobre valor nocional

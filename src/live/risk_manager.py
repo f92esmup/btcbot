@@ -6,20 +6,24 @@ class RiskManager:
     Supervisa el riesgo del portfolio de forma independiente, principalmente el drawdown.
     Actúa como un freno de emergencia si se superan los umbrales de riesgo.
     """
-    def __init__(self, portfolio_manager: LivePortfolioManager, max_drawdown_pct: float):
+    def __init__(self, portfolio_manager: LivePortfolioManager, max_drawdown_pct: float, max_consecutive_losses: int):
         """
         Inicializa el gestor de riesgo.
 
         Args:
             portfolio_manager: El gestor del portfolio para obtener el estado actual.
             max_drawdown_pct: El drawdown máximo permitido como un flotante (ej. 0.2 para 20%).
+            max_consecutive_losses: El número máximo de pérdidas consecutivas permitidas.
         """
         self.portfolio_manager = portfolio_manager
         self.max_drawdown_pct = max_drawdown_pct
+        self.max_consecutive_losses = max_consecutive_losses
+        self.consecutive_losses_counter = 0
         self.initial_equity = 0.0
         self.max_equity_so_far = 0.0
         self.is_initialized = False
         print(f"RiskManager inicializado con un max_drawdown_pct de {max_drawdown_pct:.2%}")
+        print(f"Contador de pérdidas consecutivas inicializado (máximo permitido: {max_consecutive_losses})")
 
     def update_state(self, current_equity: float):
         """
@@ -38,6 +42,22 @@ class RiskManager:
         if current_equity > self.max_equity_so_far:
             self.max_equity_so_far = current_equity
 
+    def register_trade(self, pnl_realizado: float):
+        """
+        Registra el resultado de una operación cerrada y actualiza el contador de pérdidas consecutivas.
+        
+        Args:
+            pnl_realizado: El PnL realizado de la operación (positivo para ganancias, negativo para pérdidas).
+        """
+        if pnl_realizado > 0:
+            # Ganancia: reiniciar el contador de pérdidas consecutivas
+            self.consecutive_losses_counter = 0
+        else:
+            # Pérdida o trade sin ganancia: incrementar el contador
+            self.consecutive_losses_counter += 1
+        
+        print(f"Racha de pérdidas consecutivas actualizada: {self.consecutive_losses_counter}")
+
     def is_risk_threshold_exceeded(self) -> bool:
         """
         Verifica si el drawdown actual ha superado el umbral máximo permitido.
@@ -45,6 +65,11 @@ class RiskManager:
         Returns:
             True si el riesgo es demasiado alto, False en caso contrario.
         """
+        # Verificar pérdidas consecutivas
+        if self.consecutive_losses_counter >= self.max_consecutive_losses:
+            print(f"🚨 ALERTA DE RIESGO: Se ha alcanzado el número máximo de pérdidas consecutivas ({self.consecutive_losses_counter}/{self.max_consecutive_losses})")
+            return True
+            
         if not self.is_initialized:
             return False
 

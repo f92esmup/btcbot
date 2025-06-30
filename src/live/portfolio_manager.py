@@ -33,7 +33,7 @@ class LivePortfolioManager:
                     if filter['filterType'] == 'LOT_SIZE':
                         step_size = float(filter['stepSize'])
                         # Calcula el número de decimales a partir del step_size
-                        precision = int(round(-math.log(step_size, 10), 0))
+                        precision = int(round - math.log(step_size, 10), 0)
                         print(f"Precisión de cantidad para {self.symbol} establecida en: {precision} decimales.")
                         return precision
         raise ValueError(f"No se pudo obtener la precisión de cantidad para {self.symbol}")
@@ -104,22 +104,28 @@ class LivePortfolioManager:
     def close_current_position(self, price: float):
         """
         Cierra la posición actual con una orden de mercado.
+        Devuelve una tupla (order_response, pnl_neto).
         """
         # Verificar si hay una posición abierta
         if self.current_position is None:
             print("No hay posición actual para cerrar")
-            return
+            return None, 0.0
         
-        # Determinar la order_side opuesta
-        if self.current_position['type'] == 'BUY':
-            order_side = 'SELL'
-        else:
-            order_side = 'BUY'
-        
-        # Obtener la cantidad a cerrar
+        # Calcular el PnL antes de cerrar
+        entry_price = self.current_position['entry_price']
         quantity = self.current_position['quantity']
         
+        if self.current_position['type'] == 'BUY':
+            # Posición larga: ganancia si el precio subió
+            pnl_neto = (price - entry_price) * quantity
+            order_side = 'SELL'
+        else:
+            # Posición corta: ganancia si el precio bajó
+            pnl_neto = (entry_price - price) * quantity
+            order_side = 'BUY'
+        
         print(f"Cerrando posición {self.current_position['type']} de {quantity} {self.symbol}...")
+        print(f"PnL calculado: {pnl_neto:.4f} USDT (Entrada: {entry_price:.4f}, Salida: {price:.4f})")
         
         # Enviar orden de cierre
         order_response = self.client.futures_create_order(
@@ -133,6 +139,41 @@ class LivePortfolioManager:
         self.current_position = None
         
         print(f"✅ Posición cerrada exitosamente con orden {order_side} de {quantity} {self.symbol} a precio ~{price}")
+        return order_response, pnl_neto
+    
+    def close_all_positions(self):
+        """
+        Cierra todas las posiciones abiertas. Método de emergencia (kill switch).
+        """
+        # Verificar si hay una posición abierta
+        if self.current_position is None:
+            print("No hay posiciones abiertas para el cierre de emergencia.")
+            return
+        
+        print("Cierre de emergencia activado. Cerrando posición actual...")
+        
+        # Determinar la order_side opuesta
+        if self.current_position['type'] == 'BUY':
+            order_side = 'SELL'
+        else:
+            order_side = 'BUY'
+        
+        # Obtener la cantidad a cerrar
+        quantity = self.current_position['quantity']
+        
+        # Enviar orden de cierre de emergencia
+        order_response = self.client.futures_create_order(
+            symbol=self.symbol,
+            side=order_side,
+            type='MARKET',
+            quantity=quantity
+        )
+        
+        print(f"✅ Cierre de emergencia completado: {order_side} {quantity} {self.symbol}")
+        
+        # Restablecer la posición current_position
+        self.current_position = None
+        
         return order_response
     
     def get_current_state(self):
