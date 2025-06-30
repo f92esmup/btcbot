@@ -67,12 +67,12 @@ class LivePortfolioManager:
     def update_pnl(self):
         pass
     
-    def execute_order(self, order_type: OrderType, price: float):
+    def execute_order(self, order_type: OrderType, price: float, magnitud: float):
         """
         Calcula la cantidad, la ajusta a la precisión correcta y envía la orden.
         """
         # 1. Cálculo de la cantidad
-        margen_a_usar = self.balance * self.max_investment_pct
+        margen_a_usar = self.balance * self.max_investment_pct * magnitud
         valor_nocional = margen_a_usar * self.leverage
         quantity = valor_nocional / price
         
@@ -178,3 +178,32 @@ class LivePortfolioManager:
             'pasos_en_posicion': self.current_position.get('pasos_en_posicion', 0),
             'precio_entrada': self.current_position['entry_price']
         }
+    
+    def get_current_equity(self):
+        """
+        Obtiene el equity actual del portafolio, incluyendo el PnL no realizado.
+        """
+        # Si no hay una posición abierta, devolver simplemente el balance
+        if self.current_position is None:
+            return self.balance
+        
+        try:
+            # Obtener información de la posición desde la API de Binance
+            positions = self.client.futures_position_information(symbol=self.symbol)
+            
+            if positions:
+                position_info = positions[0]
+                unrealized_pnl = float(position_info.get('unrealizedProfit', 0.0))
+                
+                # Devolver balance + PnL no realizado
+                return self.balance + unrealized_pnl
+            else:
+                # Si no hay información de posición, devolver balance
+                return self.balance
+                
+        except BinanceAPIException as e:
+            print(f"⚠️ Error de API al obtener equity para {self.symbol}: {e}. Usando balance como valor seguro.")
+            return self.balance
+        except Exception as e:
+            print(f"⚠️ Error inesperado al obtener equity: {e}. Usando balance como valor seguro.")
+            return self.balance

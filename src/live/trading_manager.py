@@ -65,7 +65,7 @@ class LiveTradingManager:
             self.portfolio_manager.current_position['pasos_en_posicion'] += 1
 
         # 1. Actualizar estado de riesgo y PNL no realizado (lógica de PNL pendiente)
-        current_equity = self.portfolio_manager.balance # Placeholder, mejorará cuando implementemos PNL
+        current_equity = self.portfolio_manager.get_current_equity()
         self.risk_manager.update_state(current_equity)
 
         # 2. BARRERA DE SEGURIDAD: Comprobar si el riesgo ha superado el umbral
@@ -96,9 +96,12 @@ class LiveTradingManager:
         # Lógica de Intención
         if action > zona_muerta:
             intencion = OrderType.BUY
+            magnitud_efectiva = (action - zona_muerta) / (1.0 - zona_muerta)
         elif action < -zona_muerta:
             intencion = OrderType.SELL
+            magnitud_efectiva = (abs(action) - zona_muerta) / (1.0 - zona_muerta)
         else:
+            magnitud_efectiva = 0.0
             print("Acción en zona muerta, manteniendo posición.")
             return
         
@@ -110,7 +113,7 @@ class LiveTradingManager:
         if posicion_actual is None:
             # No hay posición, abrimos una nueva si hay intención
             print(f"Ejecutando nueva orden de {intencion.value}...")
-            order = self.portfolio_manager.execute_order(intencion, price)
+            order = self.portfolio_manager.execute_order(intencion, price, magnitud_efectiva)
             if self.notifier:
                 self.notifier.send_message(f"📈 NUEVA POSICIÓN: {intencion.value}\nCantidad: {order['origQty'] if order and 'origQty' in order else 'N/A'}\nPrecio: ~{price:.2f}")
         else:
