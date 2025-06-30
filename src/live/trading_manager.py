@@ -23,8 +23,22 @@ class LiveTradingManager:
         print(f"🔧 Modo de operación: {mode.upper()}")
         print(f"🎯 Conectando a: {'Testnet' if mode == 'testnet' else 'Producción'}")
 
-        # --- Inicialización de Componentes ---
-        # --- Telegram Notifier Initialization ---
+        # --- Carga de Configuración Centralizada ---
+        print(f"🔩 Cargando configuración para el run_id: {self.run_id}")
+        run_manager = RunManager()
+        run_manager.set_run_context(run_id=self.run_id)
+        run_config = run_manager.download_and_load_yaml_config(self.run_id)
+        if run_config is None:
+            raise ValueError(f"No se pudo cargar la configuración para el run_id: '{self.run_id}'")
+        
+        # Extraer las configuraciones específicas del snapshot del entrenamiento
+        env_config = run_config['config_snapshot']['environment']
+        
+        print("✅ Configuración del run cargada exitosamente.")
+
+        # --- Inicialización de Componentes con Configuración del Run ---
+        
+        # Notificador de Telegram (usa credenciales globales)
         try:
             bot_token = config.telegram_bot_token
             chat_id = config.telegram_chat_id
@@ -32,38 +46,53 @@ class LiveTradingManager:
             print("✅ TelegramNotifier inicializado correctamente.")
         except Exception as e:
             print(f"⚠️  Advertencia: No se pudo inicializar TelegramNotifier. {e}")
-            print("El bot continuará funcionando sin notificaciones de Telegram.")
             self.notifier = None
 
-        # ... (resto de la inicialización de componentes como estaba) ...
-        run_manager = RunManager()
-        run_manager.set_run_context(run_id=self.run_id)
+        # Observation Builder (ahora pasamos el run_manager que ya tiene el contexto)
         self.observation_builder = LiveObservationBuilder(run_manager)
+
+        # Decision Maker
         self.decision_maker = DecisionMaker(self.run_id, self.device)
-        # ... etc ...
+        
+        # Portfolio Manager (usa credenciales globales y config del run)
         api_key = config.binance_api_key
         api_secret = config.binance_api_secret
         is_testnet = (mode == 'testnet')
-        self.portfolio_manager = LivePortfolioManager(api_key, api_secret, is_testnet, self.symbol)
-        max_drawdown = config.max_drawdown_configurado_cuenta
-        max_consecutive_losses = config.max_consecutive_losses
-        self.risk_manager = RiskManager(self.portfolio_manager, max_drawdown, max_consecutive_losses)
-        warm_up_candles = 200
+        self.portfolio_manager = LivePortfolioManager(
+            api_key=api_key, 
+            api_secret=api_secret, 
+            is_testnet=is_testnet, 
+            symbol=self.symbol,
+            # Pasamos los parámetros de trading desde la config del run
+            leverage=env_config['apalancamiento'],
+            max_investment_pct=env_config['porcentaje_max_inversion_por_trade']
+        )
+
+        # Risk Manager (usa config del run)
+        self.risk_manager = RiskManager(
+            portfolio_manager=self.portfolio_manager, 
+            # Pasamos los parámetros de riesgo desde la config del run
+            max_drawdown_pct=env_config['max_drawdown_configurado_cuenta'], 
+            max_consecutive_losses=env_config.get('max_consecutive_losses', 5) # Usamos .get con default para compatibilidad con runs antiguos
+        )
+
+        # Data Reader
+        warm_up_candles = 200 # Este valor puede ser más estático
         self.data_reader = BinanceLiveDataReader(self.symbol, '1h', self, warm_up_candles)
         
-        # --- BigQuery Logger Initialization ---
+        # BigQuery Logger (usa credenciales globales)
         try:
-            project_id = getattr(config, 'gcp_project_id', 'your-project-id')
-            dataset_id = getattr(config, 'bigquery_dataset_id', 'btcbot_dataset')
+            project_id = config.project_id
+            dataset_id = 'trading_logs' # Podríamos añadir esto a config.yaml global
             self.bq_logger = BigQueryLogger(project_id=project_id, dataset_id=dataset_id)
             print("✅ BigQueryLogger inicializado correctamente")
         except Exception as e:
             print(f"⚠️ Error al inicializar BigQueryLogger: {e}")
-            print("El bot continuará funcionando sin logging a BigQuery")
             self.bq_logger = None
         
+        # Notificación de inicio
         if self.notifier:
-            self.notifier.send_message(f"✅ Bot de Trading INICIADO\nRun ID: {self.run_id}\nSímbolo: {self.symbol}")
+            self.notifier.send_message(f"✅ Bot de Trading INICIADO\nRun ID: {self.run_id}\nSímbolo: {self.symbol}\nModo: {mode.upper()}")
         
         print("--- Todos los componentes inicializados ---")
 

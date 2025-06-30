@@ -11,14 +11,14 @@ class OrderType(Enum):
 
 
 class LivePortfolioManager:
-    def __init__(self, api_key: str, api_secret: str, is_testnet: bool, symbol: str = "BTCUSDT"):
+    def __init__(self, api_key: str, api_secret: str, is_testnet: bool, symbol: str = "BTCUSDT", leverage: int = None, max_investment_pct: float = None):
         self.client = Client(api_key, api_secret, testnet=is_testnet)
         self.symbol = symbol
         self.balance = 0.0
         self.current_position = None
         self.pnl = 0.0
-        self.leverage = config.apalancamiento
-        self.max_investment_pct = config.porcentaje_max_inversion_por_trade
+        self.leverage = leverage if leverage is not None else config.apalancamiento
+        self.max_investment_pct = max_investment_pct if max_investment_pct is not None else config.porcentaje_max_inversion_por_trade
         self.quantity_precision = self._get_quantity_precision()
     
     def _get_quantity_precision(self) -> int:
@@ -33,7 +33,7 @@ class LivePortfolioManager:
                     if filter['filterType'] == 'LOT_SIZE':
                         step_size = float(filter['stepSize'])
                         # Calcula el número de decimales a partir del step_size
-                        precision = int(round - math.log(step_size, 10), 0)
+                        precision = int(round(-math.log(step_size, 10), 0))
                         print(f"Precisión de cantidad para {self.symbol} establecida en: {precision} decimales.")
                         return precision
         raise ValueError(f"No se pudo obtener la precisión de cantidad para {self.symbol}")
