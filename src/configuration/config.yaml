@@ -30,6 +30,14 @@ gcp:
     bucket_name: "btcbot-training-2762"  # Nombre del bucket para almacenar modelos
     scaler_blob_name: "scaler.pkl"  # Nombre del archivo scaler en GCS
     price_scaler_blob_name: "price_scaler.pkl"  # Nombre del archivo price_scaler en GCS
+  secrets:
+    # Nombres de los secretos tal como existen en Google Secret Manager
+    binance_api_key_futures: "BINANCE_API_KEY_FUTURES"
+    binance_api_secret_futures: "BINANCE_API_SECRET_FUTURES"
+    testnet_binance_api_key_futures: "TESTNET_BINANCE_API_KEY_FUTURES"
+    testnet_binance_api_secret_futures: "TESTNET_BINANCE_API_SECRET_FUTURES"
+    telegram_bot_token: "TELEGRAM_BOT_TOKEN"
+    telegram_chat_id: "TELEGRAM_CHAT_ID" 
 
 # Configuración de datos
 data:
@@ -149,7 +157,7 @@ agent:
     positional_encoding_learnable: false
 
   # --- Parámetros del Replay Buffer y Entrenamiento General ---
-  replay_buffer_size: 8000000
+  replay_buffer_size: 50000
   batch_size: 8192
   min_buffer_for_learning: 500000
 

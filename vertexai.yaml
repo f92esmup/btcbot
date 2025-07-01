@@ -17,7 +17,7 @@ workerPoolSpecs:
       acceleratorType: 'NVIDIA_TESLA_T4'
 
       # acceleratorCount: The number of GPUs to attach to the machine.
-      acceleratorCount: 2
+      acceleratorCount: 4
     
     # replicaCount: The number of worker replicas in this pool.
     # For single-machine training, this is 1.
@@ -31,7 +31,7 @@ workerPoolSpecs:
       imageUri: 'europe-southwest1-docker.pkg.dev/btcbot-2762/btcbotrepo/btcbot-train-gpu:latest'
 
       # Forma CORRECTA para multi-GPU en un nodo
-      command: ["torchrun", "--nproc_per_node=2", "train.py"]
+    command: ["torchrun", "--nproc_per_node=4", "train.py"]
 
 
       # args: Arguments to pass to the ENTRYPOINT of your Docker container (train.py).

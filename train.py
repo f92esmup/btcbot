@@ -27,6 +27,7 @@ from src.utils.validation import validate_date_format
 from src.utils.cli import parse_arguments
 from src.analysis.logger import TensorboardLogger
 from src.training import RunManager, AgentEvaluator, Trainer
+from src.configuration.secret_utils import SecretManagerUtils
 
 
 def create_trading_environment(dataframe: Any, logger, run_manager: RunManager, env_config: dict, price_scaler_path: Optional[str] = None, price_scaler_blob_name: Optional[str] = None) -> FuturesTradingEnv:
@@ -359,15 +360,33 @@ def main():
         if is_chief:
             logger.info("=== FASE 1: Generando y Guardando Artefactos (PROCESO JEFE) ===")
             
-            # Obtener credenciales de API desde variables de entorno
-            api_key = os.getenv('BINANCE_API_KEY')
-            api_secret = os.getenv('BINANCE_API_SECRET')
-            
+            # Obtener credenciales de API desde Secret Manager o variables de entorno
+            api_key = None
+            api_secret = None
+            try:
+                gcp_config = local_config_dict.get('gcp', {})
+                project_id = gcp_config.get('project_id')
+                if project_id:
+                    logger.info("Intentando cargar credenciales desde Secret Manager...")
+                    secret_manager = SecretManagerUtils(project_id=project_id)
+                    secrets_config = local_config_dict.get('secrets', {})
+                    api_key_secret_id = secrets_config.get('binance_api_key_futures')
+                    api_secret_secret_id = secrets_config.get('binance_api_secret_futures')
+                    if api_key_secret_id and api_secret_secret_id:
+                        api_key = secret_manager.get_secret(api_key_secret_id)
+                        api_secret = secret_manager.get_secret(api_secret_secret_id)
+                        logger.info("✅ Credenciales de Binance cargadas desde Secret Manager.")
+            except (KeyError, RuntimeError) as e:
+                logger.warning(f"No se pudieron cargar las credenciales desde Secret Manager: {e}")
+
             if not api_key or not api_secret:
-                logger.warning("Credenciales de Binance no encontradas en variables de entorno. Continuando sin ellas.")
-                logger.warning("Para usar la API de Binance, define BINANCE_API_KEY y BINANCE_API_SECRET")
-            else:
-                logger.info("Credenciales de Binance cargadas desde variables de entorno")
+                logger.warning("Credenciales no encontradas en Secret Manager, intentando con variables de entorno...")
+                api_key = os.getenv('BINANCE_API_KEY')
+                api_secret = os.getenv('BINANCE_API_SECRET')
+                if api_key and api_secret:
+                    logger.info("✅ Credenciales de Binance cargadas desde variables de entorno.")
+                else:
+                    logger.warning("Credenciales de Binance no encontradas en variables de entorno. La adquisición de datos podría fallar si se requiere autenticación.")
             
             # Crear instancia local de GCSUtils si es necesario para compatibilidad
             gcs_utils_for_pipeline = None

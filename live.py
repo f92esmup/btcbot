@@ -21,6 +21,7 @@ import yaml
 from src.live.trading_manager import LiveTradingManager
 from src.utils.system import setup_logging
 from src.training.run_manager import RunManager
+from src.configuration.secret_utils import SecretManagerUtils
 
 def parse_arguments():
     """Parsea los argumentos de línea de comandos para el modo live."""
@@ -83,29 +84,39 @@ def main():
             logger.error(f"El config_run.yaml para '{args.run_id}' no contiene 'experiment_definition' con 'symbol' o 'interval'.")
             sys.exit(1)
 
-        # --- 2. Carga de Credenciales desde Variables de Entorno ---
-        logger.info("🔐 Cargando credenciales y secretos desde variables de entorno...")
+        # --- 2. Carga de Credenciales desde Google Secret Manager ---
+        logger.info("🔐 Cargando credenciales y secretos desde Google Secret Manager...")
         is_testnet = (args.mode == 'testnet')
         
-        # Cargar credenciales de Binance
-        api_key_env_var = 'TESTNET_BINANCE_API_KEY_FUTURES' if is_testnet else 'BINANCE_API_KEY_FUTURES'
-        api_secret_env_var = 'TESTNET_BINANCE_API_SECRET_FUTURES' if is_testnet else 'BINANCE_API_SECRET_FUTURES'
-        
-        api_key = os.getenv(api_key_env_var)
-        api_secret = os.getenv(api_secret_env_var)
-
-        if not api_key or not api_secret:
-            logger.error(f"No se encontraron las variables de entorno para las credenciales de Binance: {api_key_env_var}, {api_secret_env_var}")
+        gcp_config = run_config.get('config', {}).get('gcp', {})
+        project_id = gcp_config.get('project_id')
+        if not project_id:
+            logger.error("No se encontró 'project_id' en la configuración de GCP. Abortando.")
             sys.exit(1)
-        logger.info(f"✅ Credenciales de Binance {'testnet' if is_testnet else 'producción'} cargadas.")
+            
+        secret_manager = SecretManagerUtils(project_id=project_id)
+        secrets_config = run_config.get('config', {}).get('gcp', {}).get('secrets', {})
 
-        # Cargar credenciales de Telegram (opcional)
-        telegram_bot_token = os.getenv('TELEGRAM_BOT_TOKEN')
-        telegram_chat_id = os.getenv('TELEGRAM_CHAT_ID')
-        if telegram_bot_token and telegram_chat_id:
+        try:
+            if is_testnet:
+                api_key_secret_id = secrets_config['testnet_binance_api_key_futures']
+                api_secret_secret_id = secrets_config['testnet_binance_api_secret_futures']
+            else:
+                api_key_secret_id = secrets_config['binance_api_key_futures']
+                api_secret_secret_id = secrets_config['binance_api_secret_futures']
+
+            api_key = secret_manager.get_secret(api_key_secret_id)
+            api_secret = secret_manager.get_secret(api_secret_secret_id)
+            logger.info(f"✅ Credenciales de Binance {'testnet' if is_testnet else 'producción'} cargadas.")
+
+            telegram_bot_token = secret_manager.get_secret(secrets_config['telegram_bot_token'])
+            telegram_chat_id = secret_manager.get_secret(secrets_config['telegram_chat_id'])
             logger.info("✅ Credenciales de Telegram cargadas.")
-        else:
-            logger.warning("⚠️  Credenciales de Telegram no encontradas en variables de entorno. Notificaciones desactivadas.")
+
+        except (KeyError, RuntimeError) as e:
+            logger.error(f"Error al cargar secretos: {e}")
+            sys.exit(1)
+
 
         # --- 3. Inicialización y Ejecución del Trading Manager ---
         manager = LiveTradingManager(

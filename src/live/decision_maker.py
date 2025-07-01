@@ -39,11 +39,12 @@ class DecisionMaker:
              raise ValueError("El scaler cargado no parece estar ajustado (no tiene 'n_features_in_').")
         
         num_total_features = self.scaler.n_features_in_
+        self.market_features = num_total_features
         sequence_length = self.env_config['ventana_observacion_size']
         # Leer el número de características del portfolio desde la configuración del agente
         self.portfolio_features = agent_config.get('architecture', {}).get('portfolio_features', 4)
         # Las características de mercado son el total menos las del portfolio
-        self.market_features = (num_total_features - self.portfolio_features) // sequence_length
+        # self.market_features = (num_total_features - self.portfolio_features) // sequence_length
         self.sequence_length = sequence_length
 
         # 4. Instanciar el agente con config_override
