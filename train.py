@@ -20,6 +20,7 @@ import yaml
 
 from src.data.pipeline import DataPipeline
 from src.entorno.environment import FuturesTradingEnv
+from src.entorno.portfolio import Portfolio
 from src.agente.agent import TransformerSACAgent
 from src.utils.system import setup_logging, set_seed, setup_device, setup_environment_and_distribution
 from src.utils.validation import validate_date_format
@@ -63,10 +64,13 @@ def create_trading_environment(dataframe: Any, logger, run_manager: RunManager, 
         logger.error("No se puede continuar sin el price_scaler. Deteniendo ejecución.")
         raise RuntimeError(f"Fallo al cargar price_scaler: {e}")
     
+    sim_portfolio = Portfolio(env_config)
+
     env = FuturesTradingEnv(
         data_df=dataframe,
         price_scaler=price_scaler,
-        env_config=env_config # Inyección de configuración
+        env_config=env_config, # Inyección de configuración
+        portfolio=sim_portfolio
     )
     
     logger.info(f"Entorno creado:")

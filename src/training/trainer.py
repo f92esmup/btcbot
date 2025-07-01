@@ -109,9 +109,9 @@ class Trainer:
             obs, _ = self.env.reset(seed=current_episode_seed)
             episode_return = 0
             episode_length = 0
-            initial_balance = self.env.portfolio.balance_actual
-            initial_equity = self.env.portfolio.equity_actual
-            max_equity_episode = self.env.portfolio.equity_actual
+            initial_balance = self.env.portfolio.balance
+            initial_equity = self.env.portfolio.equity
+            max_equity_episode = self.env.portfolio.equity
             
             # Episode trading metrics
             episode_trades_count = 0
@@ -181,7 +181,7 @@ class Trainer:
                 episode_length += 1
                 
                 # Update max equity for episode drawdown
-                max_equity_episode = max(max_equity_episode, self.env.portfolio.equity_actual)
+                max_equity_episode = max(max_equity_episode, self.env.portfolio.equity)
                 
                 # Track individual trades
                 if info.get('trade_ejecutado') and info.get('pnl_realizado', 0) != 0:
@@ -219,7 +219,7 @@ class Trainer:
                         self.logger.log_per_trade_metrics(self.global_trade_counter, trade_data)
             
             # Calculate episode profit
-            final_balance = self.env.portfolio.balance_actual
+            final_balance = self.env.portfolio.balance
             profit_pct = ((final_balance - initial_balance) / initial_balance) * 100
             
             # Store metrics
@@ -235,7 +235,7 @@ class Trainer:
                 alpha_values.append(self.agent.alpha.item())
             
             # Prepare metrics for logging
-            drawdown_episode = (max_equity_episode - self.env.portfolio.equity_actual) / max_equity_episode if max_equity_episode > 0 else 0
+            drawdown_episode = (max_equity_episode - self.env.portfolio.equity) / max_equity_episode if max_equity_episode > 0 else 0
             win_rate_episode = (episode_winning_trades / episode_trades_count) * 100 if episode_trades_count > 0 else 0
             avg_roe_episode = (episode_total_roe_realized / episode_trades_count) if episode_trades_count > 0 else 0.0
             avg_margin_used_episode = np.mean(episode_margins_used) if episode_margins_used else 0.0
@@ -253,7 +253,7 @@ class Trainer:
             
             env_metrics = {
                 'drawdown_episode': drawdown_episode,
-                'final_balance': self.env.portfolio.balance_actual,
+                'final_balance': self.env.portfolio.balance,
                 'initial_balance': initial_balance
             }
             

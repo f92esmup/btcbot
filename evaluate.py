@@ -23,6 +23,7 @@ import yaml
 # Importaciones del proyecto
 from src.data.pipeline import DataPipeline
 from src.entorno.environment import FuturesTradingEnv
+from src.entorno.portfolio import Portfolio
 from src.agente.agent import TransformerSACAgent
 from src.training.run_manager import RunManager
 from src.training.evaluator import AgentEvaluator
@@ -289,10 +290,12 @@ def main():
 
         # --- 4. Creación del Entorno y Agente ---
         logger.info("🏗️ Creando entorno de trading...")
+        sim_portfolio = Portfolio(env_config)
         env = FuturesTradingEnv(
             data_df=normalized_dataframe,
             price_scaler=price_scaler, # Inyectar el scaler devuelto por el pipeline
-            env_config=env_config  # Inyección de configuración del run
+            env_config=env_config,  # Inyección de configuración del run
+            portfolio=sim_portfolio
         )
 
         obs, _ = env.reset()

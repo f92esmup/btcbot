@@ -13,7 +13,8 @@ from typing import Dict, Any, Tuple, Optional
 import logging
 from sklearn.preprocessing import MinMaxScaler
 
-from .portfolio import Portfolio, TipoOperacion
+from .portfolio import Portfolio
+from .base_portfolio import BasePortfolio, TipoOperacion
 from .reward_strategy import BaseRewardStrategy, EquityChangeRewardStrategy
 
 logger = logging.getLogger(__name__)
@@ -34,6 +35,7 @@ class FuturesTradingEnv(gym.Env):
         data_df: pd.DataFrame,
         price_scaler: MinMaxScaler,
         env_config: Dict[str, Any],
+        portfolio: BasePortfolio, # Inyección de dependencia
         reward_strategy: Optional[BaseRewardStrategy] = None
     ):
         """
@@ -43,6 +45,7 @@ class FuturesTradingEnv(gym.Env):
             data_df: DataFrame con datos OHLCV + indicadores normalizados [0,1]
             price_scaler: Scaler ajustado para normalizar precios
             env_config: Diccionario con la configuración específica para el entorno.
+            portfolio: Una instancia que cumple con la interfaz BasePortfolio.
             reward_strategy: Estrategia para el cálculo de recompensas.
         """
         super().__init__()
@@ -64,7 +67,7 @@ class FuturesTradingEnv(gym.Env):
                 f"Dataset debe tener al menos {self.config_entorno['ventana_observacion_size']} filas"
             )
         
-        self.portfolio = Portfolio(env_config)
+        self.portfolio = portfolio
         self.reward_strategy = reward_strategy or EquityChangeRewardStrategy(env_config)
         self._setup_spaces()
         
@@ -92,7 +95,7 @@ class FuturesTradingEnv(gym.Env):
         self._select_start_point(options)
         self.portfolio.reset()
         self.pasos_totales_episodio = 0
-        self.historial_equity = [self.portfolio.equity_actual]
+        self.historial_equity = [self.portfolio.equity]
         
         observation = self._get_current_observation()
         info = self._get_step_info(0.0, "RESET", False, 0.0)
@@ -113,15 +116,15 @@ class FuturesTradingEnv(gym.Env):
     def step(self, action: np.ndarray) -> Tuple[np.ndarray, float, bool, bool, Dict[str, Any]]:
         """Ejecuta un paso en el entorno."""
         action_raw = float(np.clip(action[0], -1.0, 1.0))
-        equity_anterior = self.portfolio.equity_actual
+        equity_anterior = self.portfolio.equity
 
         intencion, magnitud_efectiva = self._interpret_action(action_raw)
         
-        trade_ejecutado, pnl_realizado = self.portfolio.execute_trade(
+        trade_ejecutado, pnl_realizado = self.portfolio.execute_order(
             intencion, magnitud_efectiva, self._get_current_price()
         )
         
-        self.portfolio.update_equity_and_pnl(self._get_current_price())
+        self.portfolio.update_state(self._get_current_price())
         self.portfolio.advance_step()
 
         self.paso_actual += 1
@@ -133,7 +136,7 @@ class FuturesTradingEnv(gym.Env):
         observation = self._get_current_observation()
         info = self._get_step_info(action_raw, intencion, trade_ejecutado, pnl_realizado)
 
-        self.historial_equity.append(self.portfolio.equity_actual)
+        self.historial_equity.append(self.portfolio.equity)
         
         return observation, reward, terminated, truncated, info
 
@@ -150,7 +153,7 @@ class FuturesTradingEnv(gym.Env):
     def _check_episode_termination(self) -> Tuple[bool, bool]:
         """Verifica las condiciones de finalización del episodio."""
         drawdown_threshold = self.config_entorno['capital_inicial'] * (1 - self.config_entorno['max_drawdown_configurado_cuenta'])
-        terminated = self.portfolio.equity_actual <= drawdown_threshold
+        terminated = self.portfolio.equity <= drawdown_threshold
 
         end_of_data = self.paso_actual >= len(self.data_array) - 1
         max_steps_reached = self.config_entorno['usar_max_pasos_episodio'] and self.pasos_totales_episodio >= self.config_entorno['max_pasos_episodio']
@@ -205,18 +208,19 @@ class FuturesTradingEnv(gym.Env):
 
     def _get_step_info(self, action_raw: float, intencion: str, trade_ejecutado: bool, pnl_realizado: float) -> Dict[str, Any]:
         """Prepara el diccionario de información para el paso actual."""
+        posicion = self.portfolio.posicion_actual
         return {
             'step': self.paso_actual,
             'action_raw': action_raw,
             'intencion': intencion,
             'trade_ejecutado': trade_ejecutado,
             'pnl_realizado': pnl_realizado,
-            'balance': self.portfolio.balance_actual,
-            'equity': self.portfolio.equity_actual,
+            'balance': self.portfolio.balance,
+            'equity': self.portfolio.equity,
             'max_equity_episodio': self.portfolio.max_equity_alcanzado_episodio,
-            'posicion_tipo': self.portfolio.posicion_actual['tipo'].name,
-            'posicion_pnl_roe': self.portfolio.posicion_actual['pnl_no_realizado_roe'],
-            'posicion_pasos': self.portfolio.posicion_actual['pasos_en_posicion'],
+            'posicion_tipo': posicion['tipo'].name,
+            'posicion_pnl_roe': posicion['pnl_no_realizado_roe'],
+            'posicion_pasos': posicion['pasos_en_posicion'],
             'precio_actual': self._get_current_price(),
             'num_trades_episodio': len(self.portfolio.historial_trades),
             'pasos_totales_episodio': self.pasos_totales_episodio

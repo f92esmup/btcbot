@@ -106,8 +106,8 @@ class AgentEvaluator:
             obs, _ = env.reset()
             episode_return = 0
             episode_length = 0
-            initial_balance = env.portfolio.balance_actual
-            initial_equity = env.portfolio.equity_actual
+            initial_balance = env.portfolio.balance
+            initial_equity = env.portfolio.equity
             
             # Track equity durante el episodio
             episode_equity_track = [initial_equity]
@@ -127,7 +127,7 @@ class AgentEvaluator:
                 episode_length += 1
                 
                 # Registrar equity en cada paso
-                episode_equity_track.append(env.portfolio.equity_actual)
+                episode_equity_track.append(env.portfolio.equity)
                 
                 # Contar trades
                 if 'trade_ejecutado' in info and info['trade_ejecutado']:
@@ -135,8 +135,8 @@ class AgentEvaluator:
                     if reward > 0:
                         successful_trades += 1
             
-            final_balance = env.portfolio.balance_actual
-            final_equity = env.portfolio.equity_actual
+            final_balance = env.portfolio.balance
+            final_equity = env.portfolio.equity
             profit_pct = ((final_balance - initial_balance) / initial_balance) * 100
             
             episode_returns.append(episode_return)

@@ -38,7 +38,7 @@ class EquityChangeRewardStrategy(BaseRewardStrategy):
         Calcula la recompensa híbrida.
         """
         # Componente por paso: cambio en equity
-        recompensa_paso = (portfolio.equity_actual - equity_anterior) / equity_anterior if equity_anterior > 0 else 0.0
+        recompensa_paso = (portfolio.equity - equity_anterior) / equity_anterior if equity_anterior > 0 else 0.0
         recompensa_paso *= self.config.get('peso_recompensa_paso', 1.0)
 
         # Componente por cierre de operación

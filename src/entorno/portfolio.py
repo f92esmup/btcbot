@@ -1,25 +1,19 @@
 """
-Módulo que encapsula la lógica y el estado del portfolio de trading.
+Módulo que encapsula la lógica y el estado del portfolio de trading para simulación.
 """
 
 import logging
-from typing import Dict, Any, Tuple
-from enum import Enum
+from typing import Dict, Any, Tuple, List
+from .base_portfolio import BasePortfolio, TipoOperacion
 
 logger = logging.getLogger(__name__)
 
-class TipoOperacion(Enum):
-    """Tipos de operación/posición."""
-    NEUTRAL = 0
-    LARGO = 1
-    CORTO = -1
-
-class Portfolio:
+class Portfolio(BasePortfolio):
     """
-    Gestiona el estado financiero y las operaciones de un portfolio de trading.
+    Gestiona el estado financiero y las operaciones de un portfolio de trading en modo simulación.
 
     Esta clase es responsable de:
-    - Mantener el estado del balance, equity y la posición actual.
+    - Mantener el estado del balance, equity y la posición actual en memoria.
     - Ejecutar la lógica para abrir y cerrar posiciones.
     - Calcular costos de transacción (comisiones y slippage).
     - Actualizar el P&L no realizado.
@@ -27,21 +21,27 @@ class Portfolio:
     """
     def __init__(self, env_config: Dict[str, Any]):
         """
-        Inicializa el portfolio.
+        Inicializa el portfolio de simulación.
 
         Args:
             env_config (Dict[str, Any]): Diccionario con la configuración del entorno,
                                          incluyendo capital_inicial, apalancamiento, etc.
         """
         self.config = env_config
+        self._balance_actual = 0.0
+        self._equity_actual = 0.0
+        self._posicion_actual = {}
+        self._historial_trades = []
+        self.max_equity_alcanzado_episodio = 0.0
+        self.retornos_realizados_episodio = []
         self.reset()
 
     def reset(self):
         """Reinicia el estado del portfolio a sus valores iniciales."""
-        self.balance_actual = self.config['capital_inicial']
-        self.equity_actual = self.config['capital_inicial']
+        self._balance_actual = self.config['capital_inicial']
+        self._equity_actual = self.config['capital_inicial']
         self.max_equity_alcanzado_episodio = self.config['capital_inicial']
-        self.posicion_actual = {
+        self._posicion_actual = {
             'tipo': TipoOperacion.NEUTRAL,
             'precio_entrada': 0.0,
             'tamaño_activo': 0.0,
@@ -51,22 +51,11 @@ class Portfolio:
             'pnl_no_realizado_roe': 0.0,
             'pasos_en_posicion': 0
         }
-        self.historial_trades = []
+        self._historial_trades = []
         self.retornos_realizados_episodio = []
 
-    def execute_trade(self, intencion: str, magnitud_efectiva: float, precio_mercado: float) -> Tuple[bool, float]:
-        """
-        Ejecuta la lógica de trading basada en la intención del agente.
-
-        Args:
-            intencion (str): "COMPRAR", "VENDER", o "MANTENER".
-            magnitud_efectiva (float): Magnitud normalizada de la operación [0, 1].
-            precio_mercado (float): Precio actual del mercado.
-
-        Returns:
-            Tuple[bool, float]: Una tupla con (trade_ejecutado, pnl_realizado).
-        """
-        posicion_actual_tipo = self.posicion_actual['tipo']
+    def execute_order(self, intencion: str, magnitud: float, precio: float) -> Tuple[bool, float]:
+        posicion_actual_tipo = self._posicion_actual['tipo']
 
         if intencion == "MANTENER":
             return False, 0.0
@@ -77,27 +66,26 @@ class Portfolio:
         )
 
         if es_operacion_opuesta:
-            pnl_realizado = self._close_position(precio_mercado)
+            pnl_realizado = self._close_position(precio)
             return True, pnl_realizado
 
-        if posicion_actual_tipo == TipoOperacion.NEUTRAL and magnitud_efectiva > 0:
+        if posicion_actual_tipo == TipoOperacion.NEUTRAL and magnitud > 0:
             tipo_operacion = TipoOperacion.LARGO if intencion == "COMPRAR" else TipoOperacion.CORTO
-            self._open_position(tipo_operacion, precio_mercado, magnitud_efectiva)
+            self._open_position(tipo_operacion, precio, magnitud)
             return True, 0.0
 
         return False, 0.0
 
     def _open_position(self, tipo_operacion: TipoOperacion, precio_mercado: float, magnitud: float):
-        """Abre una nueva posición."""
-        margen_a_usar = self.balance_actual * self.config['porcentaje_max_inversion_por_trade'] * magnitud
+        margen_a_usar = self._balance_actual * self.config['porcentaje_max_inversion_por_trade'] * magnitud
         valor_nocional = margen_a_usar * self.config['apalancamiento']
         tamaño_activo = valor_nocional / precio_mercado
 
         precio_ejecucion, coste_total = self._apply_costs(valor_nocional, precio_mercado, tipo_operacion)
 
-        self.balance_actual -= (coste_total + margen_a_usar)
+        self._balance_actual -= (coste_total + margen_a_usar)
 
-        self.posicion_actual = {
+        self._posicion_actual = {
             'tipo': tipo_operacion,
             'precio_entrada': precio_ejecucion,
             'tamaño_activo': tamaño_activo,
@@ -110,42 +98,41 @@ class Portfolio:
         logger.debug(f"Posición {tipo_operacion.name} abierta: {tamaño_activo:.6f} BTC @ {precio_ejecucion:.2f}")
 
     def _close_position(self, precio_mercado: float) -> float:
-        """Cierra la posición actual y retorna el PNL realizado."""
-        if self.posicion_actual['tipo'] == TipoOperacion.NEUTRAL:
+        if self._posicion_actual['tipo'] == TipoOperacion.NEUTRAL:
             return 0.0
 
         precio_ejecucion, coste_cierre = self._apply_costs(
-            self.posicion_actual['valor_nocional'],
+            self._posicion_actual['valor_nocional'],
             precio_mercado,
-            self.posicion_actual['tipo']
+            self._posicion_actual['tipo']
         )
 
-        if self.posicion_actual['tipo'] == TipoOperacion.LARGO:
-            pnl_bruto = (precio_ejecucion - self.posicion_actual['precio_entrada']) * self.posicion_actual['tamaño_activo']
+        if self._posicion_actual['tipo'] == TipoOperacion.LARGO:
+            pnl_bruto = (precio_ejecucion - self._posicion_actual['precio_entrada']) * self._posicion_actual['tamaño_activo']
         else:  # CORTO
-            pnl_bruto = (self.posicion_actual['precio_entrada'] - precio_ejecucion) * self.posicion_actual['tamaño_activo']
+            pnl_bruto = (self._posicion_actual['precio_entrada'] - precio_ejecucion) * self._posicion_actual['tamaño_activo']
 
         pnl_neto = pnl_bruto - coste_cierre
 
-        self.balance_actual += (self.posicion_actual['margen_usado'] + pnl_neto)
+        self._balance_actual += (self._posicion_actual['margen_usado'] + pnl_neto)
 
-        roe_operacion = pnl_neto / self.posicion_actual['margen_usado'] if self.posicion_actual['margen_usado'] > 0 else 0.0
+        roe_operacion = pnl_neto / self._posicion_actual['margen_usado'] if self._posicion_actual['margen_usado'] > 0 else 0.0
         self.retornos_realizados_episodio.append(roe_operacion)
 
-        self.historial_trades.append({
-            'tipo': self.posicion_actual['tipo'].name,
-            'precio_entrada': self.posicion_actual['precio_entrada'],
+        self._historial_trades.append({
+            'tipo': self._posicion_actual['tipo'].name,
+            'precio_entrada': self._posicion_actual['precio_entrada'],
             'precio_salida': precio_ejecucion,
-            'tamaño_activo': self.posicion_actual['tamaño_activo'],
-            'margen_usado': self.posicion_actual['margen_usado'],
+            'tamaño_activo': self._posicion_actual['tamaño_activo'],
+            'margen_usado': self._posicion_actual['margen_usado'],
             'pnl_abs': pnl_neto,
             'roe': roe_operacion,
-            'pasos_duracion': self.posicion_actual['pasos_en_posicion'],
+            'pasos_duracion': self._posicion_actual['pasos_en_posicion'],
         })
 
         logger.debug(f"Posición cerrada: PNL = {pnl_neto:.2f}, ROE = {roe_operacion:.4f}")
 
-        self.posicion_actual = {
+        self._posicion_actual = {
             'tipo': TipoOperacion.NEUTRAL,
             'precio_entrada': 0.0,
             'tamaño_activo': 0.0,
@@ -158,7 +145,6 @@ class Portfolio:
         return pnl_neto
 
     def _apply_costs(self, valor_nocional: float, precio_mercado: float, tipo_operacion: TipoOperacion) -> Tuple[float, float]:
-        """Aplica comisiones y slippage."""
         comision_abs = valor_nocional * self.config['comision_taker_porcentaje']
         slippage_factor = self.config['slippage_porcentaje']
 
@@ -169,26 +155,43 @@ class Portfolio:
 
         return precio_ejecucion, comision_abs
 
-    def update_equity_and_pnl(self, precio_actual: float):
-        """Actualiza el equity y PNL no realizado de la posición actual."""
-        if self.posicion_actual['tipo'] == TipoOperacion.NEUTRAL:
-            self.equity_actual = self.balance_actual
+    def update_state(self, precio_actual: float):
+        if self._posicion_actual['tipo'] == TipoOperacion.NEUTRAL:
+            self._equity_actual = self._balance_actual
             return
 
-        if self.posicion_actual['tipo'] == TipoOperacion.LARGO:
-            pnl_no_realizado = (precio_actual - self.posicion_actual['precio_entrada']) * self.posicion_actual['tamaño_activo']
+        if self._posicion_actual['tipo'] == TipoOperacion.LARGO:
+            pnl_no_realizado = (precio_actual - self._posicion_actual['precio_entrada']) * self._posicion_actual['tamaño_activo']
         else:  # CORTO
-            pnl_no_realizado = (self.posicion_actual['precio_entrada'] - precio_actual) * self.posicion_actual['tamaño_activo']
+            pnl_no_realizado = (self._posicion_actual['precio_entrada'] - precio_actual) * self._posicion_actual['tamaño_activo']
 
-        pnl_roe = pnl_no_realizado / self.posicion_actual['margen_usado'] if self.posicion_actual['margen_usado'] > 0 else 0.0
+        pnl_roe = pnl_no_realizado / self._posicion_actual['margen_usado'] if self._posicion_actual['margen_usado'] > 0 else 0.0
 
-        self.posicion_actual['pnl_no_realizado_abs'] = pnl_no_realizado
-        self.posicion_actual['pnl_no_realizado_roe'] = pnl_roe
+        self._posicion_actual['pnl_no_realizado_abs'] = pnl_no_realizado
+        self._posicion_actual['pnl_no_realizado_roe'] = pnl_roe
 
-        self.equity_actual = self.balance_actual + pnl_no_realizado
-        self.max_equity_alcanzado_episodio = max(self.max_equity_alcanzado_episodio, self.equity_actual)
+        self._equity_actual = self._balance_actual + pnl_no_realizado
+        self.max_equity_alcanzado_episodio = max(self.max_equity_alcanzado_episodio, self._equity_actual)
 
     def advance_step(self):
-        """Avanza el contador de pasos en la posición si está abierta."""
-        if self.posicion_actual['tipo'] != TipoOperacion.NEUTRAL:
-            self.posicion_actual['pasos_en_posicion'] += 1
+        if self._posicion_actual['tipo'] != TipoOperacion.NEUTRAL:
+            self._posicion_actual['pasos_en_posicion'] += 1
+
+    def get_current_state(self) -> Dict[str, Any]:
+        return self.posicion_actual
+
+    @property
+    def equity(self) -> float:
+        return self._equity_actual
+
+    @property
+    def balance(self) -> float:
+        return self._balance_actual
+
+    @property
+    def posicion_actual(self) -> Dict[str, Any]:
+        return self._posicion_actual
+
+    @property
+    def historial_trades(self) -> List[Dict[str, Any]]:
+        return self._historial_trades

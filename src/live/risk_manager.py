@@ -1,4 +1,4 @@
-from src.live.portfolio_manager import LivePortfolioManager
+from src.entorno.base_portfolio import BasePortfolio
 
 
 class RiskManager:
@@ -6,7 +6,7 @@ class RiskManager:
     Supervisa el riesgo del portfolio de forma independiente, principalmente el drawdown.
     Actúa como un freno de emergencia si se superan los umbrales de riesgo.
     """
-    def __init__(self, portfolio_manager: LivePortfolioManager, risk_config: dict):
+    def __init__(self, portfolio_manager: BasePortfolio, risk_config: dict):
         """
         Inicializa el gestor de riesgo.
 
