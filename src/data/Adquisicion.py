@@ -380,8 +380,9 @@ class Adquisicion:
         self.logger.info(f"Rango total: {self.start_date} hasta {end_date_display}")
         
         # Determinar número de procesos (usar CPU count pero limitado para no sobrecargar la API)
-        num_workers = min(cpu_count(), len(start_timestamps), 8)  # Máximo 8 workers para no saturar la API
-        self.logger.info(f"Usando {num_workers} procesos paralelos")
+        max_workers = self.config.get('system', {}).get('max_parallel_workers_api', 8)
+        num_workers = min(cpu_count(), len(start_timestamps), max_workers)
+        self.logger.info(f"Usando {num_workers} procesos paralelos (máximo configurado: {max_workers})")
         
         # Preparar parámetros para la función worker
         # En este método, no tenemos acceso directo a API keys desde config

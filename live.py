@@ -111,6 +111,7 @@ def main():
         manager = LiveTradingManager(
             run_id=args.run_id,
             symbol=symbol,
+            interval=interval,  # Pasar el intervalo leído
             mode=args.mode,
             run_config=run_config, # Inyectar la configuración completa del run
             api_key=api_key,

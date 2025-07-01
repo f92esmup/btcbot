@@ -103,7 +103,9 @@ class FuturesTradingEnv(gym.Env):
         # Espacio de observación: ventana de mercado + características del portafolio
         ventana_size = self.config_entorno['ventana_observacion_size']
         num_features_mercado = len(self.column_names)
-        num_features_portfolio = 4  # tipo_posicion, pnl_roe, pasos_posicion, precio_entrada
+        # El número de características del portfolio es fijo y conocido, pero lo leemos de la config por consistencia
+        # (aunque esta config no está directamente en env_config, es una buena práctica)
+        num_features_portfolio = self.config_entorno.get('architecture', {}).get('portfolio_features', 4)
         
         total_features = ventana_size * num_features_mercado + num_features_portfolio
         

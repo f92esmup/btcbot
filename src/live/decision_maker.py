@@ -39,10 +39,10 @@ class DecisionMaker:
         
         num_total_features = self.scaler.n_features_in_
         sequence_length = env_config['ventana_observacion_size']
-        # El número de características del portfolio es fijo y conocido
-        self.portfolio_features = 4
+        # Leer el número de características del portfolio desde la configuración del agente
+        self.portfolio_features = agent_config.get('architecture', {}).get('portfolio_features', 4)
         # Las características de mercado son el total menos las del portfolio
-        self.market_features = num_total_features - self.portfolio_features
+        self.market_features = (num_total_features - self.portfolio_features) // sequence_length
         self.sequence_length = sequence_length
 
         # 4. Instanciar el agente con config_override
@@ -61,7 +61,11 @@ class DecisionMaker:
         )
         
         # 5. Cargar checkpoint con model_prefix correcto
-        model_prefix = f"{self.run_id}/best_model"
+        live_config = main_config.get('live_trading', {})
+        model_to_load = live_config.get('default_model_to_load', 'best_model')
+        model_prefix = f"{self.run_id}/{model_to_load}"
+        print(f"Cargando modelo: {model_prefix}")
+
         self.run_manager.load_agent_from_checkpoint(
             agent=self.agent,
             checkpoint_prefix=model_prefix,

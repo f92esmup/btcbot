@@ -143,18 +143,18 @@ class TransformerSACAgent:
             transformer_config=transformer_config,
             mlp_hidden_dims=mlp_hidden_dims,
             action_dim=self.action_dim,
-            max_seq_len=self.sequence_length
+            agent_config=self.config  # Pasar la configuración completa
         ).to(self.device)
         logger.info("✅ ActorNetwork creado.")
 
-        # Redes de los Críticos (sin JIT)
+        # Redes de los Críticos
         self.critic_1 = CriticNetwork(
             market_features=self.market_features,
             portfolio_features=self.portfolio_features,
             action_dim=self.action_dim,
             transformer_config=transformer_config,
             mlp_hidden_dims=mlp_hidden_dims,
-            max_seq_len=self.sequence_length
+            agent_config=self.config  # Pasar la configuración completa
         ).to(self.device)
         
         self.critic_2 = CriticNetwork(
@@ -163,18 +163,18 @@ class TransformerSACAgent:
             action_dim=self.action_dim,
             transformer_config=transformer_config,
             mlp_hidden_dims=mlp_hidden_dims,
-            max_seq_len=self.sequence_length
+            agent_config=self.config  # Pasar la configuración completa
         ).to(self.device)
-        logger.info("✅ CriticNetworks creados (sin JIT).")
+        logger.info("✅ CriticNetworks creados.")
 
-        # Redes objetivo (copias de los críticos, sin JIT)
+        # Redes objetivo
         self.critic_target_1 = CriticNetwork(
             market_features=self.market_features,
             portfolio_features=self.portfolio_features,
             action_dim=self.action_dim,
             transformer_config=transformer_config,
             mlp_hidden_dims=mlp_hidden_dims,
-            max_seq_len=self.sequence_length
+            agent_config=self.config  # Pasar la configuración completa
         ).to(self.device)
         
         self.critic_target_2 = CriticNetwork(
@@ -183,7 +183,7 @@ class TransformerSACAgent:
             action_dim=self.action_dim,
             transformer_config=transformer_config,
             mlp_hidden_dims=mlp_hidden_dims,
-            max_seq_len=self.sequence_length
+            agent_config=self.config  # Pasar la configuración completa
         ).to(self.device)
         logger.info("✅ Critic Target Networks creados (sin JIT).")
 

@@ -103,7 +103,8 @@ def create_sac_agent(env: FuturesTradingEnv, device: torch.device, logger, agent
     ventana_size = env.config_entorno['ventana_observacion_size']
     num_features_mercado = len(env.column_names)
     market_features = num_features_mercado
-    portfolio_features = 4  # tipo_posicion, pnl_roe, pasos_posicion, precio_entrada
+    # Leer portfolio_features desde la configuración del agente
+    portfolio_features = agent_config.get('architecture', {}).get('portfolio_features', 4)
     sequence_length = ventana_size
     
     agent = TransformerSACAgent(
@@ -615,8 +616,16 @@ def main():
 
 if __name__ == "__main__":
     # Forzar a NCCL a usar una interfaz de red común en entornos cloud para evitar timeouts.
-    os.environ['NCCL_SOCKET_IFNAME'] = 'eth0'
-    # AÑADE ESTA LÍNEA AQUÍ DENTRO:
+    # Leer desde la configuración para mayor flexibilidad.
+    try:
+        with open('src/configuration/config.yaml', 'r') as f:
+            config = yaml.safe_load(f)
+        nccl_socket_ifname = config.get('system', {}).get('nccl_socket_ifname', 'eth0')
+        os.environ['NCCL_SOCKET_IFNAME'] = nccl_socket_ifname
+        print(f"Establecida variable de entorno NCCL_SOCKET_IFNAME='{nccl_socket_ifname}'")
+    except Exception as e:
+        print(f"Advertencia: No se pudo leer nccl_socket_ifname de config.yaml. Usando valor por defecto 'eth0'. Error: {e}")
+        os.environ['NCCL_SOCKET_IFNAME'] = 'eth0'
 
     # Forzar el método 'spawn' para multiprocessing para evitar problemas de CUDA
     # en los procesos hijos que guardan los modelos. Es la solución estándar.

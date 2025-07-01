@@ -62,13 +62,21 @@ def parse_arguments() -> argparse.Namespace:
         help="Fecha de fin para la evaluación (formato: YYYY-MM-DD)"
     )
     
+    # Leer el valor por defecto desde el archivo de configuración principal
+    try:
+        with open('src/configuration/config.yaml', 'r') as f:
+            config = yaml.safe_load(f)
+        default_model_type = config.get('evaluation', {}).get('default_model_to_load', 'best')
+    except (FileNotFoundError, yaml.YAMLError):
+        default_model_type = 'best'
+
     # Argumentos opcionales
     parser.add_argument(
         "--model-type",
         type=str,
-        default="best",
+        default=default_model_type,
         choices=["best", "final"],
-        help="Tipo de modelo a cargar"
+        help=f"Tipo de modelo a cargar (por defecto: {default_model_type})"
     )
     
     parser.add_argument(
@@ -265,9 +273,12 @@ def main():
             from src.configuration.gcs_utils import GCSUtils
             gcs_utils_pipeline = GCSUtils(gcp_config)
 
+        # Usar el nombre del directorio temporal desde la configuración
+        temp_dir_name = main_config.get('evaluation', {}).get('temp_directory', 'temp_evaluation')
+
         data_pipeline = DataPipeline(
             symbol=symbol, interval=interval, start_date=args.start_date, end_date=args.end_date,
-            run_id=f"evaluation_{args.run_id}", base_path="temp_evaluation",
+            run_id=f"evaluation_{args.run_id}", base_path=temp_dir_name,
             full_config=main_config,  # Inyectar la configuración completa del run
             save_artifacts=False, # No guardar artefactos durante la evaluación
             api_key=api_key, api_secret=api_secret,
@@ -286,7 +297,8 @@ def main():
 
         obs, _ = env.reset()
         market_features = len(env.column_names)
-        portfolio_features = 4  # Fijo: tipo_posicion, pnl_roe, pasos_posicion, precio_entrada
+        # Leer portfolio_features desde la configuración
+        portfolio_features = agent_config.get('architecture', {}).get('portfolio_features', 4)
         sequence_length = env_config.get('ventana_observacion_size', 24)
 
         logger.info("🤖 Creando agente desde la configuración del run...")
@@ -314,8 +326,8 @@ def main():
 
         try:
             import shutil
-            if Path("temp_evaluation").exists():
-                shutil.rmtree("temp_evaluation")
+            if Path(temp_dir_name).exists():
+                shutil.rmtree(temp_dir_name)
                 logger.info("Archivos temporales de evaluación eliminados.")
         except Exception as e:
             logger.warning(f"No se pudieron eliminar archivos temporales: {e}")

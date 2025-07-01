@@ -12,7 +12,7 @@ from src.training.run_manager import RunManager
 
 
 class LiveTradingManager:
-    def __init__(self, run_id: str, symbol: str, mode: str, run_config: dict, 
+    def __init__(self, run_id: str, symbol: str, interval: str, mode: str, run_config: dict, 
                  api_key: str, api_secret: str, telegram_bot_token: str = None, telegram_chat_id: str = None):
         """
         Initialize LiveTradingManager with explicit credentials.
@@ -20,6 +20,7 @@ class LiveTradingManager:
         Args:
             run_id: ID of the training run to use
             symbol: Trading symbol (e.g., 'BTCUSDT')
+            interval: Trading interval (e.g., '1h')
             mode: Trading mode ('testnet' or 'production')
             run_config: Configuration dictionary from the training run
             api_key: Binance API key
@@ -29,6 +30,7 @@ class LiveTradingManager:
         """
         self.run_id = run_id
         self.symbol = symbol
+        self.interval = interval
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.is_trading_halted = False
         self.run_config = run_config
@@ -97,15 +99,17 @@ class LiveTradingManager:
         )
 
         # Data Reader
-        warm_up_candles = 200 # Este valor puede ser más estático
-        self.data_reader = BinanceLiveDataReader(self.symbol, '1h', self, warm_up_candles)
+        live_config = main_config.get('live_trading', {})
+        warm_up_candles = live_config.get('warm_up_candles', 200)
+        self.data_reader = BinanceLiveDataReader(self.symbol, self.interval, self, warm_up_candles)
         
         # BigQuery Logger (usa configuración del run)
         try:
             project_id = main_config.get('gcp', {}).get('project_id')
             if project_id:
-                dataset_id = 'trading_logs' # Podríamos añadir esto a config.yaml global
-                self.bq_logger = BigQueryLogger(project_id=project_id, dataset_id=dataset_id)
+                dataset_id = live_config.get('bigquery_dataset_id', 'trading_logs')
+                table_id = live_config.get('bigquery_table_id', 'live_trading_log')
+                self.bq_logger = BigQueryLogger(project_id=project_id, dataset_id=dataset_id, table_id=table_id)
                 print("✅ BigQueryLogger inicializado correctamente")
             else:
                 print("⚠️ project_id no encontrado en la configuración del run. BigQueryLogger deshabilitado.")
