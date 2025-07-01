@@ -100,7 +100,7 @@ class DecisionMaker:
         action = self.agent.select_action(
             market_data=market_data,
             portfolio_data=portfolio_data,
-            deterministic=True
+            deterministic=False
         )
         
         # Devolver la acción como float (select_action devuelve numpy array)
