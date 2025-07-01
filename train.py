@@ -289,39 +289,21 @@ def main():
         else:
             logger.info(f"TensorBoard logs se enviarán directamente a Vertex AI TensorBoard")
 
-        # Registrar Hiperparámetros
-        hparams = {
-            'run_id': run_id,
-            'symbol': args.symbol,
-            'interval': args.interval,
-            'start_date': args.start_date,
-            'seed': args.seed,
-            'episodes': args.episodes,
-            'eval_frequency': args.eval_frequency,
-            'save_frequency': args.save_frequency,
-            'actor_lr': local_config_dict['agent']['hiperparametros_sac']['actor_learning_rate'],
-            'critic_lr': local_config_dict['agent']['hiperparametros_sac']['critic_learning_rate'],
-            'alpha_lr': local_config_dict['agent']['hiperparametros_sac']['alpha_learning_rate'],
-            'gamma': local_config_dict['agent']['hiperparametros_sac']['gamma'],
-            'tau': local_config_dict['agent']['hiperparametros_sac']['tau'],
-            'batch_size': local_config_dict['agent']['batch_size'],
-            'buffer_size': local_config_dict['agent']['replay_buffer_size'],
-            'd_model': local_config_dict['agent']['transformer']['d_model'],
-            'n_head': local_config_dict['agent']['transformer']['n_head'],
-            'num_encoder_layers': local_config_dict['agent']['transformer']['num_encoder_layers'],
-            'ventana_observacion': local_config_dict['environment']['ventana_observacion_size'],
-            'capital_inicial': local_config_dict['environment']['capital_inicial'],
-            'apalancamiento': local_config_dict['environment']['apalancamiento'],
-            'storage_mode': storage_mode,
-            'base_path': str(base_path)
+        # Ensamblar la configuración completa del run
+        full_run_config = {
+            'run_info': {
+                'run_id': run_id,
+                'timestamp': datetime.now().isoformat(),
+                'storage_mode': storage_mode,
+                'base_path': str(base_path)
+            },
+            'command_line_args': vars(args),
+            'config': local_config_dict
         }
-        # Log hyperparameters
-        tb_logger.log_hyperparameters(hparams)
-        
+
         # Guardar configuración del run usando RunManager (SOLO EL JEFE ESCRIBE)
         try:
-            # En lugar de pasar hparams, pasamos el diccionario completo para un snapshot fiel
-            run_manager.save_run_config(run_config_dict=local_config_dict, args=args)
+            run_manager.save_run_config(full_run_config)
         except Exception as e:
             logger.error(f"Error al guardar config_run.yaml: {e}")
             # Continuar ejecución ya que este error no es crítico

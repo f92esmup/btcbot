@@ -213,184 +213,126 @@ def print_evaluation_report(metrics: Dict[str, Any], args: argparse.Namespace) -
 
 def main():
     """Función principal del script de evaluación."""
-    
-    # Configurar logging
     setup_logging()
     logger = logging.getLogger(__name__)
-    
+
     try:
-        # Parsear argumentos
         args = parse_arguments()
-        
-        # Validar fechas
         validate_dates(args.start_date, args.end_date)
+
+        logger.info(f"🚀 Iniciando evaluación del modelo para Run ID: {args.run_id}")
+
+        # --- 1. Carga de Configuración como Única Fuente de Verdad ---
+        logger.info("📁 Cargando configuración del run...")
         
-        logger.info("🚀 Iniciando evaluación del modelo")
-        logger.info(f"Run ID: {args.run_id}")
-        logger.info(f"Modelo: {args.model_type}")
-        logger.info(f"Período: {args.start_date} a {args.end_date}")
-        logger.info(f"Símbolo: {args.symbol} ({args.interval})")
+        # Cargar la configuración local solo para obtener los detalles de GCP
+        # Esto es necesario para que RunManager sepa a qué bucket conectarse.
+        try:
+            with open('src/configuration/config.yaml', 'r') as f:
+                local_config = yaml.safe_load(f)
+            gcp_config_local = local_config.get('gcp')
+        except FileNotFoundError:
+            logger.warning("No se encontró config.yaml local. Se asumirá que no se necesita gcp_config.")
+            gcp_config_local = None
+
+        run_config = RunManager.load_run_config(args.run_id, gcp_config=gcp_config_local)
+        if not run_config or 'config' not in run_config:
+            logger.error(f"No se pudo cargar o es inválida la configuración para el run_id: {args.run_id}. Abortando.")
+            sys.exit(1)
         
-        # Configurar dispositivo
+        main_config = run_config['config']
+        env_config = main_config['environment']
+        agent_config = main_config['agent']
+        storage_mode = main_config.get('normalization', {}).get('storage_mode', 'local')
+        gcp_config = main_config.get('gcp') if storage_mode == 'gcp' else None
+        logger.info("✅ Configuración del run cargada y validada.")
+
+        # --- 2. Inicialización de Componentes Esenciales ---
         device = setup_device(args.no_cuda)
         logger.info(f"Dispositivo configurado: {device}")
-        
-        # Load run configuration to determine storage settings
-        logger.info("📁 Loading run configuration...")
-        run_config = RunManager.load_run_config(args.run_id)
-        if not run_config:
-            logger.error(f"No se pudo cargar la configuración para el run_id: {args.run_id}. Abortando.")
-            sys.exit(1)
-        logger.info("Configuración del run cargada exitosamente.")
 
-        # Extraer la configuración principal del sub-diccionario 'config'
-        main_config = run_config.get('config', {})
-        if not main_config:
-            logger.error(f"No se encontró la configuración principal en 'config' para el run_id: {args.run_id}. Abortando.")
-            sys.exit(1)
-
-        # Extraer configuraciones de almacenamiento
-        storage_mode = main_config.get('normalization', {}).get('storage_mode', 'local')
-        gcp_config = None
-        
-        if storage_mode == "gcp":
-            gcp_config = main_config.get('gcp', {})
-            if not gcp_config.get('storage', {}).get('bucket_name'):
-                logger.error("storage_mode es 'gcp' pero no se encontró bucket_name en la configuración GCP")
-                sys.exit(1)
-            logger.info("Configuración GCP cargada para RunManager")
-
-        # Crear instancia definitiva de RunManager con la configuración cargada
         run_manager = RunManager(
             run_id=args.run_id,
             storage_mode=storage_mode,
             gcp_config=gcp_config
         )
-        run_manager.set_run_context(args.run_id)
-        logger.info(f"RunManager creado con storage_mode: {storage_mode}")
+        logger.info(f"RunManager inicializado en modo '{storage_mode}'.")
 
-        # Extraer configuraciones específicas de la configuración principal
-        env_config = main_config['environment']
-        agent_config = main_config['agent']
-        
-        # Pipeline de datos
-        logger.info("📊 Ejecutando pipeline de datos...")
-        
-        # Obtener credenciales de API desde variables de entorno
+        # --- 3. Pipeline de Datos para Evaluación ---
+        logger.info("📊 Ejecutando pipeline de datos para el período de evaluación...")
         api_key = os.getenv('BINANCE_API_KEY')
         api_secret = os.getenv('BINANCE_API_SECRET')
-        
-        if not api_key or not api_secret:
-            logger.warning("Credenciales de Binance no encontradas en variables de entorno.")
-            logger.warning("Para usar la API de Binance, define BINANCE_API_KEY y BINANCE_API_SECRET")
-        
-        # Crear instancia local de GCSUtils si es necesario para compatibilidad
-        gcs_utils_for_pipeline = None
+        gcs_utils_pipeline = None
         if storage_mode == "gcp":
             from src.configuration.gcs_utils import GCSUtils
-            gcs_utils_for_pipeline = GCSUtils(gcp_config)
-        
+            gcs_utils_pipeline = GCSUtils(gcp_config)
+
         data_pipeline = DataPipeline(
-            symbol=args.symbol,
-            interval=args.interval,
-            start_date=args.start_date,
-            end_date=args.end_date,
-            run_id=f"evaluation_{args.run_id}",
-            base_path="temp_evaluation",
-            full_config=main_config,
+            symbol=args.symbol, interval=args.interval, start_date=args.start_date, end_date=args.end_date,
+            run_id=f"evaluation_{args.run_id}", base_path="temp_evaluation",
+            full_config=main_config,  # Inyectar la configuración completa del run
             save_artifacts=False, # No guardar artefactos durante la evaluación
-            api_key=api_key,
-            api_secret=api_secret,
-            gcs_utils=gcs_utils_for_pipeline
+            api_key=api_key, api_secret=api_secret,
+            gcs_utils=gcs_utils_pipeline
         )
-        
         normalized_dataframe, _ = data_pipeline.run()
-        logger.info(f"Pipeline completado. Datos: {normalized_dataframe.shape}")
-        
-        # Cargar price_scaler del entrenamiento original
+        logger.info(f"Pipeline completado. Datos para evaluación: {normalized_dataframe.shape}")
+
+        # --- 4. Creación del Entorno y Agente ---
         logger.info("📦 Cargando price_scaler del entrenamiento original...")
-        price_scaler = run_manager.load_price_scaler(
-            blob_name=f"{args.run_id}/price_scaler.pkl"
-        )
-        logger.info("Price scaler cargado exitosamente")
-        
-        # Crear entorno con la configuración inyectada
+        price_scaler = run_manager.load_price_scaler(blob_name=f"{args.run_id}/price_scaler.pkl")
+        logger.info("Price scaler cargado exitosamente.")
+
         logger.info("🏗️ Creando entorno de trading...")
         env = FuturesTradingEnv(
             data_df=normalized_dataframe,
             price_scaler=price_scaler,
-            env_config=env_config # Inyección de configuración
+            env_config=env_config  # Inyección de configuración del run
         )
-        
-        # Obtener información del entorno para crear el agente
+
         obs, _ = env.reset()
-        observation_space_shape = obs.shape
-        action_space_shape = env.action_space.shape
-        
-        # Obtener características del agente desde la configuración principal
-        # Los valores específicos como market_features y portfolio_features se calculan dinámicamente
         market_features = len(env.column_names)
-        portfolio_features = 4  # tipo_posicion, pnl_roe, pasos_posicion, precio_entrada
+        portfolio_features = 4  # Fijo: tipo_posicion, pnl_roe, pasos_posicion, precio_entrada
         sequence_length = env_config.get('ventana_observacion_size', 24)
-        
-        logger.info(f"Espacio de observación: {observation_space_shape}")
-        logger.info(f"Espacio de acción: {action_space_shape}")
-        logger.info(f"Características de mercado: {market_features}")
-        logger.info(f"Características de portfolio: {portfolio_features}")
-        logger.info(f"Longitud de secuencia: {sequence_length}")
-        
-        # Crear agente
-        logger.info("🤖 Creando agente...")
+
+        logger.info("🤖 Creando agente desde la configuración del run...")
         agent = create_agent_from_config(
-            observation_space_shape=observation_space_shape,
-            action_space_shape=action_space_shape,
-            market_features=market_features,
-            portfolio_features=portfolio_features,
-            sequence_length=sequence_length,
+            observation_space_shape=obs.shape,
+            action_space_shape=env.action_space.shape,
+            market_features=market_features, portfolio_features=portfolio_features, sequence_length=sequence_length,
             device=device,
-            agent_config=agent_config # Inyección de configuración
+            agent_config=agent_config  # Inyección de configuración del run
         )
-        
-        # Cargar pesos del modelo
-        logger.info("📥 Cargando pesos del modelo...")
-        # Corregir la ruta para que apunte al directorio de entrenamientos
-        model_prefix = f"Entrenamientos/{args.run_id}/{args.model_type}_model/{args.model_type}_model"
-        logger.info(f"Cargando modelo con prefijo: {model_prefix}")
+
+        # --- 5. Carga del Modelo y Ejecución de la Evaluación ---
+        logger.info(f"📥 Cargando pesos del modelo '{args.model_type}'...")
+        model_prefix = f"{args.run_id}/{args.model_type}_model"
         run_manager.load_agent_from_checkpoint(agent, model_prefix, reset_optimizers=True)
-        logger.info("Modelo cargado exitosamente")
-        
-        # Ejecutar evaluación
+        logger.info("Modelo cargado exitosamente.")
+
         logger.info("🎯 Ejecutando evaluación...")
         evaluator = AgentEvaluator()
-        
-        metrics = evaluator.evaluate(
-            agent=agent,
-            env=env,
-            num_episodes=1  # Una sola pasada por los datos
-        )
-        
-        logger.info("Evaluación completada")
-        
-        # Generar y mostrar informe
+        metrics = evaluator.evaluate(agent=agent, env=env, num_episodes=1)
+        logger.info("Evaluación completada.")
+
+        # --- 6. Informe y Limpieza ---
         print_evaluation_report(metrics, args)
-        
-        # Limpiar archivos temporales del pipeline
+
         try:
             import shutil
             if Path("temp_evaluation").exists():
                 shutil.rmtree("temp_evaluation")
-                logger.info("Archivos temporales eliminados")
+                logger.info("Archivos temporales de evaluación eliminados.")
         except Exception as e:
             logger.warning(f"No se pudieron eliminar archivos temporales: {e}")
-        
-        logger.info("✅ Evaluación completada exitosamente")
-        
+
+        logger.info("✅ Proceso de evaluación finalizado exitosamente.")
+
     except KeyboardInterrupt:
-        logger.info("❌ Evaluación interrumpida por el usuario")
+        logger.info("❌ Evaluación interrumpida por el usuario.")
         sys.exit(1)
-        
     except Exception as e:
-        logger.error(f"❌ Error durante la evaluación: {str(e)}")
+        logger.error(f"❌ Error catastrófico durante la evaluación: {str(e)}")
         import traceback
         logger.error(f"Traceback completo:\n{traceback.format_exc()}")
         sys.exit(1)

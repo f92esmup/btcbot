@@ -213,41 +213,21 @@ class RunManager:
         # Setup logging
         self.logger = logging.getLogger(__name__)
     
-    def save_run_config(self, run_config_dict: Dict, args) -> None:
+    def save_run_config(self, full_run_config: Dict[str, Any]) -> None:
         """
-        Save the complete run configuration to config_run.yaml.
-        
+        Saves the complete, pre-assembled run configuration to config_run.yaml.
+
         Args:
-            run_config_dict: Complete configuration dictionary to save
-            args: Command line arguments
+            full_run_config (Dict[str, Any]): The complete configuration dictionary to save.
+                                          This dictionary should already contain all necessary
+                                          sections (run_info, command_line_args, config).
         """
         self.logger.info("Saving run configuration...")
-        
-        # Create the complete run configuration
-        run_config = {
-            'run_info': {
-                'run_id': self.run_id,
-                'timestamp': datetime.now().isoformat(),
-                'storage_mode': self.storage_mode,
-                'base_path': self.base_path
-            },
-            'command_line_args': {
-                'symbol': args.symbol,
-                'interval': args.interval,
-                'start_date': args.start_date,
-                'episodes': args.episodes,
-                'eval_frequency': args.eval_frequency,
-                'save_frequency': args.save_frequency,
-                'no_cuda': args.no_cuda,
-                'eval_episodes': args.eval_episodes
-            },
-            'config': run_config_dict
-        }
-        
+
         if self.storage_mode == "gcp":
             # For GCP, save temporarily and upload
             with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as temp_file:
-                yaml.dump(run_config, temp_file, default_flow_style=False, allow_unicode=True)
+                yaml.dump(full_run_config, temp_file, default_flow_style=False, allow_unicode=True)
                 temp_path = temp_file.name
             
             try:
@@ -262,8 +242,9 @@ class RunManager:
         else:
             # For local, save directly
             config_path = Path(self.base_path) / "config_run.yaml"
+            config_path.parent.mkdir(parents=True, exist_ok=True)
             with open(config_path, 'w', encoding='utf-8') as f:
-                yaml.dump(run_config, f, default_flow_style=False, allow_unicode=True)
+                yaml.dump(full_run_config, f, default_flow_style=False, allow_unicode=True)
             self.logger.info(f"Run configuration saved to: {config_path}")
     
     def find_latest_checkpoint(self, run_id_to_check: str) -> Optional[Tuple[str, int]]:
@@ -811,20 +792,11 @@ class RunManager:
             if local_config_path.exists():
                 storage_mode = "local"
             else:
-                # Fallback to global config to determine storage mode
-                from src.configuration.config import Config
-                config = Config()
-                storage_mode = config.normalization_config.get('storage_mode', 'local')
-                if storage_mode == "gcp" and gcp_config is None:
-                    # Create gcp_config from global config for backward compatibility
-                    gcp_config = {
-                        'project_id': config.project_id,
-                        'storage': {
-                            'bucket_name': config.gcs_bucket_name,
-                            'scaler_blob_name': config.gcs_scaler_blob_name,
-                            'price_scaler_blob_name': config.gcs_price_scaler_blob_name
-                        }
-                    }
+                # If not found locally, assume GCP as a fallback strategy.
+                # This avoids a hard dependency on a global config file.
+                storage_mode = "gcp"
+                logger.info(f"Configuracion no encontrada localmente para el run_id {run_id}, asumiendo storage_mode='gcp'.")
+                # Note: gcp_config must be provided by the caller in this case.
         
         try:
             if storage_mode == "gcp":

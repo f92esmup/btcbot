@@ -16,9 +16,10 @@ Uso:
 import argparse
 import sys
 import logging
+import os
 from src.live.trading_manager import LiveTradingManager
 from src.utils.system import setup_logging
-from src.training.run_manager import RunManager # Importar RunManager
+from src.training.run_manager import RunManager
 
 def parse_arguments():
     """Parsea los argumentos de línea de comandos para el modo live."""
@@ -30,7 +31,7 @@ def parse_arguments():
         "--run-id",
         type=str,
         required=True,
-        help="El ID del entrenamiento cuyo modelo se va a utilizar. El script extraerá el símbolo y la temporalidad de este ID."
+        help="El ID del entrenamiento cuyo modelo se va a utilizar."
     )
     parser.add_argument(
         "--mode",
@@ -48,92 +49,67 @@ def main():
 
     try:
         args = parse_arguments()
+        logger.info(f"🚀 Lanzando bot en modo LIVE para el run-id: {args.run_id}")
+
+        # --- 1. Carga de Configuración del Run como Única Fuente de Verdad ---
+        logger.info(f"Cargando configuración para el run_id: {args.run_id}...")
         
-        # Parsear el run_id para extraer parámetros
+        # Cargar la configuración local solo para obtener los detalles de GCP
         try:
-            parts = args.run_id.split('_')
-            symbol = parts[0]
-            interval = parts[1]
-            
-            logger.info("Parámetros extraídos del run_id:")
+            with open('src/configuration/config.yaml', 'r') as f:
+                local_config = yaml.safe_load(f)
+            gcp_config_local = local_config.get('gcp')
+        except FileNotFoundError:
+            logger.warning("No se encontró config.yaml local. Se asumirá que no se necesita gcp_config.")
+            gcp_config_local = None
+
+        run_config = RunManager.load_run_config(args.run_id, gcp_config=gcp_config_local)
+        if not run_config:
+            logger.error(f"No se pudo cargar la configuración para el run_id: {args.run_id}. Abortando.")
+            sys.exit(1)
+        logger.info("✅ Configuración del run cargada exitosamente.")
+
+        # Extraer símbolo e intervalo desde la configuración del run para consistencia
+        try:
+            symbol = run_config['command_line_args']['symbol']
+            interval = run_config['command_line_args']['interval']
             logger.info(f"  - Símbolo: {symbol}")
             logger.info(f"  - Intervalo: {interval}")
             logger.info(f"  - Modo de operación: {args.mode}")
-
-        except IndexError:
-            logger.error(f"El formato del run-id '{args.run_id}' no es válido. Debe ser 'SYMBOL_INTERVAL_SEED_TIMESTAMP'.")
+        except KeyError:
+            logger.error(f"El config_run.yaml para '{args.run_id}' no contiene 'symbol' o 'interval' en 'command_line_args'.")
             sys.exit(1)
 
-        logger.info(f"🚀 Lanzando bot en modo LIVE para el run-id: {args.run_id}")
-
-        # Cargar la configuración específica del run como única fuente de verdad
-        logger.info(f"Cargando configuración para el run_id: {args.run_id}...")
-        
-        # Step 1: Load the run configuration using the static method
-        run_config = RunManager.load_run_config(args.run_id)
-        if run_config is None:
-            logger.error(f"No se pudo cargar la configuración para el run_id: {args.run_id}. Abortando.")
-            sys.exit(1)
-        logger.info("Configuración del run cargada exitosamente.")
-        
-        # Step 2: Extract storage configuration from the loaded config
-        main_config = run_config.get('config', {})
-        if not main_config:
-            logger.error(f"No se encontró la configuración principal en 'config' para el run_id: {args.run_id}. Abortando.")
-            sys.exit(1)
-        
-        # Extract storage mode and GCP configuration
-        storage_mode = main_config.get('normalization', {}).get('storage_mode', 'local')
-        gcp_config = None
-        
-        if storage_mode == "gcp":
-            gcp_config = main_config.get('gcp', {})
-            if not gcp_config.get('storage', {}).get('bucket_name'):
-                logger.error("GCS bucket name not found in configuration but storage_mode is 'gcp'")
-                sys.exit(1)
-            logger.info("Configuración GCP cargada para RunManager")
-        
-        # Step 3: Create the definitive RunManager with proper configuration
-        run_manager = RunManager(
-            run_id=args.run_id,
-            storage_mode=storage_mode,
-            gcp_config=gcp_config
-        )
-
-        # Step 4: Load secrets and credentials for trading
-        logger.info("🔐 Cargando credenciales y secretos...")
-        from src.configuration.config import Config
-        config = Config()
-        
-        # Determine if testnet mode based on command line argument
+        # --- 2. Carga de Credenciales desde Variables de Entorno ---
+        logger.info("🔐 Cargando credenciales y secretos desde variables de entorno...")
         is_testnet = (args.mode == 'testnet')
         
-        try:
-            # Load Binance API credentials
-            api_key = config.get_binance_api_key(is_testnet=is_testnet)
-            api_secret = config.get_binance_api_secret(is_testnet=is_testnet)
-            logger.info(f"✅ Credenciales de Binance {'testnet' if is_testnet else 'producción'} cargadas")
-            
-            # Load Telegram credentials (optional)
-            telegram_bot_token = None
-            telegram_chat_id = None
-            try:
-                telegram_bot_token = config.telegram_bot_token
-                telegram_chat_id = config.telegram_chat_id
-                logger.info("✅ Credenciales de Telegram cargadas")
-            except Exception as e:
-                logger.warning(f"⚠️ No se pudieron cargar las credenciales de Telegram: {e}")
-            
-        except Exception as e:
-            logger.error(f"❌ Error al cargar credenciales: {e}")
-            sys.exit(1)
+        # Cargar credenciales de Binance
+        api_key_env_var = 'TESTNET_BINANCE_API_KEY_FUTURES' if is_testnet else 'BINANCE_API_KEY_FUTURES'
+        api_secret_env_var = 'TESTNET_BINANCE_API_SECRET_FUTURES' if is_testnet else 'BINANCE_API_SECRET_FUTURES'
+        
+        api_key = os.getenv(api_key_env_var)
+        api_secret = os.getenv(api_secret_env_var)
 
-        # Step 5: Create and start the trading manager with injected credentials
+        if not api_key or not api_secret:
+            logger.error(f"No se encontraron las variables de entorno para las credenciales de Binance: {api_key_env_var}, {api_secret_env_var}")
+            sys.exit(1)
+        logger.info(f"✅ Credenciales de Binance {'testnet' if is_testnet else 'producción'} cargadas.")
+
+        # Cargar credenciales de Telegram (opcional)
+        telegram_bot_token = os.getenv('TELEGRAM_BOT_TOKEN')
+        telegram_chat_id = os.getenv('TELEGRAM_CHAT_ID')
+        if telegram_bot_token and telegram_chat_id:
+            logger.info("✅ Credenciales de Telegram cargadas.")
+        else:
+            logger.warning("⚠️  Credenciales de Telegram no encontradas en variables de entorno. Notificaciones desactivadas.")
+
+        # --- 3. Inicialización y Ejecución del Trading Manager ---
         manager = LiveTradingManager(
             run_id=args.run_id,
             symbol=symbol,
             mode=args.mode,
-            run_config=run_config,
+            run_config=run_config, # Inyectar la configuración completa del run
             api_key=api_key,
             api_secret=api_secret,
             telegram_bot_token=telegram_bot_token,
