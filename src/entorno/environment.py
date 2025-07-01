@@ -147,20 +147,6 @@ class FuturesTradingEnv(gym.Env):
         else:
             return "VENDER", (abs(action_raw) - zona_muerta) / (1.0 - zona_muerta)
 
-    def _calculate_reward(self, trade_ejecutado: bool, pnl_realizado: float, equity_anterior: float) -> float:
-        """Calcula la recompensa híbrida."""
-        recompensa_paso = (self.portfolio.equity_actual - equity_anterior) / equity_anterior if equity_anterior > 0 else 0.0
-        recompensa_paso *= self.config_entorno['peso_recompensa_paso']
-
-        recompensa_cierre = 0.0
-        if trade_ejecutado and pnl_realizado != 0.0 and self.portfolio.historial_trades:
-            ultimo_trade = self.portfolio.historial_trades[-1]
-            roe_operacion = ultimo_trade['roe']
-            recompensa_cierre = np.sign(roe_operacion) * np.log1p(abs(roe_operacion)) if self.config_entorno['usar_log1p_en_pnl'] else roe_operacion
-            recompensa_cierre *= self.config_entorno['peso_recompensa_cierre']
-
-        return float(recompensa_paso + recompensa_cierre)
-
     def _check_episode_termination(self) -> Tuple[bool, bool]:
         """Verifica las condiciones de finalización del episodio."""
         drawdown_threshold = self.config_entorno['capital_inicial'] * (1 - self.config_entorno['max_drawdown_configurado_cuenta'])
