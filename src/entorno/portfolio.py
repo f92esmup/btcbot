@@ -34,6 +34,8 @@ class Portfolio(BasePortfolio):
         self._historial_trades = []
         self.max_equity_alcanzado_episodio = 0.0
         self.retornos_realizados_episodio = []
+        self.max_consecutive_losses = self.config.get('max_consecutive_losses', 10)
+        self._consecutive_losses = 0
         self.reset()
 
     def reset(self):
@@ -41,6 +43,7 @@ class Portfolio(BasePortfolio):
         self._balance_actual = self.config['capital_inicial']
         self._equity_actual = self.config['capital_inicial']
         self.max_equity_alcanzado_episodio = self.config['capital_inicial']
+        self._consecutive_losses = 0
         self._posicion_actual = {
             'tipo': TipoOperacion.NEUTRAL,
             'precio_entrada': 0.0,
@@ -113,6 +116,11 @@ class Portfolio(BasePortfolio):
             pnl_bruto = (self._posicion_actual['precio_entrada'] - precio_ejecucion) * self._posicion_actual['tamaño_activo']
 
         pnl_neto = pnl_bruto - coste_cierre
+
+        if pnl_neto > 0:
+            self._consecutive_losses = 0
+        else:
+            self._consecutive_losses += 1
 
         self._balance_actual += (self._posicion_actual['margen_usado'] + pnl_neto)
 
@@ -195,3 +203,8 @@ class Portfolio(BasePortfolio):
     @property
     def historial_trades(self) -> List[Dict[str, Any]]:
         return self._historial_trades
+
+    @property
+    def is_max_consecutive_losses_reached(self) -> bool:
+        """Verifica si se ha alcanzado el umbral de pérdidas consecutivas."""
+        return self._consecutive_losses >= self.max_consecutive_losses

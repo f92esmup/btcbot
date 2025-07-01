@@ -153,7 +153,7 @@ class FuturesTradingEnv(gym.Env):
     def _check_episode_termination(self) -> Tuple[bool, bool]:
         """Verifica las condiciones de finalización del episodio."""
         drawdown_threshold = self.config_entorno['capital_inicial'] * (1 - self.config_entorno['max_drawdown_configurado_cuenta'])
-        terminated = self.portfolio.equity <= drawdown_threshold
+        terminated = (self.portfolio.equity <= drawdown_threshold) or self.portfolio.is_max_consecutive_losses_reached
 
         end_of_data = self.paso_actual >= len(self.data_array) - 1
         max_steps_reached = self.config_entorno['usar_max_pasos_episodio'] and self.pasos_totales_episodio >= self.config_entorno['max_pasos_episodio']
@@ -223,7 +223,8 @@ class FuturesTradingEnv(gym.Env):
             'posicion_pasos': posicion['pasos_en_posicion'],
             'precio_actual': self._get_current_price(),
             'num_trades_episodio': len(self.portfolio.historial_trades),
-            'pasos_totales_episodio': self.pasos_totales_episodio
+            'pasos_totales_episodio': self.pasos_totales_episodio,
+            'consecutive_losses_reached': self.portfolio.is_max_consecutive_losses_reached
         }
 
     def render(self, mode: str = "human") -> Optional[str]:
