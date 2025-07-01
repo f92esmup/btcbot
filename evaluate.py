@@ -275,18 +275,14 @@ def main():
             api_key=api_key, api_secret=api_secret,
             gcs_utils=gcs_utils_pipeline
         )
-        normalized_dataframe, _ = data_pipeline.run()
+        normalized_dataframe, price_scaler = data_pipeline.run()
         logger.info(f"Pipeline completado. Datos para evaluación: {normalized_dataframe.shape}")
 
         # --- 4. Creación del Entorno y Agente ---
-        logger.info("📦 Cargando price_scaler del entrenamiento original...")
-        price_scaler = run_manager.load_price_scaler(blob_name=f"{args.run_id}/price_scaler.pkl")
-        logger.info("Price scaler cargado exitosamente.")
-
         logger.info("🏗️ Creando entorno de trading...")
         env = FuturesTradingEnv(
             data_df=normalized_dataframe,
-            price_scaler=price_scaler,
+            price_scaler=price_scaler, # Inyectar el scaler devuelto por el pipeline
             env_config=env_config  # Inyección de configuración del run
         )
 

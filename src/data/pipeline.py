@@ -60,12 +60,12 @@ class DataPipeline:
         self.logger.info(f"Guardar artefactos: {save_artifacts}")
         self.logger.info(f"Configuración inyectada: {len(self.full_config)} secciones")
     
-    def run(self) -> Tuple[pd.DataFrame, str]:
+    def run(self) -> Tuple[pd.DataFrame, object]:
         """
         Ejecuta el pipeline completo de preprocesamiento de datos.
         
         Returns:
-            Tuple[pd.DataFrame, str]: DataFrame normalizado y ruta del price_scaler
+            Tuple[pd.DataFrame, object]: DataFrame normalizado y el objeto price_scaler utilizado.
         """
         self.logger.info("=== Iniciando Pipeline de Datos ===")
         
@@ -141,4 +141,4 @@ class DataPipeline:
         
         self.logger.info("=== Pipeline de Datos Completado ===")
         
-        return normalized_dataframe, normalization.price_scaler_path
+        return normalized_dataframe, normalization.price_scaler

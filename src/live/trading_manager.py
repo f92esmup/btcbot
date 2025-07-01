@@ -52,8 +52,23 @@ class LiveTradingManager:
         print("✅ Configuración del run cargada exitosamente.")
 
         # --- Inicialización de Componentes con Configuración del Run ---
-        
-        # Notificador de Telegram (usa credenciales inyectadas)
+        main_config = self.run_config.get('config', {})
+        storage_mode = main_config.get('normalization', {}).get('storage_mode', 'local')
+        gcp_config = main_config.get('gcp') if storage_mode == 'gcp' else None
+
+        # 1. Crear una única instancia de RunManager
+        self.run_manager = RunManager(
+            run_id=self.run_id,
+            storage_mode=storage_mode,
+            gcp_config=gcp_config
+        )
+        print(f"RunManager inicializado en modo '{storage_mode}'.")
+
+        # 2. Inyectar RunManager en los componentes que lo necesitan
+        self.observation_builder = LiveObservationBuilder(self.run_manager, self.run_config)
+        self.decision_maker = DecisionMaker(self.run_manager, self.run_config, self.device)
+
+        # 3. Notificador de Telegram (usa credenciales inyectadas)
         if self.telegram_bot_token and self.telegram_chat_id:
             try:
                 self.notifier = TelegramNotifier(bot_token=self.telegram_bot_token, chat_id=self.telegram_chat_id)
@@ -64,33 +79,6 @@ class LiveTradingManager:
         else:
             print("⚠️  Advertencia: Credenciales de Telegram no proporcionadas. TelegramNotifier deshabilitado.")
             self.notifier = None
-
-        # Load run configuration first
-        run_config = RunManager.load_run_config(self.run_id)
-        if run_config is None:
-            raise ValueError(f"No se pudo cargar la configuración para el run_id: {self.run_id}")
-        
-        # Extract configuration for RunManager
-        main_config = run_config.get('config', {})
-        storage_mode = main_config.get('normalization', {}).get('storage_mode', 'local')
-        gcs_bucket_name = None
-        gcs_utils = None
-        
-        if storage_mode == "gcp":
-            from src.configuration.gcs_utils import gcs_utils
-            gcs_bucket_name = main_config.get('gcp', {}).get('storage', {}).get('bucket_name')
-        
-        # Create RunManager with explicit configuration
-        run_manager = RunManager(
-            run_id=self.run_id,
-            storage_mode=storage_mode,
-            gcs_bucket_name=gcs_bucket_name,
-            gcs_utils=gcs_utils
-        )
-        
-        # Observation Builder y Decision Maker
-        self.observation_builder = LiveObservationBuilder(run_manager, run_config)
-        self.decision_maker = DecisionMaker(self.run_id, self.device)
         
         # Portfolio Manager (usa credenciales inyectadas)
         is_testnet = (mode == 'testnet')

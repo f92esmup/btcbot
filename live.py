@@ -17,6 +17,7 @@ import argparse
 import sys
 import logging
 import os
+import yaml
 from src.live.trading_manager import LiveTradingManager
 from src.utils.system import setup_logging
 from src.training.run_manager import RunManager

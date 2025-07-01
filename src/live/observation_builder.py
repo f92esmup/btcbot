@@ -72,8 +72,9 @@ class LiveObservationBuilder:
         Returns:
             np.ndarray: Vector de características de mercado normalizado
         """
-        # 1. Calcular los indicadores técnicos sobre los datos en vivo.
-        indicadores = Indicadores(live_market_dataframe)
+        # 1. Calcular los indicadores técnicos sobre los datos en vivo, usando la configuración del run.
+        main_config = self.run_config.get('config', {})
+        indicadores = Indicadores(live_market_dataframe, config_dict=main_config.get('indicators', {}))
         df_with_indicators = indicadores.main()
         
         # 2. Asegurar que las columnas estén en el mismo orden que en el entrenamiento.

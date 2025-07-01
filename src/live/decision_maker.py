@@ -10,86 +10,68 @@ class DecisionMaker:
     Se encarga de cargar el modelo entrenado y proporcionar decisiones.
     """
     
-    def __init__(self, run_id: str, device: torch.device):
+    def __init__(self, run_manager: RunManager, run_config: dict, device: torch.device):
         """
-        Inicializa el DecisionMaker con un run_id específico.
-        
+        Inicializa el DecisionMaker.
+
         Args:
-            run_id: Identificador del run del cual cargar el modelo
-            device: Dispositivo donde ejecutar el modelo (CPU/GPU)
+            run_manager (RunManager): Instancia del gestor del run para cargar artefactos.
+            run_config (dict): Configuración completa del run.
+            device (torch.device): Dispositivo donde ejecutar el modelo (CPU/GPU).
         """
-        self.run_id = run_id
+        self.run_manager = run_manager
+        self.run_config = run_config
         self.device = device
-        
-        # 1. Load run configuration first
-        self.run_config = RunManager.load_run_config(run_id)
-        if self.run_config is None:
-            raise ValueError(f"No se pudo cargar la configuración para el run_id: {run_id}")
-        
-        # 2. Extract configuration for RunManager
-        main_config = self.run_config.get('config', {})
-        storage_mode = main_config.get('normalization', {}).get('storage_mode', 'local')
-        gcs_bucket_name = None
-        gcs_utils = None
-        
-        if storage_mode == "gcp":
-            from src.configuration.gcs_utils import gcs_utils
-            gcs_bucket_name = main_config.get('gcp', {}).get('storage', {}).get('bucket_name')
-        
-        # 3. Create RunManager with explicit configuration
-        run_manager = RunManager(
-            run_id=run_id,
-            storage_mode=storage_mode,
-            gcs_bucket_name=gcs_bucket_name,
-            gcs_utils=gcs_utils
-        )
-        
-        # 4. Cargar scaler del entrenamiento
-        self.scaler = run_manager.load_scaler()
-        
-        # 4. Extraer configuraciones del entorno y agente desde la clave 'config'
+        self.run_id = run_manager.run_id
+
+        # 1. Extraer configuraciones del entorno y agente desde la clave 'config'
         main_config = self.run_config.get('config', {})
         env_config = main_config.get('environment', {})
         agent_config = main_config.get('agent', {})
+
+        # 2. Cargar scaler del entrenamiento usando el run_manager inyectado
+        self.scaler = self.run_manager.load_scaler()
+
+        # 3. Inferir parámetros del scaler y run_config
+        # Asegurarse de que el scaler esté ajustado
+        if not hasattr(self.scaler, 'n_features_in_'):
+             raise ValueError("El scaler cargado no parece estar ajustado (no tiene 'n_features_in_').")
         
-        # 5. Inferir parámetros del scaler y run_config
         num_total_features = self.scaler.n_features_in_
         sequence_length = env_config['ventana_observacion_size']
-        portfolio_features = 4  # Las características del portfolio son fijas
-        market_features = num_total_features - portfolio_features
-        
-        # 6. Guardar parámetros inferidos como atributos de la clase
-        self.market_features = market_features
-        self.portfolio_features = portfolio_features
+        # El número de características del portfolio es fijo y conocido
+        self.portfolio_features = 4
+        # Las características de mercado son el total menos las del portfolio
+        self.market_features = num_total_features - self.portfolio_features
         self.sequence_length = sequence_length
-        
-        # 7. Instanciar el agente con config_override
-        observation_space_shape = (num_total_features,)
+
+        # 4. Instanciar el agente con config_override
+        observation_space_shape = (sequence_length * self.market_features + self.portfolio_features,)
         action_space_shape = (1,)
         
         self.agent = TransformerSACAgent(
             observation_space_shape=observation_space_shape,
             action_space_shape=action_space_shape,
-            market_features=market_features,
-            portfolio_features=portfolio_features,
-            sequence_length=sequence_length,
+            market_features=self.market_features,
+            portfolio_features=self.portfolio_features,
+            sequence_length=self.sequence_length,
             config_override=agent_config,
             device=self.device,
             is_distributed=False
         )
         
-        # 8. Cargar checkpoint con model_prefix correcto
-        model_prefix = f"{run_id}/best_model"
-        run_manager.load_agent_from_checkpoint(
+        # 5. Cargar checkpoint con model_prefix correcto
+        model_prefix = f"{self.run_id}/best_model"
+        self.run_manager.load_agent_from_checkpoint(
             agent=self.agent,
             checkpoint_prefix=model_prefix,
             reset_optimizers=True
         )
         
-        # 9. Finalizar
+        # 6. Finalizar
         self.agent.eval_mode()
         
-        print(f"✅ Agente cargado exitosamente desde run_id: {run_id}")
+        print(f"✅ Agente cargado exitosamente desde run_id: {self.run_id}")
         print(f"   - Arquitectura inferida del scaler: {num_total_features} features total.")
     
     def _parse_observation(self, observation: np.ndarray) -> tuple[torch.Tensor, torch.Tensor]:
