@@ -21,21 +21,36 @@ class DecisionMaker:
         self.run_id = run_id
         self.device = device
         
-        # 1. Instanciar RunManager y establecer contexto
-        run_manager = RunManager()
-        run_manager.set_run_context(run_id)
-        
-        # 2. Cargar configuración del run
-        self.run_config = run_manager.download_and_load_yaml_config(run_id)
+        # 1. Load run configuration first
+        self.run_config = RunManager.load_run_config(run_id)
         if self.run_config is None:
             raise ValueError(f"No se pudo cargar la configuración para el run_id: {run_id}")
         
-        # 3. Cargar scaler del entrenamiento
+        # 2. Extract configuration for RunManager
+        main_config = self.run_config.get('config', {})
+        storage_mode = main_config.get('normalization', {}).get('storage_mode', 'local')
+        gcs_bucket_name = None
+        gcs_utils = None
+        
+        if storage_mode == "gcp":
+            from src.configuration.gcs_utils import gcs_utils
+            gcs_bucket_name = main_config.get('gcp', {}).get('storage', {}).get('bucket_name')
+        
+        # 3. Create RunManager with explicit configuration
+        run_manager = RunManager(
+            run_id=run_id,
+            storage_mode=storage_mode,
+            gcs_bucket_name=gcs_bucket_name,
+            gcs_utils=gcs_utils
+        )
+        
+        # 4. Cargar scaler del entrenamiento
         self.scaler = run_manager.load_scaler()
         
-        # 4. Extraer configuraciones del entorno y agente
-        env_config = self.run_config['config_snapshot']['environment']
-        agent_config = self.run_config['config_snapshot']['agent']
+        # 4. Extraer configuraciones del entorno y agente desde la clave 'config'
+        main_config = self.run_config.get('config', {})
+        env_config = main_config.get('environment', {})
+        agent_config = main_config.get('agent', {})
         
         # 5. Inferir parámetros del scaler y run_config
         num_total_features = self.scaler.n_features_in_
@@ -58,8 +73,8 @@ class DecisionMaker:
             market_features=market_features,
             portfolio_features=portfolio_features,
             sequence_length=sequence_length,
-            device=self.device,
             config_override=agent_config,
+            device=self.device,
             is_distributed=False
         )
         

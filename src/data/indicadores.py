@@ -6,23 +6,26 @@ Añade indicadores técnicos al dataframe OHLCV usando la biblioteca pandas-ta.
 import pandas as pd
 import numpy as np
 import pandas_ta as ta
-from typing import Optional
+from typing import Optional, Dict
 import logging
-from ..configuration.config import config
 
 
 class Indicadores:
     """Clase para calcular y añadir indicadores técnicos al dataframe."""
     
-    def __init__(self, dataframe: pd.DataFrame):
+    def __init__(self, dataframe: pd.DataFrame, config_dict: Dict = None):
         """
         Inicializa la clase de indicadores.
         
         Args:
             dataframe (pd.DataFrame): DataFrame con datos OHLCV con índice temporal
+            config_dict (Dict): Diccionario con la configuración de indicadores
         """
         self.dataframe = dataframe.copy()
         self.initial_length = len(self.dataframe)
+        
+        # Almacenar configuración inyectada
+        self.config = config_dict or {}
         
         # Configurar logging
         logging.basicConfig(level=logging.INFO)
@@ -66,11 +69,11 @@ class Indicadores:
         # Diccionario para almacenar todos los nuevos indicadores
         new_indicators = {}
         
-        # Obtener configuraciones de indicadores
-        trend_config = config.trend_indicators
-        momentum_config = config.momentum_indicators
-        volatility_config = config.volatility_indicators
-        volume_config = config.volume_indicators
+        # Obtener configuraciones de indicadores desde la configuración inyectada
+        trend_config = self.config.get('trend_indicators', {})
+        momentum_config = self.config.get('momentum_indicators', {})
+        volatility_config = self.config.get('volatility_indicators', {})
+        volume_config = self.config.get('volume_indicators', {})
         
         # 1. Indicadores de Tendencia
         if trend_config.get('ema_20', {}).get('enabled', False):

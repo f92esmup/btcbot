@@ -13,7 +13,6 @@ from multiprocessing import Pool, cpu_count
 from functools import partial
 from binance.client import Client
 from binance.exceptions import BinanceAPIException, BinanceRequestException
-from ..configuration.config import config
 
 
 def _download_kline_chunk(start_timestamp: int, symbol: str, interval: str, 
@@ -108,7 +107,8 @@ def _download_kline_chunk(start_timestamp: int, symbol: str, interval: str,
 class Adquisicion:
     """Clase para adquirir y procesar datos OHLCV de Binance."""
     
-    def __init__(self, symbol: str, interval: str, start_date: str, end_date: str = None):
+    def __init__(self, symbol: str, interval: str, start_date: str, end_date: str = None, 
+                 config_dict: dict = None, api_key: Optional[str] = None, api_secret: Optional[str] = None):
         """
         Inicializa la clase de adquisición.
         
@@ -117,6 +117,9 @@ class Adquisicion:
             interval (str): Intervalo de tiempo (ej: '1h', '4h', '1d')
             start_date (str): Fecha de inicio en formato 'YYYY-MM-DD'
             end_date (str, optional): Fecha de fin en formato 'YYYY-MM-DD'
+            config_dict (dict): Diccionario con la configuración necesaria
+            api_key (str, optional): API key de Binance
+            api_secret (str, optional): API secret de Binance
         """
         self.symbol = symbol
         self.interval = interval
@@ -125,33 +128,39 @@ class Adquisicion:
         self.raw_data = []
         self.dataframe = None
         
+        # Almacenar configuración inyectada
+        self.config = config_dict or {}
+        
         # Configurar logging
         logging.basicConfig(level=logging.INFO)
         self.logger = logging.getLogger(__name__)
         
-        # Inicializar cliente de Binance con API keys desde Google Cloud Secret Manager
+        # Inicializar cliente de Binance con API keys pasadas como argumentos
         try:
-            api_key = config.binance_api_key
-            api_secret = config.binance_api_secret
-            
-            if config.is_testnet:
-                # Configurar cliente para testnet
-                self.client = Client(
-                    api_key=api_key,
-                    api_secret=api_secret,
-                    testnet=True
-                )
-                self.logger.info("Cliente de Binance inicializado en modo TESTNET")
+            if api_key and api_secret:
+                is_testnet = self.config.get('api', {}).get('is_testnet', False)
+                
+                if is_testnet:
+                    # Configurar cliente para testnet
+                    self.client = Client(
+                        api_key=api_key,
+                        api_secret=api_secret,
+                        testnet=True
+                    )
+                    self.logger.info("Cliente de Binance inicializado en modo TESTNET")
+                else:
+                    # Configurar cliente para producción
+                    self.client = Client(
+                        api_key=api_key,
+                        api_secret=api_secret
+                    )
+                    self.logger.info("Cliente de Binance inicializado en modo PRODUCCIÓN")
             else:
-                # Configurar cliente para producción
-                self.client = Client(
-                    api_key=api_key,
-                    api_secret=api_secret
-                )
-                self.logger.info("Cliente de Binance inicializado en modo PRODUCCIÓN")
+                self.logger.info("No se proporcionaron API keys - Inicializando cliente solo para datos públicos")
+                self.client = Client()
                 
         except Exception as e:
-            self.logger.warning(f"No se pudieron cargar las API keys: {e}")
+            self.logger.warning(f"Error inicializando cliente de Binance: {e}")
             self.logger.info("Inicializando cliente sin API keys (solo datos públicos)")
             self.client = Client()
         
@@ -246,12 +255,14 @@ class Adquisicion:
         
         end_date_display = self.end_date if self.end_date else "ahora"
         self.logger.info(f"Descargando datos desde {self.start_date} hasta {end_date_display}...")
-        self.logger.info(f"Límite por llamada: {config.api_call_limit} velas")
+        
+        api_call_limit = self.config.get('api', {}).get('call_limit', 1000)
+        self.logger.info(f"Límite por llamada: {api_call_limit} velas")
         
         while current_start < current_timestamp:
             call_count += 1
             retry_count = 0
-            max_retries = config.max_api_retries
+            max_retries = self.config.get('api', {}).get('max_retries', 3)
             klines = []  # Inicializar klines para cada iteración
             
             while retry_count <= max_retries:
@@ -263,7 +274,7 @@ class Adquisicion:
                         symbol=self.symbol,
                         interval=self.interval,
                         startTime=current_start,
-                        limit=config.api_call_limit
+                        limit=api_call_limit
                     )
                     
                     if not klines:
@@ -281,8 +292,9 @@ class Adquisicion:
                     self.logger.info(f"Descargadas {len(klines)} velas. Total acumulado: {len(all_klines)}")
                     
                     # Delay entre llamadas para respetar rate limits
-                    if config.retry_delay > 0:
-                        time.sleep(config.retry_delay)
+                    retry_delay = self.config.get('api', {}).get('retry_delay', 1.0)
+                    if retry_delay > 0:
+                        time.sleep(retry_delay)
                     
                     break  # Salir del bucle de reintentos si fue exitoso
                     
@@ -293,7 +305,7 @@ class Adquisicion:
                         raise
                     else:
                         self.logger.warning(f"Error de API (intento {retry_count}/{max_retries}): {e}")
-                        time.sleep(config.retry_delay * retry_count)  # Delay incremental
+                        time.sleep(retry_delay * retry_count)  # Delay incremental
                         
                 except BinanceRequestException as e:
                     retry_count += 1
@@ -302,7 +314,7 @@ class Adquisicion:
                         raise
                     else:
                         self.logger.warning(f"Error de petición (intento {retry_count}/{max_retries}): {e}")
-                        time.sleep(config.retry_delay * retry_count)  # Delay incremental
+                        time.sleep(retry_delay * retry_count)  # Delay incremental
                         
                 except Exception as e:
                     retry_count += 1
@@ -311,14 +323,14 @@ class Adquisicion:
                         raise
                     else:
                         self.logger.warning(f"Error inesperado (intento {retry_count}/{max_retries}): {e}")
-                        time.sleep(config.retry_delay * retry_count)  # Delay incremental
+                        time.sleep(retry_delay * retry_count)  # Delay incremental
             
             # Si no obtuvimos datos en esta iteración, salir del bucle principal
             if not klines:
                 break
                 
             # Verificar si ya llegamos al presente para evitar llamadas innecesarias
-            if len(klines) < config.api_call_limit:
+            if len(klines) < api_call_limit:
                 self.logger.info("Recibidas menos velas que el límite, probablemente llegamos al presente")
                 break
         
@@ -352,7 +364,8 @@ class Adquisicion:
         
         # Calcular el intervalo en milisegundos para determinar el tamaño de los trozos
         interval_ms = self._get_interval_in_ms()
-        chunk_size_ms = interval_ms * config.api_call_limit  # Cada trozo será de api_call_limit velas
+        api_call_limit = self.config.get('api', {}).get('call_limit', 1000)
+        chunk_size_ms = interval_ms * api_call_limit  # Cada trozo será de api_call_limit velas
         
         # Crear lista de timestamps de inicio para cada trozo
         start_timestamps = []
@@ -371,12 +384,15 @@ class Adquisicion:
         self.logger.info(f"Usando {num_workers} procesos paralelos")
         
         # Preparar parámetros para la función worker
-        try:
-            api_key = config.binance_api_key
-            api_secret = config.binance_api_secret
-        except:
-            api_key = None
-            api_secret = None
+        # En este método, no tenemos acceso directo a API keys desde config
+        # Se necesitarían pasar como parámetros al método o usar otra estrategia
+        api_key = None  # Por seguridad, el multiprocessing no usa API keys
+        api_secret = None
+        
+        # Obtener parámetros de configuración
+        is_testnet = self.config.get('api', {}).get('is_testnet', False)
+        max_retries = self.config.get('api', {}).get('max_retries', 3)
+        retry_delay = self.config.get('api', {}).get('retry_delay', 1.0)
         
         # Crear función worker con parámetros fijos usando partial
         worker_task = partial(
@@ -385,10 +401,10 @@ class Adquisicion:
             interval=self.interval,
             api_key=api_key,
             api_secret=api_secret,
-            is_testnet=config.is_testnet,
-            api_call_limit=config.api_call_limit,
-            max_retries=config.max_api_retries,
-            retry_delay=config.retry_delay
+            is_testnet=is_testnet,
+            api_call_limit=api_call_limit,
+            max_retries=max_retries,
+            retry_delay=retry_delay
         )
         
         # Ejecutar descarga paralela
@@ -478,18 +494,24 @@ class Adquisicion:
         df = pd.DataFrame(self.raw_data, columns=columns)
         
         # Seleccionar solo las columnas OHLCV necesarias
-        df = df[['timestamp'] + config.ohlcv_columns]
+        ohlcv_columns = self.config.get('data', {}).get('ohlcv_columns', ['Open', 'High', 'Low', 'Close', 'Volume'])
+        df = df[['timestamp'] + ohlcv_columns]
         
-        # Convertir timestamp a datetime con zona horaria Madrid
+        # Convertir timestamp a datetime con zona horaria
+        target_timezone = self.config.get('data', {}).get('target_timezone', 'Europe/Madrid')
         df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms', utc=True)
-        df['timestamp'] = df['timestamp'].dt.tz_convert(config.target_timezone)
+        df['timestamp'] = df['timestamp'].dt.tz_convert(target_timezone)
         
         # Establecer timestamp como índice
         df.set_index('timestamp', inplace=True)
         
         # Convertir columnas a tipos eficientes para RAM
-        for col in config.ohlcv_columns:
-            df[col] = pd.to_numeric(df[col], errors='coerce').astype(config.data_dtypes[col])
+        data_dtypes = self.config.get('data', {}).get('data_dtypes', {})
+        for col in ohlcv_columns:
+            if col in data_dtypes:
+                df[col] = pd.to_numeric(df[col], errors='coerce').astype(data_dtypes[col])
+            else:
+                df[col] = pd.to_numeric(df[col], errors='coerce')
         
         self.dataframe = df
         self.logger.info(f"DataFrame creado con {len(df)} filas y {len(df.columns)} columnas")
@@ -516,9 +538,12 @@ class Adquisicion:
         nan_count_before = self.dataframe.isnull().sum().sum()
         
         # Interpolar usando el método configurado
+        interpolation_method = self.config.get('data', {}).get('interpolation_method', 'linear')
+        interpolation_limit_direction = self.config.get('data', {}).get('interpolation_limit_direction', 'forward')
+        
         self.dataframe = self.dataframe.interpolate(
-            method=config.interpolation_method,
-            limit_direction=config.interpolation_limit_direction
+            method=interpolation_method,
+            limit_direction=interpolation_limit_direction
         )
         
         nan_count_after = self.dataframe.isnull().sum().sum()
@@ -548,7 +573,8 @@ class Adquisicion:
         # Crear rango completo de timestamps
         start_time = self.dataframe.index.min()
         end_time = self.dataframe.index.max()
-        complete_range = pd.date_range(start=start_time, end=end_time, freq=freq, tz=config.target_timezone)
+        target_timezone = self.config.get('data', {}).get('target_timezone', 'Europe/Madrid')
+        complete_range = pd.date_range(start=start_time, end=end_time, freq=freq, tz=target_timezone)
         
         # Reindexar con el rango completo
         initial_count = len(self.dataframe)
@@ -569,9 +595,12 @@ class Adquisicion:
         nan_count_before = self.dataframe.isnull().sum().sum()
         
         # Interpolar las filas completamente NaN
+        interpolation_method = self.config.get('data', {}).get('interpolation_method', 'linear')
+        interpolation_limit_direction = self.config.get('data', {}).get('interpolation_limit_direction', 'forward')
+        
         self.dataframe = self.dataframe.interpolate(
-            method=config.interpolation_method,
-            limit_direction=config.interpolation_limit_direction
+            method=interpolation_method,
+            limit_direction=interpolation_limit_direction
         )
         
         nan_count_after = self.dataframe.isnull().sum().sum()

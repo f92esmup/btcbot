@@ -13,6 +13,7 @@ Uso:
 
 import argparse
 import logging
+import os
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -155,8 +156,8 @@ def create_agent_from_config(
         market_features=market_features,
         portfolio_features=portfolio_features,
         sequence_length=sequence_length,
-        device=device,
-        config_override=agent_config # Inyección directa
+        config_override=agent_config, # Inyección directa
+        device=device
     )
 
 
@@ -234,21 +235,59 @@ def main():
         device = setup_device(args.no_cuda)
         logger.info(f"Dispositivo configurado: {device}")
         
-        # Instanciar RunManager y cargar configuración del run
-        run_manager = RunManager()
-        run_manager.set_run_context(args.run_id)
-        run_config = run_manager.download_and_load_yaml_config(args.run_id)
+        # Load run configuration to determine storage settings
+        logger.info("📁 Loading run configuration...")
+        run_config = RunManager.load_run_config(args.run_id)
         if not run_config:
             logger.error(f"No se pudo cargar la configuración para el run_id: {args.run_id}. Abortando.")
             sys.exit(1)
         logger.info("Configuración del run cargada exitosamente.")
 
-        # Extraer configuraciones específicas
-        env_config = run_config['config_snapshot']['environment']
-        agent_config = run_config['config_snapshot']['agent']
+        # Extraer la configuración principal del sub-diccionario 'config'
+        main_config = run_config.get('config', {})
+        if not main_config:
+            logger.error(f"No se encontró la configuración principal en 'config' para el run_id: {args.run_id}. Abortando.")
+            sys.exit(1)
+
+        # Extraer configuraciones de almacenamiento
+        storage_mode = main_config.get('normalization', {}).get('storage_mode', 'local')
+        gcs_bucket_name = None
+        gcs_utils = None
+        
+        if storage_mode == "gcp":
+            gcs_bucket_name = main_config.get('gcp', {}).get('storage', {}).get('bucket_name')
+            if not gcs_bucket_name:
+                logger.error("storage_mode es 'gcp' pero no se encontró gcs_bucket_name en la configuración")
+                sys.exit(1)
+            
+            from src.configuration.gcs_utils import gcs_utils
+            logger.info("Usando instancia global de GCSUtils para modo GCP")
+
+        # Crear instancia definitiva de RunManager con la configuración cargada
+        run_manager = RunManager(
+            run_id=args.run_id,
+            storage_mode=storage_mode,
+            gcs_bucket_name=gcs_bucket_name,
+            gcs_utils=gcs_utils
+        )
+        run_manager.set_run_context(args.run_id)
+        logger.info(f"RunManager creado con storage_mode: {storage_mode}")
+
+        # Extraer configuraciones específicas de la configuración principal
+        env_config = main_config['environment']
+        agent_config = main_config['agent']
         
         # Pipeline de datos
         logger.info("📊 Ejecutando pipeline de datos...")
+        
+        # Obtener credenciales de API desde variables de entorno
+        api_key = os.getenv('BINANCE_API_KEY')
+        api_secret = os.getenv('BINANCE_API_SECRET')
+        
+        if not api_key or not api_secret:
+            logger.warning("Credenciales de Binance no encontradas en variables de entorno.")
+            logger.warning("Para usar la API de Binance, define BINANCE_API_KEY y BINANCE_API_SECRET")
+        
         data_pipeline = DataPipeline(
             symbol=args.symbol,
             interval=args.interval,
@@ -256,7 +295,11 @@ def main():
             end_date=args.end_date,
             run_id=f"evaluation_{args.run_id}",
             base_path="temp_evaluation",
-            save_artifacts=False # No guardar artefactos durante la evaluación
+            full_config=main_config,
+            save_artifacts=False, # No guardar artefactos durante la evaluación
+            api_key=api_key,
+            api_secret=api_secret,
+            gcs_utils=gcs_utils
         )
         
         normalized_dataframe, _ = data_pipeline.run()
@@ -282,10 +325,10 @@ def main():
         observation_space_shape = obs.shape
         action_space_shape = env.action_space.shape
         
-        # Obtener características del agente desde la configuración del run
-        hyperparams = run_config.get('hyperparameters', {})
-        market_features = hyperparams.get('market_features', len(env.column_names))
-        portfolio_features = hyperparams.get('portfolio_features', 4)
+        # Obtener características del agente desde la configuración principal
+        # Los valores específicos como market_features y portfolio_features se calculan dinámicamente
+        market_features = len(env.column_names)
+        portfolio_features = 4  # tipo_posicion, pnl_roe, pasos_posicion, precio_entrada
         sequence_length = env_config.get('ventana_observacion_size', 24)
         
         logger.info(f"Espacio de observación: {observation_space_shape}")

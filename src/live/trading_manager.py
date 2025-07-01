@@ -24,8 +24,13 @@ class LiveTradingManager:
         print(f"🔧 Modo de operación: {mode.upper()}")
         print(f"🎯 Conectando a: {'Testnet' if mode == 'testnet' else 'Producción'}")
 
-        # Extraer las configuraciones específicas del snapshot del entrenamiento
-        env_config_snapshot = self.run_config['config_snapshot']['environment']
+        # Extraer la configuración principal del run
+        main_config = self.run_config.get('config', {})
+        if not main_config:
+            raise ValueError(f"No se encontró la configuración principal en 'config' para el run_id: {run_id}")
+        
+        # Extraer la configuración específica del entorno y hacerla disponible como atributo de instancia
+        self.env_config = main_config['environment']
         
         print("✅ Configuración del run cargada exitosamente.")
 
@@ -41,10 +46,31 @@ class LiveTradingManager:
             print(f"⚠️  Advertencia: No se pudo inicializar TelegramNotifier. {e}")
             self.notifier = None
 
+        # Load run configuration first
+        run_config = RunManager.load_run_config(self.run_id)
+        if run_config is None:
+            raise ValueError(f"No se pudo cargar la configuración para el run_id: {self.run_id}")
+        
+        # Extract configuration for RunManager
+        main_config = run_config.get('config', {})
+        storage_mode = main_config.get('normalization', {}).get('storage_mode', 'local')
+        gcs_bucket_name = None
+        gcs_utils = None
+        
+        if storage_mode == "gcp":
+            from src.configuration.gcs_utils import gcs_utils
+            gcs_bucket_name = main_config.get('gcp', {}).get('storage', {}).get('bucket_name')
+        
+        # Create RunManager with explicit configuration
+        run_manager = RunManager(
+            run_id=self.run_id,
+            storage_mode=storage_mode,
+            gcs_bucket_name=gcs_bucket_name,
+            gcs_utils=gcs_utils
+        )
+        
         # Observation Builder y Decision Maker
-        run_manager = RunManager()
-        run_manager.set_run_context(run_id=self.run_id)
-        self.observation_builder = LiveObservationBuilder(run_manager)
+        self.observation_builder = LiveObservationBuilder(run_manager, run_config)
         self.decision_maker = DecisionMaker(self.run_id, self.device)
         
         # Portfolio Manager (usa credenciales globales y config del run)
@@ -56,13 +82,13 @@ class LiveTradingManager:
             api_secret=api_secret, 
             is_testnet=is_testnet, 
             symbol=self.symbol,
-            portfolio_config=env_config_snapshot # Inyección de configuración
+            portfolio_config=self.env_config # Inyección de configuración
         )
 
         # Risk Manager (usa config del run)
         self.risk_manager = RiskManager(
             portfolio_manager=self.portfolio_manager, 
-            risk_config=env_config_snapshot # Inyección de configuración
+            risk_config=self.env_config # Inyección de configuración
         )
 
         # Data Reader
@@ -156,7 +182,7 @@ class LiveTradingManager:
         log_data['market_price'] = price
         log_data['agent_action'] = action
         
-        zona_muerta = config.zona_muerta_mantener
+        zona_muerta = self.env_config.get('zona_muerta_mantener', 0.05)  # Default value if not found
         trade_executed = False
 
         if action > zona_muerta:

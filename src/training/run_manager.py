@@ -22,7 +22,6 @@ import yaml
 import joblib
 import torch
 
-from src.configuration.config import config
 from src.agente.agent import TransformerSACAgent
 
 
@@ -71,10 +70,10 @@ def _save_worker_gcs(agent_state_dicts: Dict[str, Any], gcs_prefix: str) -> None
     """
     try:
         # Import GCS utils in the worker process
-        from src.configuration.gcs_utils import GCSUtils
+        from src.configuration.gcs_utils import create_gcs_utils_from_global_config
         
         # Create GCS client in this process
-        gcs_utils = GCSUtils()
+        gcs_utils = create_gcs_utils_from_global_config()
         
         with tempfile.TemporaryDirectory() as temp_dir:
             # Save all state dictionaries to temporary directory
@@ -144,7 +143,8 @@ class RunManager:
         """
         return {k: v.cpu() if hasattr(v, 'cpu') else v for k, v in state_dict.items()}
     
-    def __init__(self, base_path: str = None, run_id: str = None, gcs_utils=None):
+    def __init__(self, base_path: str = None, run_id: str = None, gcs_utils=None, 
+                 storage_mode: str = "local", gcs_bucket_name: str = None):
         """
         Initialize the RunManager.
         
@@ -152,8 +152,16 @@ class RunManager:
             base_path: Base path for storing artifacts (optional, will use default if not provided)
             run_id: Unique identifier for this training run (optional, will generate if not provided)
             gcs_utils: GCS utilities instance (optional, will create if needed for GCP mode)
+            storage_mode: Storage mode ('local' or 'gcp', defaults to 'local')
+            gcs_bucket_name: GCS bucket name (required when storage_mode is 'gcp')
         """
-        self.storage_mode = config.storage_mode
+        self.storage_mode = storage_mode
+        
+        # Validate GCS configuration
+        if self.storage_mode == "gcp" and not gcs_bucket_name:
+            raise ValueError("gcs_bucket_name is required when storage_mode is 'gcp'")
+        
+        self.gcs_bucket_name = gcs_bucket_name
         
         # Handle base_path
         if base_path is None:
@@ -178,7 +186,7 @@ class RunManager:
         
         # Update base_path with run_id if needed
         if self.base_path is None and self.storage_mode == "gcp":
-            self.base_path = f"gs://{config.gcs_bucket_name}/{self.run_id}"
+            self.base_path = f"gs://{self.gcs_bucket_name}/{self.run_id}"
         
         # Handle GCS utils
         if self.storage_mode == "gcp":
@@ -196,12 +204,12 @@ class RunManager:
         # Setup logging
         self.logger = logging.getLogger(__name__)
     
-    def save_run_config(self, hparams: Dict, args) -> None:
+    def save_run_config(self, run_config_dict: Dict, args) -> None:
         """
         Save the complete run configuration to config_run.yaml.
         
         Args:
-            hparams: Dictionary of hyperparameters
+            run_config_dict: Complete configuration dictionary to save
             args: Command line arguments
         """
         self.logger.info("Saving run configuration...")
@@ -224,12 +232,7 @@ class RunManager:
                 'no_cuda': args.no_cuda,
                 'eval_episodes': args.eval_episodes
             },
-            'hyperparameters': {k: v for k, v in hparams.items() if k not in ['run_id', 'storage_mode', 'base_path']},
-            'config_snapshot': {
-                'normalization': hparams.get('normalization', {}),
-                'environment': hparams.get('environment', {}),
-                'agent': hparams.get('agent', {})
-            }
+            'config': run_config_dict
         }
         
         if self.storage_mode == "gcp":
@@ -242,7 +245,7 @@ class RunManager:
                 # Upload to GCS
                 gcs_blob_name = f"{self.run_id}/config_run.yaml"
                 if self.gcs_utils.upload_file_to_gcs(temp_path, gcs_blob_name):
-                    self.logger.info(f"Run configuration saved to GCS: gs://{config.gcs_bucket_name}/{gcs_blob_name}")
+                    self.logger.info(f"Run configuration saved to GCS: gs://{self.gcs_bucket_name}/{gcs_blob_name}")
                 else:
                     self.logger.error("Error saving run configuration to GCS")
             finally:
@@ -706,7 +709,7 @@ class RunManager:
         if base_path is not None:
             self.base_path = base_path
         elif self.storage_mode == "gcp":
-            self.base_path = f"gs://{config.gcs_bucket_name}/{self.run_id}"
+            self.base_path = f"gs://{self.gcs_bucket_name}/{self.run_id}"
         else:
             self.base_path = f"Entrenamientos/{self.run_id}"
         
@@ -773,4 +776,88 @@ class RunManager:
             self.logger.error(f"Error loading configuration for run {run_id}: {str(e)}")
             import traceback
             self.logger.error(f"Traceback: {traceback.format_exc()}")
+            return None
+    
+    @staticmethod
+    def load_run_config(run_id: str, storage_mode: str = None, gcs_bucket_name: str = None, gcs_utils=None) -> Optional[Dict[str, Any]]:
+        """
+        Load run configuration without requiring a full RunManager instance.
+        This method is useful when you need to load configuration to determine how to create a RunManager.
+        
+        Args:
+            run_id: The run ID for which to load the configuration
+            storage_mode: Storage mode ('local' or 'gcp'). If None, tries to determine automatically
+            gcs_bucket_name: GCS bucket name (required if storage_mode is 'gcp')
+            gcs_utils: GCS utilities instance (required if storage_mode is 'gcp')
+            
+        Returns:
+            Dict containing the configuration, or None if file doesn't exist or error occurs
+        """
+        logger = logging.getLogger(__name__)
+        logger.info(f"Loading configuration for run: {run_id}")
+        
+        # If storage_mode not provided, try to determine it
+        if storage_mode is None:
+            # Try local first
+            local_config_path = Path(f"Entrenamientos/{run_id}/config_run.yaml")
+            if local_config_path.exists():
+                storage_mode = "local"
+            else:
+                # Fallback to global config to determine storage mode
+                from src.configuration.config import config
+                storage_mode = config.storage_mode
+                if storage_mode == "gcp":
+                    gcs_bucket_name = gcs_bucket_name or config.gcs_bucket_name
+                    if gcs_utils is None:
+                        from src.configuration.gcs_utils import gcs_utils as global_gcs_utils
+                        gcs_utils = global_gcs_utils
+        
+        try:
+            if storage_mode == "gcp":
+                # Validate GCP requirements
+                if not gcs_bucket_name:
+                    raise ValueError("gcs_bucket_name is required for GCP storage mode")
+                if gcs_utils is None:
+                    raise ValueError("gcs_utils is required for GCP storage mode")
+                
+                # Construct GCS blob name
+                blob_name = f"{run_id}/config_run.yaml"
+                logger.info(f"Downloading config from GCS: {blob_name}")
+                
+                # Download blob content directly to memory
+                bucket = gcs_utils.client.bucket(gcs_bucket_name)
+                blob = bucket.blob(blob_name)
+                
+                if not blob.exists():
+                    logger.warning(f"Configuration file not found in GCS: {blob_name}")
+                    return None
+                
+                # Download as string and parse YAML
+                yaml_content = blob.download_as_string().decode('utf-8')
+                logger.info("Configuration downloaded successfully from GCS")
+                
+                # Load YAML content
+                config_data = yaml.safe_load(yaml_content)
+                logger.info("Configuration loaded successfully from GCS")
+                return config_data
+                            
+            else:
+                # Local storage mode
+                config_path = Path(f"Entrenamientos/{run_id}/config_run.yaml")
+                logger.info(f"Loading config from local path: {config_path}")
+                
+                if not config_path.exists():
+                    logger.warning(f"Configuration file not found locally: {config_path}")
+                    return None
+                
+                with open(config_path, 'r', encoding='utf-8') as f:
+                    config_data = yaml.safe_load(f)
+                
+                logger.info("Configuration loaded successfully from local storage")
+                return config_data
+                
+        except Exception as e:
+            logger.error(f"Error loading configuration for run {run_id}: {str(e)}")
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}")
             return None

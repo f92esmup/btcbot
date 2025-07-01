@@ -6,27 +6,41 @@ Maneja la subida y descarga de archivos del scaler a/desde un bucket de GCS.
 import os
 import logging
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Dict, Any
 import re
 from google.cloud import storage
 from google.cloud.exceptions import NotFound
 import joblib
 import tempfile
-from .config import config
 
 
 class GCSUtils:
     """Clase para manejar operaciones de Google Cloud Storage."""
     
-    def __init__(self):
-        """Inicializa las utilidades de GCS."""
+    def __init__(self, gcp_config: Dict[str, Any]):
+        """
+        Inicializa las utilidades de GCS.
+        
+        Args:
+            gcp_config (Dict[str, Any]): Configuración de GCP que incluye:
+                - project_id: ID del proyecto de Google Cloud
+                - storage: Dict con bucket_name, scaler_blob_name, price_scaler_blob_name
+        """
         self.logger = logging.getLogger(__name__)
         
+        # Validar configuración
+        if not isinstance(gcp_config, dict):
+            raise ValueError("gcp_config debe ser un diccionario")
+        
         # Obtener configuración de GCS
-        self.project_id = config.project_id
-        self.bucket_name = config.gcs_bucket_name
-        self.scaler_blob_name = config.gcs_scaler_blob_name
-        self.price_scaler_blob_name = config.gcs_price_scaler_blob_name  # Nuevo: blob name para price_scaler
+        self.project_id = gcp_config.get('project_id')
+        if not self.project_id:
+            raise ValueError("project_id es requerido en gcp_config")
+        
+        storage_config = gcp_config.get('storage', {})
+        self.bucket_name = storage_config.get('bucket_name', 'btcbot-models')
+        self.scaler_blob_name = storage_config.get('scaler_blob_name', 'scaler.pkl')
+        self.price_scaler_blob_name = storage_config.get('price_scaler_blob_name', 'price_scaler.pkl')
         
         # Cliente de GCS
         self._client = None
@@ -498,6 +512,27 @@ class GCSUtils:
     
 
 
+def create_gcs_utils_from_global_config() -> GCSUtils:
+    """
+    Crea una instancia de GCSUtils usando la configuración global.
+    Esta función mantiene compatibilidad con el código existente.
+    
+    Returns:
+        GCSUtils: Instancia configurada con la configuración global
+    """
+    from .config import config
+    
+    gcp_config = {
+        'project_id': config.project_id,
+        'storage': {
+            'bucket_name': config.gcs_bucket_name,
+            'scaler_blob_name': config.gcs_scaler_blob_name,
+            'price_scaler_blob_name': config.gcs_price_scaler_blob_name
+        }
+    }
+    
+    return GCSUtils(gcp_config)
 
-# Instancia global para facilitar el uso
-gcs_utils = GCSUtils()
+
+# Instancia global para facilitar el uso (para compatibilidad con código existente)
+gcs_utils = create_gcs_utils_from_global_config()

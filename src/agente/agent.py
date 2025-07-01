@@ -16,7 +16,6 @@ import tempfile
 import os
 
 from .networks import ActorNetwork, CriticNetwork
-from ..configuration.config import config
 
 logger = logging.getLogger(__name__)
 
@@ -39,8 +38,8 @@ class TransformerSACAgent:
         market_features: int,
         portfolio_features: int,
         sequence_length: int,
+        config_override: Dict[str, Any],  # Now mandatory
         device: Optional[torch.device] = None,
-        config_override: Optional[Dict[str, Any]] = None,
         is_distributed: bool = False  # Flag para activar el modo distribuido
     ):
         """
@@ -53,7 +52,7 @@ class TransformerSACAgent:
             portfolio_features: Número de características del portfolio
             sequence_length: Longitud de la secuencia (ventana)
             device: Dispositivo de cómputo
-            config_override: Configuración opcional para sobrescribir
+            config_override: Configuración requerida para el agente
             is_distributed: Flag para activar el modo distribuido con DDP
         """
         self.device = device or torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -67,8 +66,8 @@ class TransformerSACAgent:
         self.sequence_length = sequence_length
         self.action_dim = action_space_shape[0]
         
-        # Configuración
-        self.config = config_override or self._load_config_from_yaml()
+        # Configuración - ahora exclusivamente del parámetro config_override
+        self.config = config_override
         
         # Extraer sub-configuraciones para claridad
         sac_params = self.config.get('hiperparametros_sac', {})
@@ -131,30 +130,6 @@ class TransformerSACAgent:
         logger.info(f"  - Alpha aprendible: {self.learn_alpha}")
         logger.info(f"  - Target entropy: {self.target_entropy}")
         logger.info(f"  - AMP habilitado: {self.device.type == 'cuda'}")
-    
-    def _load_config_from_yaml(self) -> Dict[str, Any]:
-        """Carga configuración desde config.yaml."""
-        return {
-            'gamma': config.gamma,
-            'tau': config.tau,
-            'batch_size': config.batch_size,
-            'actor_learning_rate': config.actor_learning_rate,
-            'critic_learning_rate': config.critic_learning_rate,
-            'alpha_learning_rate': config.alpha_learning_rate,
-            'learn_alpha': config.learn_alpha,
-            'target_entropy': config.target_entropy,
-            'initial_log_alpha': config.initial_log_alpha,
-            'learning_frequency': config.learning_frequency,
-            'update_target_frequency': config.update_target_frequency,
-            'transformer_config': {
-                'd_model': config.d_model,
-                'n_head': config.n_head,
-                'num_encoder_layers': config.num_encoder_layers,
-                'dim_feedforward': config.dim_feedforward,
-                'dropout_rate': config.dropout_rate
-            },
-            'mlp_hidden_dims': config.hidden_dims
-        }
     
     def _init_networks(self) -> None:
         """Inicializa las redes y las envuelve para DDP si está en modo distribuido."""

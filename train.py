@@ -21,7 +21,6 @@ import yaml
 from src.data.pipeline import DataPipeline
 from src.entorno.environment import FuturesTradingEnv
 from src.agente.agent import TransformerSACAgent
-from src.configuration.gcs_utils import GCSUtils
 from src.utils.system import setup_logging, set_seed, setup_device, setup_environment_and_distribution
 from src.utils.validation import validate_date_format
 from src.utils.cli import parse_arguments
@@ -113,8 +112,8 @@ def create_sac_agent(env: FuturesTradingEnv, device: torch.device, logger, agent
         market_features=market_features,
         portfolio_features=portfolio_features,
         sequence_length=sequence_length,
-        device=device,
         config_override=agent_config, # Inyección de configuración
+        device=device,
         is_distributed=is_distributed
     )
     
@@ -253,7 +252,13 @@ def main():
         logger.info(f"[Proceso {rank}] Modo Local: Los artefactos se accederán desde {base_path}")
 
     # Crear instancia de RunManager para TODOS los procesos
-    run_manager = RunManager(base_path=str(base_path), run_id=run_id, gcs_utils=gcs_utils)
+    run_manager = RunManager(
+        base_path=str(base_path), 
+        run_id=run_id, 
+        gcs_utils=gcs_utils,
+        storage_mode=storage_mode,
+        gcs_bucket_name=gcs_bucket_name if storage_mode == "gcp" else None
+    )
     logger.info(f"[Proceso {rank}] RunManager creado - Base path: {base_path}")
     
     # Solo el proceso jefe inicializa los componentes de logging y configuración
@@ -268,7 +273,17 @@ def main():
             tensorboard_dir = None
 
         # Inicializar TensorBoard Logger
-        tb_logger = TensorboardLogger(log_dir=str(tensorboard_dir) if tensorboard_dir else None, run_id=run_id)
+        vertex_ai_config = None
+        if storage_mode == "gcp":
+            # Pasar la configuración completa que incluye tanto tensorboard_vertex_ai como gcp
+            vertex_ai_config = local_config_dict
+            vertex_ai_config['storage_mode'] = storage_mode
+        
+        tb_logger = TensorboardLogger(
+            log_dir=str(tensorboard_dir) if tensorboard_dir else None, 
+            run_id=run_id,
+            vertex_ai_config=vertex_ai_config
+        )
         
         if storage_mode == "local":
             logger.info(f"TensorBoard logs se guardarán localmente en: {tensorboard_dir}")
@@ -307,7 +322,7 @@ def main():
         # Guardar configuración del run usando RunManager (SOLO EL JEFE ESCRIBE)
         try:
             # En lugar de pasar hparams, pasamos el diccionario completo para un snapshot fiel
-            run_manager.save_run_config(hparams=local_config_dict, args=args)
+            run_manager.save_run_config(run_config_dict=local_config_dict, args=args)
         except Exception as e:
             logger.error(f"Error al guardar config_run.yaml: {e}")
             # Continuar ejecución ya que este error no es crítico
@@ -322,6 +337,17 @@ def main():
         # === FASE 1: EL PROCESO JEFE GENERA Y GUARDA LOS ARTEFACTOS ===
         if is_chief:
             logger.info("=== FASE 1: Generando y Guardando Artefactos (PROCESO JEFE) ===")
+            
+            # Obtener credenciales de API desde variables de entorno
+            api_key = os.getenv('BINANCE_API_KEY')
+            api_secret = os.getenv('BINANCE_API_SECRET')
+            
+            if not api_key or not api_secret:
+                logger.warning("Credenciales de Binance no encontradas en variables de entorno. Continuando sin ellas.")
+                logger.warning("Para usar la API de Binance, define BINANCE_API_KEY y BINANCE_API_SECRET")
+            else:
+                logger.info("Credenciales de Binance cargadas desde variables de entorno")
+            
             data_pipeline_chief = DataPipeline(
                 symbol=args.symbol,
                 interval=args.interval,
@@ -329,7 +355,11 @@ def main():
                 end_date=args.end_date,
                 run_id=run_id,
                 base_path=str(base_path),
-                save_artifacts=True
+                full_config=local_config_dict,
+                save_artifacts=True,
+                api_key=api_key,
+                api_secret=api_secret,
+                gcs_utils=gcs_utils
             )
             # El jefe ejecuta con save_artifacts=True para guardar scalers y metadatos
             _, _ = data_pipeline_chief.run()
@@ -344,6 +374,11 @@ def main():
         
         # === FASE 3: TODOS LOS PROCESOS CARGAN LOS DATOS EN MEMORIA ===
         logger.info(f"=== FASE 3: Cargando Datos en Memoria [Proceso {rank}] ===")
+        
+        # Obtener credenciales de API desde variables de entorno (para todos los procesos)
+        api_key = os.getenv('BINANCE_API_KEY')
+        api_secret = os.getenv('BINANCE_API_SECRET')
+        
         data_pipeline = DataPipeline(
             symbol=args.symbol,
             interval=args.interval,
@@ -351,7 +386,11 @@ def main():
             end_date=args.end_date,
             run_id=run_id,
             base_path=str(base_path),
-            save_artifacts=False
+            full_config=local_config_dict,
+            save_artifacts=False,
+            api_key=api_key,
+            api_secret=api_secret,
+            gcs_utils=gcs_utils
         )
         # Todos los procesos (incluido el jefe) ejecutan con save_artifacts=False
         # Esto carga los datos y los procesa en memoria, usando los scalers ya guardados

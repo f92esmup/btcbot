@@ -11,22 +11,23 @@ from pathlib import Path
 from sklearn.preprocessing import MinMaxScaler
 from typing import Optional, Tuple, Dict, Any
 import logging
-from ..configuration.config import config
-from ..configuration.gcs_utils import gcs_utils
 
 
 class Normalization:
     """Clase para normalizar datos de trading usando MinMaxScaler."""
     
-    def __init__(self, dataframe: pd.DataFrame, base_path: Optional[str] = None, run_id: Optional[str] = None, save_artifacts: bool = True):
+    def __init__(self, dataframe: pd.DataFrame, normalization_config: Dict, base_path: Optional[str] = None, 
+                 run_id: Optional[str] = None, save_artifacts: bool = True, gcs_utils=None):
         """
         Inicializa la clase de normalización.
         
         Args:
             dataframe (pd.DataFrame): DataFrame con datos OHLCV e indicadores técnicos
+            normalization_config (Dict): Diccionario con la configuración de normalización
             base_path (Optional[str]): Ruta base para guardar los artifacts del entrenamiento
             run_id (Optional[str]): Identificador único del entrenamiento
             save_artifacts (bool): Si True, guarda los scalers; si False, solo los carga
+            gcs_utils: Instancia de GCSUtils para operaciones en la nube (opcional)
         """
         self.dataframe = dataframe.copy()
         self.initial_length = len(self.dataframe)
@@ -39,6 +40,10 @@ class Normalization:
         self.run_id = run_id
         self.save_artifacts = save_artifacts
         
+        # Store injected configuration and GCS utils
+        self.config = normalization_config
+        self.gcs_utils = gcs_utils
+        
         # Configurar logging
         logging.basicConfig(level=logging.INFO)
         self.logger = logging.getLogger(__name__)
@@ -47,10 +52,10 @@ class Normalization:
         if self.dataframe.empty:
             raise ValueError("El DataFrame proporcionado está vacío")
         
-        # Obtener configuración de normalización
-        self.scaler_type = config.scaler_type
-        self.feature_range = tuple(config.feature_range)
-        self.storage_mode = config.storage_mode
+        # Obtener configuración de normalización desde el diccionario inyectado
+        self.scaler_type = self.config.get('scaler_type', 'MinMaxScaler')
+        self.feature_range = tuple(self.config.get('feature_range', [0, 1]))
+        self.storage_mode = self.config.get('storage_mode', 'local')
         self.scaler_path = self._get_scaler_path()
         self.price_scaler_path = self._get_price_scaler_path()
         
@@ -83,7 +88,8 @@ class Normalization:
                 return str(Path(self.base_path) / "scaler.pkl")
         else:
             # Fallback a configuración por defecto si no hay run_id
-            return config.scaler_path
+            default_scaler_path = self.config.get('scaler_path', 'scalers/scaler.pkl')
+            return default_scaler_path
     
     def _get_price_scaler_path(self) -> str:
         """
@@ -101,8 +107,8 @@ class Normalization:
                 return str(Path(self.base_path) / "price_scaler.pkl")
         else:
             # Fallback a configuración por defecto si no hay run_id
-            scaler_path = Path(config.scaler_path)
-            price_scaler_path = scaler_path.parent / f"price_{scaler_path.name}"
+            default_scaler_path = Path(self.config.get('scaler_path', 'scalers/scaler.pkl'))
+            price_scaler_path = default_scaler_path.parent / f"price_{default_scaler_path.name}"
             return str(price_scaler_path)
     
     def main(self) -> Tuple[pd.DataFrame, MinMaxScaler]:
@@ -238,10 +244,10 @@ class Normalization:
                 if self.base_path and self.run_id:
                     # Usar nueva estructura con run_id
                     gcs_blob_name = f"{self.run_id}/scaler.pkl"
-                    success = gcs_utils.save_scaler_to_gcs(self.scaler, gcs_blob_name)
+                    success = self.gcs_utils.save_scaler_to_gcs(self.scaler, gcs_blob_name) if self.gcs_utils else False
                 else:
                     # Fallback al método original
-                    success = gcs_utils.save_scaler_to_gcs(self.scaler)
+                    success = self.gcs_utils.save_scaler_to_gcs(self.scaler) if self.gcs_utils else False
                 
                 if success:
                     self.logger.info(f"Scaler guardado exitosamente en GCS: {self.scaler_path}")
@@ -287,10 +293,10 @@ class Normalization:
                 if self.base_path and self.run_id:
                     # Usar nueva estructura con run_id
                     gcs_blob_name = f"{self.run_id}/price_scaler.pkl"
-                    success = gcs_utils.save_price_scaler_to_gcs(self.price_scaler, gcs_blob_name)
+                    success = self.gcs_utils.save_price_scaler_to_gcs(self.price_scaler, gcs_blob_name) if self.gcs_utils else False
                 else:
                     # Fallback al método original
-                    success = gcs_utils.save_price_scaler_to_gcs(self.price_scaler)
+                    success = self.gcs_utils.save_price_scaler_to_gcs(self.price_scaler) if self.gcs_utils else False
                 
                 if success:
                     self.logger.info(f"Price scaler guardado exitosamente en GCS: {self.price_scaler_path}")
@@ -432,7 +438,7 @@ class Normalization:
             bool: True si el scaler existe, False en caso contrario
         """
         if self.storage_mode == "gcp":
-            return gcs_utils.scaler_exists_in_gcs()
+            return self.gcs_utils.scaler_exists_in_gcs() if self.gcs_utils else False
         else:
             return os.path.exists(self.scaler_path)
     
@@ -444,7 +450,7 @@ class Normalization:
             bool: True si el price_scaler existe, False en caso contrario
         """
         if self.storage_mode == "gcp":
-            return gcs_utils.price_scaler_exists_in_gcs()
+            return self.gcs_utils.price_scaler_exists_in_gcs() if self.gcs_utils else False
         else:
             return os.path.exists(self.price_scaler_path)
     
@@ -462,14 +468,15 @@ class Normalization:
         }
         
         if self.storage_mode == "gcp":
-            gcs_info = gcs_utils.get_scaler_info()
-            if gcs_info:
-                info.update({'scaler_info': gcs_info})
-            
-            # Intentar obtener información del price_scaler también
-            price_scaler_info = gcs_utils.get_price_scaler_info()
-            if price_scaler_info:
-                info.update({'price_scaler_info': price_scaler_info})
+            if self.gcs_utils:
+                gcs_info = self.gcs_utils.get_scaler_info()
+                if gcs_info:
+                    info.update({'scaler_info': gcs_info})
+                
+                # Intentar obtener información del price_scaler también
+                price_scaler_info = self.gcs_utils.get_price_scaler_info()
+                if price_scaler_info:
+                    info.update({'price_scaler_info': price_scaler_info})
         else:
             if os.path.exists(self.scaler_path):
                 stat = os.stat(self.scaler_path)

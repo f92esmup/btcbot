@@ -68,12 +68,42 @@ def main():
 
         # Cargar la configuración específica del run como única fuente de verdad
         logger.info(f"Cargando configuración para el run_id: {args.run_id}...")
-        run_manager = RunManager()
-        run_config = run_manager.download_and_load_yaml_config(args.run_id)
+        
+        # Step 1: Load the run configuration using the static method
+        run_config = RunManager.load_run_config(args.run_id)
         if run_config is None:
             logger.error(f"No se pudo cargar la configuración para el run_id: {args.run_id}. Abortando.")
             sys.exit(1)
         logger.info("Configuración del run cargada exitosamente.")
+        
+        # Step 2: Extract storage configuration from the loaded config
+        main_config = run_config.get('config', {})
+        if not main_config:
+            logger.error(f"No se encontró la configuración principal en 'config' para el run_id: {args.run_id}. Abortando.")
+            sys.exit(1)
+        
+        # Extract storage mode and GCS configuration
+        storage_mode = main_config.get('normalization', {}).get('storage_mode', 'local')
+        gcs_bucket_name = None
+        gcs_utils = None
+        
+        if storage_mode == "gcp":
+            gcs_bucket_name = main_config.get('gcp', {}).get('storage', {}).get('bucket_name')
+            if not gcs_bucket_name:
+                logger.error("GCS bucket name not found in configuration but storage_mode is 'gcp'")
+                sys.exit(1)
+            
+            # Initialize GCS utils for GCP mode
+            from src.configuration.gcs_utils import gcs_utils
+            logger.info("Usando instancia global de GCSUtils para modo GCP")
+        
+        # Step 3: Create the definitive RunManager with proper configuration
+        run_manager = RunManager(
+            run_id=args.run_id,
+            storage_mode=storage_mode,
+            gcs_bucket_name=gcs_bucket_name,
+            gcs_utils=gcs_utils
+        )
 
         # Crear e iniciar el gestor de trading, inyectando la configuración
         manager = LiveTradingManager(

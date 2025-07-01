@@ -4,7 +4,6 @@ from src.training.run_manager import RunManager
 from src.data.indicadores import Indicadores
 from src.data.normalization import Normalization
 from src.entorno.environment import TipoOperacion
-from src.configuration.config import config
 
 
 class LiveObservationBuilder:
@@ -15,27 +14,29 @@ class LiveObservationBuilder:
     y los utiliza para procesar los datos de mercado en tiempo real,
     asegurando que la entrada al agente sea consistente con el entrenamiento.
     """
-    def __init__(self, run_manager: RunManager):
+    def __init__(self, run_manager: RunManager, run_config: dict):
         """
         Inicializa el constructor de observaciones.
         
         Args:
             run_manager (RunManager): El gestor del run de entrenamiento cuyos artefactos (scalers) se deben cargar.
+            run_config (dict): Configuración del run cargada previamente.
         """
         self.run_manager = run_manager
+        self.run_config = run_config
         print(f"LiveObservationBuilder: Inicializando para run_id '{self.run_manager.run_id}'...")
         
-        # Cargar configuración del run
-        self.run_config = self.run_manager.download_and_load_yaml_config(self.run_manager.run_id)
-        if self.run_config is None:
-            raise ValueError(f"No se pudo cargar la configuración para el run_id '{self.run_manager.run_id}'")
+        # Validar que la configuración sea válida
+        if not run_config or 'config' not in run_config:
+            raise ValueError(f"Configuración del run inválida para run_id '{self.run_manager.run_id}' - debe contener la clave 'config'")
         
         # Cargar scalers
         self.scaler = self.run_manager.load_scaler()
         self.price_scaler = self.run_manager.load_price_scaler()
         
-        # Acceder a la configuración del entorno
-        self.env_config = self.run_config['config_snapshot']['environment']
+        # Acceder a la configuración del entorno desde la clave 'config'
+        main_config = self.run_config.get('config', {})
+        self.env_config = main_config.get('environment', {})
         
         print("Scalers y configuración cargados exitosamente.")
     
