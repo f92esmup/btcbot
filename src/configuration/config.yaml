@@ -1,3 +1,16 @@
+# ----------------------------------------------------
+# SECCIÓN 1: DEFINICIÓN DEL EXPERIMENTO (QUÉ)
+# ----------------------------------------------------
+experiment_definition:
+  symbol: 'BTCUSDT'
+  interval: '1h'
+  training_start_date: '2022-01-01'
+  training_end_date: '2023-12-31' # Opcional
+  seed: 73
+
+# ----------------------------------------------------
+# SECCIÓN 2: CONFIGURACIÓN DEL SISTEMA
+# ----------------------------------------------------
 # Configuración para el bot de trading de Bitcoin
 # Parámetros de la API de Binance
 api:

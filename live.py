@@ -72,13 +72,15 @@ def main():
 
         # Extraer símbolo e intervalo desde la configuración del run para consistencia
         try:
-            symbol = run_config['command_line_args']['symbol']
-            interval = run_config['command_line_args']['interval']
+            # --- CAMBIO AQUÍ ---
+            exp_config = run_config['config']['experiment_definition']
+            symbol = exp_config['symbol']
+            interval = exp_config['interval']
             logger.info(f"  - Símbolo: {symbol}")
             logger.info(f"  - Intervalo: {interval}")
             logger.info(f"  - Modo de operación: {args.mode}")
         except KeyError:
-            logger.error(f"El config_run.yaml para '{args.run_id}' no contiene 'symbol' o 'interval' en 'command_line_args'.")
+            logger.error(f"El config_run.yaml para '{args.run_id}' no contiene 'experiment_definition' con 'symbol' o 'interval'.")
             sys.exit(1)
 
         # --- 2. Carga de Credenciales desde Variables de Entorno ---

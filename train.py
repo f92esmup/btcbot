@@ -173,16 +173,6 @@ def main():
     
     # Parsear argumentos
     args = parse_arguments()
-    
-    # Configurar semilla aleatoria para reproducibilidad
-    set_seed(args.seed, logger)
-    
-    # Validar fecha de inicio
-    if not validate_date_format(args.start_date):
-        logger.error(f"Formato de fecha inválido: {args.start_date}. Use YYYY-MM-DD")
-        sys.exit(1)
-    
-    logger.info(f"Parámetros: Symbol={args.symbol}, Interval={args.interval}, Start Date={args.start_date}, Seed={args.seed}")
 
     # Cargar la configuración local como la fuente de verdad para este nuevo run
     try:
@@ -193,12 +183,28 @@ def main():
         logger.error("No se encontró el archivo 'src/configuration/config.yaml'. Abortando.")
         sys.exit(1)
 
+    # --- EXTRACCIÓN DE PARÁMETROS DEL EXPERIMENTO ---
+    try:
+        exp_config = local_config_dict['experiment_definition']
+        symbol = exp_config['symbol']
+        interval = exp_config['interval']
+        start_date = exp_config['training_start_date']
+        end_date = exp_config.get('training_end_date')
+        seed = exp_config['seed']
+        logger.info(f"Configuración del experimento: {symbol}/{interval} desde {start_date}, Seed: {seed}")
+    except KeyError as e:
+        logger.error(f"Falta la clave de configuración requerida en 'experiment_definition': {e}")
+        sys.exit(1)
+
+    # Configurar semilla aleatoria para reproducibilidad
+    set_seed(seed, logger)
+
     # === GENERACIÓN Y SINCRONIZACIÓN DEL RUN_ID ===
     # Solo el proceso jefe genera el run_id, luego lo sincroniza con todos los procesos
     if is_chief:
         # Generar run_id único incluyendo la semilla
         current_time = datetime.now().strftime('%Y%m%d-%H%M%S')
-        run_id = f"{args.symbol}_{args.interval}_{args.seed}_{current_time}"
+        run_id = f"{symbol}_{interval}_{seed}_{current_time}"
         logger.info(f"[Proceso Jefe] Run ID generado: {run_id}")
     else:
         # Los procesos no-jefe inicializan run_id como None, se sincronizará después
@@ -336,10 +342,10 @@ def main():
                 gcs_utils_for_pipeline = GCSUtils(gcp_config)
             
             data_pipeline_chief = DataPipeline(
-                symbol=args.symbol,
-                interval=args.interval,
-                start_date=args.start_date,
-                end_date=args.end_date,
+                symbol=symbol,
+                interval=interval,
+                start_date=start_date,
+                end_date=end_date,
                 run_id=run_id,
                 base_path=str(base_path),
                 full_config=local_config_dict,
@@ -373,10 +379,10 @@ def main():
             gcs_utils_for_pipeline = GCSUtils(gcp_config)
         
         data_pipeline = DataPipeline(
-            symbol=args.symbol,
-            interval=args.interval,
-            start_date=args.start_date,
-            end_date=args.end_date,
+            symbol=symbol,
+            interval=interval,
+            start_date=start_date,
+            end_date=end_date,
             run_id=run_id,
             base_path=str(base_path),
             full_config=local_config_dict,
@@ -544,7 +550,7 @@ def main():
         
         # Configuración para el trainer (todos los procesos)
         trainer_config = {
-            'seed': args.seed,
+            'seed': seed,
             'batch_size': local_config_dict['agent']['batch_size'],
             'min_buffer_for_learning': local_config_dict['agent']['min_buffer_for_learning'],
             'replay_buffer_size': local_config_dict['agent']['replay_buffer_size'],

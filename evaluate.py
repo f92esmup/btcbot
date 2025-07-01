@@ -62,20 +62,6 @@ def parse_arguments() -> argparse.Namespace:
         help="Fecha de fin para la evaluación (formato: YYYY-MM-DD)"
     )
     
-    parser.add_argument(
-        "--symbol",
-        type=str,
-        required=True,
-        help="Símbolo del par de trading (ej: BTCUSDT)"
-    )
-    
-    parser.add_argument(
-        "--interval",
-        type=str,
-        required=True,
-        help="Intervalo de tiempo para las velas (ej: 1h, 4h, 1d)"
-    )
-    
     # Argumentos opcionales
     parser.add_argument(
         "--model-type",
@@ -161,13 +147,14 @@ def create_agent_from_config(
     )
 
 
-def print_evaluation_report(metrics: Dict[str, Any], args: argparse.Namespace) -> None:
+def print_evaluation_report(metrics: Dict[str, Any], args: argparse.Namespace, exp_config: Dict[str, Any]) -> None:
     """
     Imprime un informe detallado de la evaluación.
     
     Args:
         metrics: Diccionario con las métricas de evaluación
         args: Argumentos de línea de comandos
+        exp_config: Configuración del experimento extraída del run
     """
     print("\n" + "="*80)
     print("📊 INFORME DE EVALUACIÓN DEL MODELO")
@@ -177,8 +164,9 @@ def print_evaluation_report(metrics: Dict[str, Any], args: argparse.Namespace) -
     print(f"🎯 Modelo evaluado:")
     print(f"   • Run ID: {args.run_id}")
     print(f"   • Tipo de modelo: {args.model_type}")
-    print(f"   • Símbolo: {args.symbol}")
-    print(f"   • Intervalo: {args.interval}")
+    print(f"   • Símbolo: {exp_config['symbol']}")
+    print(f"   • Intervalo: {exp_config['interval']}")
+
     print(f"   • Período: {args.start_date} a {args.end_date}")
     
     print(f"\n💰 Métricas de Rendimiento:")
@@ -247,6 +235,16 @@ def main():
         gcp_config = main_config.get('gcp') if storage_mode == 'gcp' else None
         logger.info("✅ Configuración del run cargada y validada.")
 
+        # --- EXTRAER SYMBOL E INTERVALO DEL RUN CONFIG ---
+        try:
+            exp_config = main_config['experiment_definition']
+            symbol = exp_config['symbol']
+            interval = exp_config['interval']
+            logger.info(f"Símbolo ({symbol}) e Intervalo ({interval}) extraídos del run_id: {args.run_id}")
+        except KeyError:
+            logger.error(f"La configuración para '{args.run_id}' no contiene 'experiment_definition'.")
+            sys.exit(1)
+
         # --- 2. Inicialización de Componentes Esenciales ---
         device = setup_device(args.no_cuda)
         logger.info(f"Dispositivo configurado: {device}")
@@ -268,7 +266,7 @@ def main():
             gcs_utils_pipeline = GCSUtils(gcp_config)
 
         data_pipeline = DataPipeline(
-            symbol=args.symbol, interval=args.interval, start_date=args.start_date, end_date=args.end_date,
+            symbol=symbol, interval=interval, start_date=args.start_date, end_date=args.end_date,
             run_id=f"evaluation_{args.run_id}", base_path="temp_evaluation",
             full_config=main_config,  # Inyectar la configuración completa del run
             save_artifacts=False, # No guardar artefactos durante la evaluación
@@ -312,7 +310,7 @@ def main():
         logger.info("Evaluación completada.")
 
         # --- 6. Informe y Limpieza ---
-        print_evaluation_report(metrics, args)
+        print_evaluation_report(metrics, args, exp_config)
 
         try:
             import shutil
