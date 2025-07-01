@@ -705,68 +705,7 @@ class RunManager:
         
         self.logger.info(f"RunManager context updated - run_id: {self.run_id}, base_path: {self.base_path}")
 
-    def download_and_load_yaml_config(self, run_id: str) -> Optional[Dict[str, Any]]:
-        """
-        Download and load YAML configuration file for a specific run.
-        
-        This method handles both GCS and local storage modes, downloading the
-        config_run.yaml file and returning its contents as a Python dictionary.
-        
-        Args:
-            run_id: The run ID for which to load the configuration
-            
-        Returns:
-            Dict containing the configuration, or None if file doesn't exist or error occurs
-        """
-        self.logger.info(f"Loading configuration for run: {run_id}")
-        
-        try:
-            if self.storage_mode == "gcp":
-                # Construct GCS blob name
-                blob_name = f"{run_id}/config_run.yaml"
-                self.logger.info(f"Downloading config from GCS: {blob_name}")
-                
-                # Use GCS utils to download the file
-                if self.gcs_utils is None:
-                    raise ValueError("GCS utils not available but storage mode is GCP")
-                
-                # Download blob content directly to memory
-                bucket = self.gcs_utils.client.bucket(self.gcs_utils.bucket_name)
-                blob = bucket.blob(blob_name)
-                
-                if not blob.exists():
-                    self.logger.warning(f"Configuration file not found in GCS: {blob_name}")
-                    return None
-                
-                # Download as string and parse YAML
-                yaml_content = blob.download_as_string().decode('utf-8')
-                self.logger.info("Configuration downloaded successfully from GCS")
-                
-                # Load YAML content
-                config_data = yaml.safe_load(yaml_content)
-                self.logger.info("Configuration loaded successfully from GCS")
-                return config_data
-                            
-            else:
-                # Local storage mode
-                config_path = Path(f"Entrenamientos/{run_id}/config_run.yaml")
-                self.logger.info(f"Loading config from local path: {config_path}")
-                
-                if not config_path.exists():
-                    self.logger.warning(f"Configuration file not found locally: {config_path}")
-                    return None
-                
-                with open(config_path, 'r', encoding='utf-8') as f:
-                    config_data = yaml.safe_load(f)
-                
-                self.logger.info("Configuration loaded successfully from local storage")
-                return config_data
-                
-        except Exception as e:
-            self.logger.error(f"Error loading configuration for run {run_id}: {str(e)}")
-            import traceback
-            self.logger.error(f"Traceback: {traceback.format_exc()}")
-            return None
+    
     
     @staticmethod
     def load_run_config(run_id: str, storage_mode: str = None, gcp_config: Dict[str, Any] = None) -> Optional[Dict[str, Any]]:

@@ -21,3 +21,4 @@ tensorboard>=2.8.0
 fastapi>=0.100.0
 uvicorn>=0.22.0
 pydantic>=2.0.0
+setuptools>=60.0.0

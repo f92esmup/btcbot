@@ -47,10 +47,8 @@ class EquityChangeRewardStrategy(BaseRewardStrategy):
             ultimo_trade = portfolio.historial_trades[-1]
             roe_operacion = ultimo_trade['roe']
             
-            if self.config.get('usar_log1p_en_pnl', False):
-                recompensa_cierre = np.sign(roe_operacion) * np.log1p(abs(roe_operacion))
-            else:
-                recompensa_cierre = roe_operacion
+            # La lógica de log1p ha sido eliminada. La normalización de recompensas se maneja en el agente.
+            recompensa_cierre = roe_operacion
             
             recompensa_cierre *= self.config.get('peso_recompensa_cierre', 1.0)
 

@@ -16,16 +16,16 @@ import logging
 class Normalization:
     """Clase para normalizar datos de trading usando MinMaxScaler."""
     
-    def __init__(self, dataframe: pd.DataFrame, normalization_config: Dict, base_path: Optional[str] = None, 
-                 run_id: Optional[str] = None, save_artifacts: bool = True, gcs_utils=None):
+    def __init__(self, dataframe: pd.DataFrame, normalization_config: Dict, base_path: str, 
+                 run_id: str, save_artifacts: bool = True, gcs_utils=None):
         """
         Inicializa la clase de normalización.
         
         Args:
             dataframe (pd.DataFrame): DataFrame con datos OHLCV e indicadores técnicos
             normalization_config (Dict): Diccionario con la configuración de normalización
-            base_path (Optional[str]): Ruta base para guardar los artifacts del entrenamiento
-            run_id (Optional[str]): Identificador único del entrenamiento
+            base_path (str): Ruta base para guardar los artifacts del entrenamiento
+            run_id (str): Identificador único del entrenamiento
             save_artifacts (bool): Si True, guarda los scalers; si False, solo los carga
             gcs_utils: Instancia de GCSUtils para operaciones en la nube (opcional)
         """
@@ -56,8 +56,14 @@ class Normalization:
         self.scaler_type = self.config.get('scaler_type', 'MinMaxScaler')
         self.feature_range = tuple(self.config.get('feature_range', [0, 1]))
         self.storage_mode = self.config.get('storage_mode', 'local')
-        self.scaler_path = self._get_scaler_path()
-        self.price_scaler_path = self._get_price_scaler_path()
+
+        # Construir rutas dinámicamente
+        if self.storage_mode == "gcp":
+            self.scaler_path = f"{self.base_path}/scaler.pkl"
+            self.price_scaler_path = f"{self.base_path}/price_scaler.pkl"
+        else:
+            self.scaler_path = str(Path(self.base_path) / "scaler.pkl")
+            self.price_scaler_path = str(Path(self.base_path) / "price_scaler.pkl")
         
         # Crear directorio para el scaler si no existe (solo en modo local)
         if self.storage_mode == "local":
@@ -68,48 +74,12 @@ class Normalization:
         self.logger.info(f"Tipo de scaler: {self.scaler_type}")
         self.logger.info(f"Rango de características: {self.feature_range}")
         self.logger.info(f"Modo de almacenamiento: {self.storage_mode}")
-        if self.run_id:
-            self.logger.info(f"Run ID: {self.run_id}")
-            self.logger.info(f"Base path: {self.base_path}")
+        self.logger.info(f"Run ID: {self.run_id}")
+        self.logger.info(f"Base path: {self.base_path}")
+        self.logger.info(f"Ruta del scaler: {self.scaler_path}")
+        self.logger.info(f"Ruta del price_scaler: {self.price_scaler_path}")
     
-    def _get_scaler_path(self) -> str:
-        """
-        Genera la ruta para el scaler principal basada en el run_id y base_path.
-        
-        Returns:
-            str: Ruta para el scaler
-        """
-        if self.base_path and self.run_id:
-            if self.storage_mode == "gcp":
-                # Para GCS, el path ya incluye el protocolo gs://
-                return f"{self.base_path}/scaler.pkl"
-            else:
-                # Para storage local
-                return str(Path(self.base_path) / "scaler.pkl")
-        else:
-            # Fallback a configuración por defecto si no hay run_id
-            default_scaler_path = self.config.get('scaler_path', 'scalers/scaler.pkl')
-            return default_scaler_path
     
-    def _get_price_scaler_path(self) -> str:
-        """
-        Genera la ruta para el price_scaler basada en el run_id y base_path.
-        
-        Returns:
-            str: Ruta para el price_scaler
-        """
-        if self.base_path and self.run_id:
-            if self.storage_mode == "gcp":
-                # Para GCS, el path ya incluye el protocolo gs://
-                return f"{self.base_path}/price_scaler.pkl"
-            else:
-                # Para storage local
-                return str(Path(self.base_path) / "price_scaler.pkl")
-        else:
-            # Fallback a configuración por defecto si no hay run_id
-            default_scaler_path = Path(self.config.get('scaler_path', 'scalers/scaler.pkl'))
-            price_scaler_path = default_scaler_path.parent / f"price_{default_scaler_path.name}"
-            return str(price_scaler_path)
     
     def main(self) -> Tuple[pd.DataFrame, MinMaxScaler]:
         """

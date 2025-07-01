@@ -63,7 +63,6 @@ interpolation:
 normalization:
   scaler_type: "MinMaxScaler"  # Tipo de escalador a usar
   feature_range: [0, 1]        # Rango de normalización
-  scaler_path: "models/scaler.pkl"  # Ruta donde guardar el scaler (modo local)
   storage_mode: "gcp"        # Modo de almacenamiento: "local" o "gcp"
 
 # Configuración para Vertex AI TensorBoard
@@ -136,8 +135,6 @@ environment:
   peso_recompensa_paso: 1.0           # Peso para recompensa por paso
   peso_recompensa_cierre: 1.0         # Peso para recompensa al cerrar operación
   peso_recompensa_episodio: 0.0       # Peso para Sortino (0 = no se usa por ahora)
-  usar_log1p_en_pnl: false            # Si aplicar log1p al PNL para suavizar, \ 
-  # RECOMENDADO EN false, ya que se ha incorporado normalización de recompensas en el agente y puede interferir (DEPRECIATED)
 
   # Condiciones de finalización
   usar_max_pasos_episodio: false      # Si limitar pasos por episodio
