@@ -4,8 +4,8 @@
 experiment_definition:
   symbol: 'BTCUSDT'
   interval: '1h'
-  training_start_date: '2023-01-01'
-  training_end_date: '2023-01-31' # Opcional
+  training_start_date: '2025-01-01'
+  #training_end_date: '2023-01-31' # Opcional
   seed: 73
 
 # ----------------------------------------------------
@@ -71,41 +71,39 @@ tensorboard_vertex_ai:
   experiment_name: "BTCBot Trading Experiment" # Nuevo experimento creado
   location: "europe-west4" # La región de tu instancia de TensorBoard
 
-# Configuración de indicadores técnicos
-indicators:
-  # Indicadores de tendencia
-  trend:
-    ema_20:
-      period: 20
-      enabled: true
-    ema_50:
-      period: 50
-      enabled: true
-    adx:
-      period: 14
-      enabled: true
-  
-  # Indicadores de momento
-  momentum:
-    rsi:
-      period: 14
-      enabled: true
-    stoch:
-      k_period: 14
-      d_period: 3
-      smooth_k: 3
-      enabled: true
-  
-  # Indicadores de volatilidad
-  volatility:
-    atr:
-      period: 14
-      enabled: true
-  
-  # Indicadores de volumen
-  volume:
-    obv:
-      enabled: true
+# Indicadores de Tendencia
+trend_indicators:
+  ema_20:
+    period: 20
+    enabled: true
+  ema_50:
+    period: 50
+    enabled: true
+  adx:
+    period: 14
+    enabled: true
+
+# Indicadores de Momento
+momentum_indicators:
+  rsi:
+    period: 14
+    enabled: true
+  stoch:
+    k_period: 14
+    d_period: 3
+    smooth_k: 3
+    enabled: true
+
+# Indicadores de Volatilidad
+volatility_indicators:
+  atr:
+    period: 14
+    enabled: true
+
+# Indicadores de Volumen
+volume_indicators:
+  obv:
+    enabled: true
 
 # Configuración del entorno de trading (Environment)
 environment:

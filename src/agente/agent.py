@@ -14,6 +14,7 @@ import pickle
 import logging
 import tempfile
 import os
+from torch.cuda.amp import autocast, GradScaler
 
 from .networks import ActorNetwork, CriticNetwork
 
@@ -119,7 +120,7 @@ class TransformerSACAgent:
             )
         
         # Inicializar GradScaler para Automatic Mixed Precision (AMP)
-        self.scaler = torch.amp.GradScaler('cuda', enabled=(self.device.type == 'cuda'))
+        self.scaler = GradScaler(enabled=(self.device.type == 'cuda'))
         
         logger.info(f"TransformerSACAgent inicializado en {self.device}. Modo distribuido: {self.is_distributed}")
         logger.info(f"  - Observación shape: {observation_space_shape}")
@@ -358,7 +359,7 @@ class TransformerSACAgent:
             q_targets = scaled_rewards.unsqueeze(1) + self.gamma * (1 - done_mask.float().unsqueeze(1)) * target_q
         
         # Actualizar críticos
-        with torch.amp.autocast('cuda', enabled=(self.device.type == 'cuda')):
+        with autocast(enabled=(self.device.type == 'cuda')):
             # Obtener los modelos críticos subyacentes
             critic_1_model = self._get_critic_model(self.critic_1)
             critic_2_model = self._get_critic_model(self.critic_2)
@@ -380,7 +381,7 @@ class TransformerSACAgent:
         self.scaler.step(self.critic_2_optimizer)
         
         # Actualizar actor
-        with torch.amp.autocast('cuda', enabled=(self.device.type == 'cuda')):
+        with autocast(enabled=(self.device.type == 'cuda')):
             # Obtener los modelos subyacentes
             actor_model = self._get_actor_model()
             new_actions, log_probs = self.sample_action(market_data, portfolio_data)
@@ -402,7 +403,7 @@ class TransformerSACAgent:
         # Actualizar alpha si es aprendible
         alpha_loss = torch.tensor(0.0)
         if self.learn_alpha:
-            with torch.amp.autocast('cuda', enabled=(self.device.type == 'cuda')):
+            with autocast(enabled=(self.device.type == 'cuda')):
                 alpha_loss = -(self.log_alpha * (log_probs + self.target_entropy).detach()).mean()
             
             self.alpha_optimizer.zero_grad()
