@@ -71,7 +71,7 @@ class DecisionMaker:
         self.run_manager.load_agent_from_checkpoint(
             agent=self.agent,
             checkpoint_prefix=model_prefix,
-            reset_optimizers=True
+            reset_optimizers=False
         )
         
         # 6. Finalizar
@@ -100,7 +100,7 @@ class DecisionMaker:
         action = self.agent.select_action(
             market_data=market_data,
             portfolio_data=portfolio_data,
-            deterministic=False
+            deterministic=True
         )
         
         # Devolver la acción como float (select_action devuelve numpy array)
