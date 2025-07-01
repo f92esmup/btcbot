@@ -20,6 +20,19 @@ class LivePortfolio(BasePortfolio):
 
     def reset(self):
         print("Inicializando y sincronizando estado del portfolio...")
+        
+        # --- INICIO DE LA NUEVA LÓGICA ---
+        try:
+            print(f"Estableciendo apalancamiento a {self.leverage}x para el símbolo {self.symbol}...")
+            self.client.futures_change_leverage(symbol=self.symbol, leverage=self.leverage)
+            print(f"✅ Apalancamiento establecido a {self.leverage}x exitosamente.")
+        except BinanceAPIException as e:
+            print(f"❌ ERROR CRÍTICO: No se pudo establecer el apalancamiento a {self.leverage}x.")
+            print(f"   Respuesta de la API: {e}")
+            print("   El bot no puede continuar con una configuración de riesgo incorrecta. Abortando.")
+            raise RuntimeError(f"Fallo al establecer apalancamiento: {e}")
+        # --- FIN DE LA NUEVA LÓGICA ---
+
         account_balance = self.client.futures_account_balance()
         for asset in account_balance:
             if asset['asset'] == 'USDT':
