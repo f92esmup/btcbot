@@ -266,56 +266,6 @@ class ActorNetwork(nn.Module):
         log_std = torch.clamp(log_std, self.log_std_min, self.log_std_max)
         
         return mean, log_std
-    
-    def sample(self, market_data: torch.Tensor, portfolio_data: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        """
-        Muestrea una acción de la política y calcula su log_prob.
-        
-        Returns:
-            Tupla (action, log_prob)
-        """
-        mean, log_std = self.forward(market_data, portfolio_data)
-        std = torch.exp(log_std)
-        
-        # Distribución normal
-        normal = torch.distributions.Normal(mean, std)
-        
-        # Muestrear con reparametrización
-        x_t = normal.rsample()  # Para permitir backprop
-        
-        # Aplicar tanh para asegurar acción en [-1, 1]
-        action = torch.tanh(x_t)
-        
-        # Calcular log_prob con corrección de tanh
-        log_prob = normal.log_prob(x_t)
-        
-        # Corrección de Jacobiano para tanh
-        log_prob -= torch.log(1 - action.pow(2) + 1e-6)
-        log_prob = log_prob.sum(dim=1, keepdim=True)
-        
-        return action, log_prob
-    
-    def log_prob(self, market_data: torch.Tensor, portfolio_data: torch.Tensor, action: torch.Tensor) -> torch.Tensor:
-        """
-        Calcula log_prob para una acción dada.
-        """
-        mean, log_std = self.forward(market_data, portfolio_data)
-        std = torch.exp(log_std)
-        
-        # Invertir tanh para obtener x_t
-        # atanh está limitado a (-1, 1), así que clampeamos la acción
-        action_clamped = torch.clamp(action, -0.999, 0.999)
-        x_t = torch.atanh(action_clamped)
-        
-        # Distribución normal
-        normal = torch.distributions.Normal(mean, std)
-        log_prob = normal.log_prob(x_t)
-        
-        # Corrección de Jacobiano para tanh
-        log_prob -= torch.log(1 - action.pow(2) + 1e-6)
-        log_prob = log_prob.sum(dim=1, keepdim=True)
-        
-        return log_prob
 
 
 class CriticNetwork(nn.Module):

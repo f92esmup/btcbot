@@ -267,18 +267,39 @@ class TransformerSACAgent:
             Acción seleccionada
         """
         with torch.no_grad():
-            # Obtener el modelo actor subyacente
             actor_model = self._get_actor_model()
+            mean, _ = actor_model(market_data, portfolio_data)
             
             if deterministic:
-                # Para evaluación: usar la media de la distribución
-                mean, _ = actor_model(market_data, portfolio_data)
                 action = torch.tanh(mean)
             else:
-                # Para entrenamiento: muestrear de la distribución
-                action, _ = actor_model.sample(market_data, portfolio_data)
+                # Para entrenamiento, muestreamos desde la distribución que se crea aquí
+                mean, log_std = actor_model(market_data, portfolio_data)
+                std = torch.exp(log_std)
+                normal = torch.distributions.Normal(mean, std)
+                x_t = normal.rsample()  # Reparameterization trick
+                action = torch.tanh(x_t)
         
         return action.cpu().numpy().flatten()
+
+    def sample_action(self, market_data: torch.Tensor, portfolio_data: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Muestrea una acción de la política y calcula su log_prob.
+        Esto es usado durante el paso de aprendizaje.
+        """
+        actor_model = self._get_actor_model()
+        mean, log_std = actor_model(market_data, portfolio_data)
+        std = torch.exp(log_std)
+        
+        normal = torch.distributions.Normal(mean, std)
+        x_t = normal.rsample()  # Para permitir backprop
+        action = torch.tanh(x_t)
+        
+        log_prob = normal.log_prob(x_t)
+        log_prob -= torch.log(1 - action.pow(2) + 1e-6) # Corrección de Jacobiano para tanh
+        log_prob = log_prob.sum(dim=1, keepdim=True)
+        
+        return action, log_prob
     
     def learn(
         self,
@@ -324,7 +345,7 @@ class TransformerSACAgent:
             actor_model = self._get_actor_model()
             
             # Siguiente acción y log_prob usando la política actual
-            next_actions, next_log_probs = actor_model.sample(next_market_data, next_portfolio_data)
+            next_actions, next_log_probs = self.sample_action(next_market_data, next_portfolio_data)
             
             # Q-valores objetivo (las redes objetivo nunca están envueltas en DDP)
             target_q1 = self.critic_target_1(next_market_data, next_portfolio_data, next_actions)
@@ -362,7 +383,7 @@ class TransformerSACAgent:
         with torch.cuda.amp.autocast(enabled=(self.device.type == 'cuda')):
             # Obtener los modelos subyacentes
             actor_model = self._get_actor_model()
-            new_actions, log_probs = actor_model.sample(market_data, portfolio_data)
+            new_actions, log_probs = self.sample_action(market_data, portfolio_data)
             
             # Obtener los modelos críticos subyacentes
             critic_1_model = self._get_critic_model(self.critic_1)

@@ -12,6 +12,7 @@ from typing import Dict, List, Tuple
 from src.agente.agent import TransformerSACAgent
 from src.entorno.environment import FuturesTradingEnv
 from src.analysis.metrics import FinancialMetrics
+from src.utils.observation_parser import parse_observation
 
 
 class AgentEvaluator:
@@ -35,38 +36,6 @@ class AgentEvaluator:
             self.metrics_calculator = FinancialMetrics()
         else:
             self.metrics_calculator = metrics_calculator
-    
-    def _parse_observation(self, observation: np.ndarray, env: FuturesTradingEnv, device: torch.device) -> Tuple[torch.Tensor, torch.Tensor]:
-        """
-        Parse observation from environment into market and portfolio tensors.
-        
-        Args:
-            observation: Raw observation from environment
-            env: Environment instance for configuration access
-            device: Device to move tensors to (CPU or GPU)
-            
-        Returns:
-            Tuple[torch.Tensor, torch.Tensor]: (market_data, portfolio_data) tensors
-        """
-        # Environment observation is concatenated: [market_data_flat, portfolio_data]
-        ventana_size = env.config_entorno['ventana_observacion_size']
-        num_features_mercado = len(env.column_names)
-        market_features_total = ventana_size * num_features_mercado
-        
-        # Split observation
-        market_data_flat = observation[:market_features_total]
-        portfolio_data_flat = observation[market_features_total:]
-        
-        # Reshape market data to (sequence_length, num_features)
-        market_data = market_data_flat.reshape(ventana_size, num_features_mercado)
-        
-        # Convert to tensors and add batch dimension
-        # --- CAMBIO CLAVE AQUÍ ---
-        # Mover los tensores al dispositivo correcto (GPU)
-        market_tensor = torch.FloatTensor(market_data).unsqueeze(0).to(device)
-        portfolio_tensor = torch.FloatTensor(portfolio_data_flat).unsqueeze(0).to(device)
-        
-        return market_tensor, portfolio_tensor
     
     def get_trades_dataframe(self, trades_history: list) -> pd.DataFrame:
         """
@@ -137,21 +106,19 @@ class AgentEvaluator:
             obs, _ = env.reset()
             episode_return = 0
             episode_length = 0
-            initial_balance = env.balance_actual
-            initial_equity = env.equity_actual
+            initial_balance = env.portfolio.balance_actual
+            initial_equity = env.portfolio.equity_actual
             
             # Track equity durante el episodio
             episode_equity_track = [initial_equity]
             
             # Store initial trade count to calculate episode trades
-            initial_trade_count = len(env.historial_trades)
+            initial_trade_count = len(env.portfolio.historial_trades)
             
             done = False
             while not done:
                 # Parse observation and select action
-                # --- CAMBIO CLAVE AQUÍ ---
-                # Pasar el dispositivo del agente al método de parseo
-                market_data, portfolio_data = self._parse_observation(obs, env, agent.device)
+                market_data, portfolio_data = parse_observation(obs, env.config_entorno, agent.device)
                 action = agent.select_action(market_data, portfolio_data, deterministic=True)
                 obs, reward, terminated, truncated, info = env.step(action)
                 done = terminated or truncated
@@ -160,7 +127,7 @@ class AgentEvaluator:
                 episode_length += 1
                 
                 # Registrar equity en cada paso
-                episode_equity_track.append(env.equity_actual)
+                episode_equity_track.append(env.portfolio.equity_actual)
                 
                 # Contar trades
                 if 'trade_ejecutado' in info and info['trade_ejecutado']:
@@ -168,8 +135,8 @@ class AgentEvaluator:
                     if reward > 0:
                         successful_trades += 1
             
-            final_balance = env.balance_actual
-            final_equity = env.equity_actual
+            final_balance = env.portfolio.balance_actual
+            final_equity = env.portfolio.equity_actual
             profit_pct = ((final_balance - initial_balance) / initial_balance) * 100
             
             episode_returns.append(episode_return)
@@ -181,7 +148,7 @@ class AgentEvaluator:
             all_equity_values.append(final_equity)
             
             # Episode Summary Analysis - Extract trades from this episode
-            episode_trades = env.historial_trades[initial_trade_count:]
+            episode_trades = env.portfolio.historial_trades[initial_trade_count:]
             if episode_trades:
                 all_trades_data.extend(episode_trades)
         
@@ -189,7 +156,7 @@ class AgentEvaluator:
         
         # Episode Summary Analysis using environment histories
         episode_summary = self._calculate_episode_summary(
-            env.historial_trades, 
+            env.portfolio.historial_trades, 
             env.historial_equity,
             all_trades_data
         )
