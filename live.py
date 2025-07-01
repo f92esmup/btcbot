@@ -82,35 +82,62 @@ def main():
             logger.error(f"No se encontró la configuración principal en 'config' para el run_id: {args.run_id}. Abortando.")
             sys.exit(1)
         
-        # Extract storage mode and GCS configuration
+        # Extract storage mode and GCP configuration
         storage_mode = main_config.get('normalization', {}).get('storage_mode', 'local')
-        gcs_bucket_name = None
-        gcs_utils = None
+        gcp_config = None
         
         if storage_mode == "gcp":
-            gcs_bucket_name = main_config.get('gcp', {}).get('storage', {}).get('bucket_name')
-            if not gcs_bucket_name:
+            gcp_config = main_config.get('gcp', {})
+            if not gcp_config.get('storage', {}).get('bucket_name'):
                 logger.error("GCS bucket name not found in configuration but storage_mode is 'gcp'")
                 sys.exit(1)
-            
-            # Initialize GCS utils for GCP mode
-            from src.configuration.gcs_utils import gcs_utils
-            logger.info("Usando instancia global de GCSUtils para modo GCP")
+            logger.info("Configuración GCP cargada para RunManager")
         
         # Step 3: Create the definitive RunManager with proper configuration
         run_manager = RunManager(
             run_id=args.run_id,
             storage_mode=storage_mode,
-            gcs_bucket_name=gcs_bucket_name,
-            gcs_utils=gcs_utils
+            gcp_config=gcp_config
         )
 
-        # Crear e iniciar el gestor de trading, inyectando la configuración
+        # Step 4: Load secrets and credentials for trading
+        logger.info("🔐 Cargando credenciales y secretos...")
+        from src.configuration.config import Config
+        config = Config()
+        
+        # Determine if testnet mode based on command line argument
+        is_testnet = (args.mode == 'testnet')
+        
+        try:
+            # Load Binance API credentials
+            api_key = config.get_binance_api_key(is_testnet=is_testnet)
+            api_secret = config.get_binance_api_secret(is_testnet=is_testnet)
+            logger.info(f"✅ Credenciales de Binance {'testnet' if is_testnet else 'producción'} cargadas")
+            
+            # Load Telegram credentials (optional)
+            telegram_bot_token = None
+            telegram_chat_id = None
+            try:
+                telegram_bot_token = config.telegram_bot_token
+                telegram_chat_id = config.telegram_chat_id
+                logger.info("✅ Credenciales de Telegram cargadas")
+            except Exception as e:
+                logger.warning(f"⚠️ No se pudieron cargar las credenciales de Telegram: {e}")
+            
+        except Exception as e:
+            logger.error(f"❌ Error al cargar credenciales: {e}")
+            sys.exit(1)
+
+        # Step 5: Create and start the trading manager with injected credentials
         manager = LiveTradingManager(
             run_id=args.run_id,
             symbol=symbol,
             mode=args.mode,
-            run_config=run_config # Inyección de la configuración
+            run_config=run_config,
+            api_key=api_key,
+            api_secret=api_secret,
+            telegram_bot_token=telegram_bot_token,
+            telegram_chat_id=telegram_chat_id
         )
         manager.run()
 

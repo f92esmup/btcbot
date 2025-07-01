@@ -251,24 +251,20 @@ def main():
 
         # Extraer configuraciones de almacenamiento
         storage_mode = main_config.get('normalization', {}).get('storage_mode', 'local')
-        gcs_bucket_name = None
-        gcs_utils = None
+        gcp_config = None
         
         if storage_mode == "gcp":
-            gcs_bucket_name = main_config.get('gcp', {}).get('storage', {}).get('bucket_name')
-            if not gcs_bucket_name:
-                logger.error("storage_mode es 'gcp' pero no se encontró gcs_bucket_name en la configuración")
+            gcp_config = main_config.get('gcp', {})
+            if not gcp_config.get('storage', {}).get('bucket_name'):
+                logger.error("storage_mode es 'gcp' pero no se encontró bucket_name en la configuración GCP")
                 sys.exit(1)
-            
-            from src.configuration.gcs_utils import gcs_utils
-            logger.info("Usando instancia global de GCSUtils para modo GCP")
+            logger.info("Configuración GCP cargada para RunManager")
 
         # Crear instancia definitiva de RunManager con la configuración cargada
         run_manager = RunManager(
             run_id=args.run_id,
             storage_mode=storage_mode,
-            gcs_bucket_name=gcs_bucket_name,
-            gcs_utils=gcs_utils
+            gcp_config=gcp_config
         )
         run_manager.set_run_context(args.run_id)
         logger.info(f"RunManager creado con storage_mode: {storage_mode}")
@@ -288,6 +284,12 @@ def main():
             logger.warning("Credenciales de Binance no encontradas en variables de entorno.")
             logger.warning("Para usar la API de Binance, define BINANCE_API_KEY y BINANCE_API_SECRET")
         
+        # Crear instancia local de GCSUtils si es necesario para compatibilidad
+        gcs_utils_for_pipeline = None
+        if storage_mode == "gcp":
+            from src.configuration.gcs_utils import GCSUtils
+            gcs_utils_for_pipeline = GCSUtils(gcp_config)
+        
         data_pipeline = DataPipeline(
             symbol=args.symbol,
             interval=args.interval,
@@ -299,7 +301,7 @@ def main():
             save_artifacts=False, # No guardar artefactos durante la evaluación
             api_key=api_key,
             api_secret=api_secret,
-            gcs_utils=gcs_utils
+            gcs_utils=gcs_utils_for_pipeline
         )
         
         normalized_dataframe, _ = data_pipeline.run()

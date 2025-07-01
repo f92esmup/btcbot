@@ -23,8 +23,6 @@ class Config:
         self.config_path = Path(__file__).parent / "config.yaml"
         self._config = self._load_config()
         self._secret_client = None
-        self._api_keys = {}
-        self._load_api_keys()
     
     def _load_config(self) -> Dict[str, Any]:
         """Carga la configuración desde el archivo YAML."""
@@ -73,27 +71,6 @@ class Config:
             logger.error(f"Error al cargar el secreto '{secret_name}': {e}")
             raise RuntimeError(f"No se pudo cargar el secreto '{secret_name}': {e}")
     
-    def _load_api_keys(self):
-        """Carga las API keys desde Google Cloud Secret Manager según el modo testnet."""
-        try:
-            is_testnet = self.is_testnet
-            
-            if is_testnet:
-                # Cargar claves de testnet
-                self._api_keys['api_key'] = self._get_secret('TESTNET_BINANCE_API_KEY_FUTURES')
-                self._api_keys['api_secret'] = self._get_secret('TESTNET_BINANCE_API_SECRET_FUTURES')
-                logger.info("API keys de testnet cargadas exitosamente")
-            else:
-                # Cargar claves de producción
-                self._api_keys['api_key'] = self._get_secret('BINANCE_API_KEY_FUTURES')
-                self._api_keys['api_secret'] = self._get_secret('BINANCE_API_SECRET_FUTURES')
-                logger.info("API keys de producción cargadas exitosamente")
-                
-        except Exception as e:
-            logger.error(f"Error al cargar las API keys: {e}")
-            # No lanzar excepción aquí para permitir que la aplicación continue
-            # Las propiedades de API keys manejarán el error cuando se acceda a ellas
-    
     # Propiedades para API de Binance
     @property
     def api_call_limit(self) -> int:
@@ -116,25 +93,58 @@ class Config:
         return self._config['api']['timeout']
     
     # Propiedades para configuración de trading
-    @property
-    def is_testnet(self) -> bool:
-        """Indica si está en modo testnet."""
-        return self._config.get('trading', {}).get('testnet', False)
+    # (is_testnet property removed - testnet mode should be determined explicitly by callers)
     
-    # Propiedades para API keys de Binance
-    @property
-    def binance_api_key(self) -> str:
-        """API Key de Binance (producción o testnet según configuración)."""
-        if 'api_key' not in self._api_keys:
-            raise RuntimeError("API key no disponible. Verifica la configuración de Google Cloud Secret Manager.")
-        return self._api_keys['api_key']
+    # Métodos para API keys de Binance
+    def get_binance_api_key(self, is_testnet: bool = False) -> str:
+        """
+        Obtiene la API Key de Binance desde Google Cloud Secret Manager.
+        
+        Args:
+            is_testnet (bool): Si True, carga la clave de testnet. Si False, carga la de producción.
+            
+        Returns:
+            str: La API key correspondiente
+        """
+        try:
+            if is_testnet:
+                secret_name = 'TESTNET_BINANCE_API_KEY_FUTURES'
+                logger.info("Cargando API key de testnet")
+            else:
+                secret_name = 'BINANCE_API_KEY_FUTURES'
+                logger.info("Cargando API key de producción")
+            
+            api_key = self._get_secret(secret_name)
+            logger.info(f"API key {'de testnet' if is_testnet else 'de producción'} cargada exitosamente")
+            return api_key
+        except Exception as e:
+            logger.error(f"Error al cargar la API key: {e}")
+            raise RuntimeError(f"API key no disponible. Verifica la configuración de Google Cloud Secret Manager: {e}")
     
-    @property
-    def binance_api_secret(self) -> str:
-        """API Secret de Binance (producción o testnet según configuración)."""
-        if 'api_secret' not in self._api_keys:
-            raise RuntimeError("API secret no disponible. Verifica la configuración de Google Cloud Secret Manager.")
-        return self._api_keys['api_secret']
+    def get_binance_api_secret(self, is_testnet: bool = False) -> str:
+        """
+        Obtiene el API Secret de Binance desde Google Cloud Secret Manager.
+        
+        Args:
+            is_testnet (bool): Si True, carga el secreto de testnet. Si False, carga el de producción.
+            
+        Returns:
+            str: El API secret correspondiente
+        """
+        try:
+            if is_testnet:
+                secret_name = 'TESTNET_BINANCE_API_SECRET_FUTURES'
+                logger.info("Cargando API secret de testnet")
+            else:
+                secret_name = 'BINANCE_API_SECRET_FUTURES'
+                logger.info("Cargando API secret de producción")
+            
+            api_secret = self._get_secret(secret_name)
+            logger.info(f"API secret {'de testnet' if is_testnet else 'de producción'} cargado exitosamente")
+            return api_secret
+        except Exception as e:
+            logger.error(f"Error al cargar el API secret: {e}")
+            raise RuntimeError(f"API secret no disponible. Verifica la configuración de Google Cloud Secret Manager: {e}")
     
     # Propiedades para Telegram
     @property
@@ -515,21 +525,9 @@ class Config:
         return self.agent_config.get('models_directory', 'models/agent')
 
     # Métodos adicionales
-    def refresh_api_keys(self):
-        """Recarga las API keys desde Google Cloud Secret Manager."""
-        self._api_keys.clear()
-        self._load_api_keys()
-        logger.info("API keys recargadas exitosamente")
-    
     def get_environment_info(self) -> Dict[str, str]:
         """Retorna información sobre el entorno actual."""
+        # Note: testnet mode is now determined explicitly by callers
         return {
-            'mode': 'testnet' if self.is_testnet else 'production',
-            'has_api_key': 'api_key' in self._api_keys,
-            'has_api_secret': 'api_secret' in self._api_keys,
             'project_id': self._config.get('gcp', {}).get('project_id', 'default')
         }
-
-
-# Instancia global de configuración
-config = Config()

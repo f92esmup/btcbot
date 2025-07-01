@@ -512,27 +512,4 @@ class GCSUtils:
     
 
 
-def create_gcs_utils_from_global_config() -> GCSUtils:
-    """
-    Crea una instancia de GCSUtils usando la configuración global.
-    Esta función mantiene compatibilidad con el código existente.
-    
-    Returns:
-        GCSUtils: Instancia configurada con la configuración global
-    """
-    from .config import config
-    
-    gcp_config = {
-        'project_id': config.project_id,
-        'storage': {
-            'bucket_name': config.gcs_bucket_name,
-            'scaler_blob_name': config.gcs_scaler_blob_name,
-            'price_scaler_blob_name': config.gcs_price_scaler_blob_name
-        }
-    }
-    
-    return GCSUtils(gcp_config)
 
-
-# Instancia global para facilitar el uso (para compatibilidad con código existente)
-gcs_utils = create_gcs_utils_from_global_config()

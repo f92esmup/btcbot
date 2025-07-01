@@ -60,20 +60,21 @@ def _save_worker_local(agent_state_dicts: Dict[str, Any], path_prefix: str) -> N
         print(f"❌ Error en guardado local: {str(e)}")
 
 
-def _save_worker_gcs(agent_state_dicts: Dict[str, Any], gcs_prefix: str) -> None:
+def _save_worker_gcs(agent_state_dicts: Dict[str, Any], gcs_prefix: str, gcp_config: Dict[str, Any]) -> None:
     """
     Worker function for saving agent state dictionaries to GCS.
     
     Args:
         agent_state_dicts: Dictionary containing all agent state dictionaries
         gcs_prefix: GCS prefix for saving files
+        gcp_config: GCP configuration dictionary for creating GCSUtils instance
     """
     try:
-        # Import GCS utils in the worker process
-        from src.configuration.gcs_utils import create_gcs_utils_from_global_config
+        # Import and create GCS utils in the worker process
+        from src.configuration.gcs_utils import GCSUtils
         
         # Create GCS client in this process
-        gcs_utils = create_gcs_utils_from_global_config()
+        gcs_utils = GCSUtils(gcp_config)
         
         with tempfile.TemporaryDirectory() as temp_dir:
             # Save all state dictionaries to temporary directory
@@ -144,7 +145,7 @@ class RunManager:
         return {k: v.cpu() if hasattr(v, 'cpu') else v for k, v in state_dict.items()}
     
     def __init__(self, base_path: str = None, run_id: str = None, gcs_utils=None, 
-                 storage_mode: str = "local", gcs_bucket_name: str = None):
+                 storage_mode: str = "local", gcp_config: Dict[str, Any] = None):
         """
         Initialize the RunManager.
         
@@ -153,15 +154,19 @@ class RunManager:
             run_id: Unique identifier for this training run (optional, will generate if not provided)
             gcs_utils: GCS utilities instance (optional, will create if needed for GCP mode)
             storage_mode: Storage mode ('local' or 'gcp', defaults to 'local')
-            gcs_bucket_name: GCS bucket name (required when storage_mode is 'gcp')
+            gcp_config: GCP configuration dictionary (required when storage_mode is 'gcp' and gcs_utils is None)
         """
         self.storage_mode = storage_mode
         
-        # Validate GCS configuration
-        if self.storage_mode == "gcp" and not gcs_bucket_name:
-            raise ValueError("gcs_bucket_name is required when storage_mode is 'gcp'")
+        # Extract GCS bucket name from gcp_config if provided
+        if gcp_config:
+            self.gcs_bucket_name = gcp_config.get('storage', {}).get('bucket_name')
+        else:
+            self.gcs_bucket_name = None
         
-        self.gcs_bucket_name = gcs_bucket_name
+        # Validate GCS configuration
+        if self.storage_mode == "gcp" and not self.gcs_bucket_name:
+            raise ValueError("gcs_bucket_name is required when storage_mode is 'gcp'. Provide it via gcp_config parameter.")
         
         # Handle base_path
         if base_path is None:
@@ -188,14 +193,18 @@ class RunManager:
         if self.base_path is None and self.storage_mode == "gcp":
             self.base_path = f"gs://{self.gcs_bucket_name}/{self.run_id}"
         
+        # Store gcp_config for worker processes
+        self.gcp_config = gcp_config
+        
         # Handle GCS utils
         if self.storage_mode == "gcp":
             if gcs_utils is None:
-                try:
-                    from src.configuration.gcs_utils import gcs_utils as global_gcs_utils
-                    self.gcs_utils = global_gcs_utils
-                except ImportError:
-                    raise ValueError("gcs_utils is required for GCP storage mode, but could not import global instance")
+                if gcp_config is None:
+                    raise ValueError("gcp_config is required when storage_mode is 'gcp' and gcs_utils is not provided")
+                
+                # Create new GCSUtils instance with the provided configuration
+                from src.configuration.gcs_utils import GCSUtils
+                self.gcs_utils = GCSUtils(gcp_config)
             else:
                 self.gcs_utils = gcs_utils
         else:
@@ -452,7 +461,7 @@ class RunManager:
         # Determine path and worker function based on storage mode
         if self.storage_mode == "gcp":
             path_prefix = f"{self.run_id}/checkpoints/checkpoint_episode_{episode + 1}"
-            args = (agent_state, path_prefix)
+            args = (agent_state, path_prefix, self.gcp_config)
             target_worker = _save_worker_gcs
             checkpoint_path = f"gs://{self.gcs_utils.bucket_name}/{path_prefix}"
         else:
@@ -614,7 +623,7 @@ class RunManager:
         # Determine path and worker function based on storage mode
         if self.storage_mode == "gcp":
             path_prefix = f"{self.run_id}/best_model"
-            args = (agent_state, path_prefix)
+            args = (agent_state, path_prefix, self.gcp_config)
             target_worker = _save_worker_gcs
             best_model_path = f"gs://{self.gcs_utils.bucket_name}/{self.run_id}/best_model"
         else:
@@ -672,7 +681,7 @@ class RunManager:
         # Determine path and worker function based on storage mode
         if self.storage_mode == "gcp":
             path_prefix = f"{self.run_id}/final_model"
-            args = (agent_state, path_prefix)
+            args = (agent_state, path_prefix, self.gcp_config)
             target_worker = _save_worker_gcs
             final_model_path = f"gs://{self.gcs_utils.bucket_name}/{self.run_id}/final_model"
         else:
@@ -779,7 +788,7 @@ class RunManager:
             return None
     
     @staticmethod
-    def load_run_config(run_id: str, storage_mode: str = None, gcs_bucket_name: str = None, gcs_utils=None) -> Optional[Dict[str, Any]]:
+    def load_run_config(run_id: str, storage_mode: str = None, gcp_config: Dict[str, Any] = None) -> Optional[Dict[str, Any]]:
         """
         Load run configuration without requiring a full RunManager instance.
         This method is useful when you need to load configuration to determine how to create a RunManager.
@@ -787,8 +796,7 @@ class RunManager:
         Args:
             run_id: The run ID for which to load the configuration
             storage_mode: Storage mode ('local' or 'gcp'). If None, tries to determine automatically
-            gcs_bucket_name: GCS bucket name (required if storage_mode is 'gcp')
-            gcs_utils: GCS utilities instance (required if storage_mode is 'gcp')
+            gcp_config: GCP configuration dictionary (required if storage_mode is 'gcp')
             
         Returns:
             Dict containing the configuration, or None if file doesn't exist or error occurs
@@ -804,21 +812,34 @@ class RunManager:
                 storage_mode = "local"
             else:
                 # Fallback to global config to determine storage mode
-                from src.configuration.config import config
-                storage_mode = config.storage_mode
-                if storage_mode == "gcp":
-                    gcs_bucket_name = gcs_bucket_name or config.gcs_bucket_name
-                    if gcs_utils is None:
-                        from src.configuration.gcs_utils import gcs_utils as global_gcs_utils
-                        gcs_utils = global_gcs_utils
+                from src.configuration.config import Config
+                config = Config()
+                storage_mode = config.normalization_config.get('storage_mode', 'local')
+                if storage_mode == "gcp" and gcp_config is None:
+                    # Create gcp_config from global config for backward compatibility
+                    gcp_config = {
+                        'project_id': config.project_id,
+                        'storage': {
+                            'bucket_name': config.gcs_bucket_name,
+                            'scaler_blob_name': config.gcs_scaler_blob_name,
+                            'price_scaler_blob_name': config.gcs_price_scaler_blob_name
+                        }
+                    }
         
         try:
             if storage_mode == "gcp":
                 # Validate GCP requirements
+                if gcp_config is None:
+                    raise ValueError("gcp_config is required for GCP storage mode")
+                
+                # Create GCSUtils instance
+                from src.configuration.gcs_utils import GCSUtils
+                gcs_utils = GCSUtils(gcp_config)
+                
+                # Extract bucket name from config
+                gcs_bucket_name = gcp_config.get('storage', {}).get('bucket_name')
                 if not gcs_bucket_name:
-                    raise ValueError("gcs_bucket_name is required for GCP storage mode")
-                if gcs_utils is None:
-                    raise ValueError("gcs_utils is required for GCP storage mode")
+                    raise ValueError("bucket_name is required in gcp_config")
                 
                 # Construct GCS blob name
                 blob_name = f"{run_id}/config_run.yaml"

@@ -234,15 +234,15 @@ def main():
     # === INICIALIZACIÓN DE COMPONENTES DE GESTIÓN ===
     # Crear instancia única de RunManager para TODOS los procesos (lectura)
     # pero solo el jefe realizará operaciones de escritura
-    gcs_utils = None
     storage_mode = local_config_dict.get('normalization', {}).get('storage_mode', 'local')
+    gcp_config = None
     if storage_mode == "gcp":
-        from src.configuration.gcs_utils import gcs_utils
-        logger.info(f"[Proceso {rank}] Usando instancia global de GCSUtils para modo GCP")
+        gcp_config = local_config_dict.get('gcp', {})
+        logger.info(f"[Proceso {rank}] Configuración GCP cargada para RunManager")
 
     # Determinar base_path según storage_mode (todos los procesos)
     if storage_mode == "gcp":
-        gcs_bucket_name = local_config_dict.get('gcp', {}).get('storage', {}).get('bucket_name')
+        gcs_bucket_name = gcp_config.get('storage', {}).get('bucket_name')
         base_path = f"gs://{gcs_bucket_name}/{run_id}"
         logger.info(f"[Proceso {rank}] Modo GCP: Los artefactos se accederán desde {base_path}")
     else:
@@ -255,9 +255,8 @@ def main():
     run_manager = RunManager(
         base_path=str(base_path), 
         run_id=run_id, 
-        gcs_utils=gcs_utils,
         storage_mode=storage_mode,
-        gcs_bucket_name=gcs_bucket_name if storage_mode == "gcp" else None
+        gcp_config=gcp_config
     )
     logger.info(f"[Proceso {rank}] RunManager creado - Base path: {base_path}")
     
@@ -348,6 +347,12 @@ def main():
             else:
                 logger.info("Credenciales de Binance cargadas desde variables de entorno")
             
+            # Crear instancia local de GCSUtils si es necesario para compatibilidad
+            gcs_utils_for_pipeline = None
+            if storage_mode == "gcp":
+                from src.configuration.gcs_utils import GCSUtils
+                gcs_utils_for_pipeline = GCSUtils(gcp_config)
+            
             data_pipeline_chief = DataPipeline(
                 symbol=args.symbol,
                 interval=args.interval,
@@ -359,7 +364,7 @@ def main():
                 save_artifacts=True,
                 api_key=api_key,
                 api_secret=api_secret,
-                gcs_utils=gcs_utils
+                gcs_utils=gcs_utils_for_pipeline
             )
             # El jefe ejecuta con save_artifacts=True para guardar scalers y metadatos
             _, _ = data_pipeline_chief.run()
@@ -379,6 +384,12 @@ def main():
         api_key = os.getenv('BINANCE_API_KEY')
         api_secret = os.getenv('BINANCE_API_SECRET')
         
+        # Crear instancia local de GCSUtils si es necesario para compatibilidad
+        gcs_utils_for_pipeline = None
+        if storage_mode == "gcp":
+            from src.configuration.gcs_utils import GCSUtils
+            gcs_utils_for_pipeline = GCSUtils(gcp_config)
+        
         data_pipeline = DataPipeline(
             symbol=args.symbol,
             interval=args.interval,
@@ -390,7 +401,7 @@ def main():
             save_artifacts=False,
             api_key=api_key,
             api_secret=api_secret,
-            gcs_utils=gcs_utils
+            gcs_utils=gcs_utils_for_pipeline
         )
         # Todos los procesos (incluido el jefe) ejecutan con save_artifacts=False
         # Esto carga los datos y los procesa en memoria, usando los scalers ya guardados
@@ -561,8 +572,7 @@ def main():
             'storage_mode': storage_mode,
             'run_id': run_id,
             'tensorboard_dir': tensorboard_dir if is_chief else None,
-            'gcs_bucket_name': gcs_bucket_name if storage_mode == 'gcp' else None,
-            'gcs_utils': gcs_utils if is_chief else None
+            'gcs_bucket_name': gcp_config.get('storage', {}).get('bucket_name') if storage_mode == 'gcp' else None
         }
         
         # Crear trainer (todos los procesos) con instanciación condicional

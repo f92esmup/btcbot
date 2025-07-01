@@ -1,7 +1,6 @@
 from binance.client import Client
 from binance.exceptions import BinanceAPIException
 from enum import Enum
-from src.configuration.config import config
 import math
 
 
