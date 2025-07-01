@@ -179,17 +179,46 @@ def main():
     # Parsear argumentos
     args = parse_arguments()
 
-    # Cargar la configuración local como la fuente de verdad para este nuevo run
+    # --- LÓGICA DE CARGA DE CONFIGURACIÓN ---
+    # Determinar qué configuración usar: la del checkpoint (continuación) o la local (nuevo/fine-tune)
+    gcp_config_for_load = None
     try:
         with open('src/configuration/config.yaml', 'r') as f:
-            local_config_dict = yaml.safe_load(f)
-        logger.info("Configuración local 'config.yaml' cargada exitosamente.")
+            # Cargar gcp_config de la configuración local para poder usar RunManager
+            temp_config = yaml.safe_load(f)
+            if temp_config.get('normalization', {}).get('storage_mode') == 'gcp':
+                gcp_config_for_load = temp_config.get('gcp', {})
     except FileNotFoundError:
-        logger.error("No se encontró el archivo 'src/configuration/config.yaml'. Abortando.")
-        sys.exit(1)
+        logger.warning("No se encontró config.yaml local. Se asumirá que no se necesita gcp_config para cargar.")
+
+    if args.checkpoint and not args.fine_tune_mode:
+        logger.info(f"Modo 'Continuación Pura' detectado. Cargando configuración desde el run_id: {args.checkpoint}")
+        # Cargar la configuración del run anterior para una continuación exacta
+        config_dict = RunManager.load_run_config(args.checkpoint, gcp_config=gcp_config_for_load)
+        if not config_dict:
+            logger.error(f"No se pudo cargar la configuración para el run_id: {args.checkpoint}. Abortando.")
+            sys.exit(1)
+        # La configuración cargada del checkpoint ya contiene la sección 'config'
+        local_config_dict = config_dict.get('config', {})
+        logger.info(f"Configuración del run '{args.checkpoint}' cargada exitosamente como fuente de verdad.")
+    else:
+        # Modo 'Nuevo Entrenamiento' o 'Fine-Tuning': usar la configuración local
+        if args.checkpoint and args.fine_tune_mode:
+            logger.info(f"Modo 'Fine-Tuning' detectado. Usando configuración local 'config.yaml' para el nuevo run.")
+        else:
+            logger.info("Modo 'Nuevo Entrenamiento' detectado. Usando 'config.yaml' local.")
+        
+        try:
+            with open('src/configuration/config.yaml', 'r') as f:
+                local_config_dict = yaml.safe_load(f)
+            logger.info("Configuración local 'config.yaml' cargada exitosamente.")
+        except FileNotFoundError:
+            logger.error("No se encontró el archivo 'src/configuration/config.yaml'. Abortando.")
+            sys.exit(1)
 
     # --- EXTRACCIÓN DE PARÁMETROS DEL EXPERIMENTO ---
     try:
+        # Ahora extraemos la configuración de 'local_config_dict', que es la fuente de verdad correcta
         exp_config = local_config_dict['experiment_definition']
         symbol = exp_config['symbol']
         interval = exp_config['interval']
