@@ -31,7 +31,7 @@ workerPoolSpecs:
       imageUri: 'europe-southwest1-docker.pkg.dev/btcbot-2762/btcbotrepo/btcbot-train-gpu:latest'
 
       # Forma CORRECTA para multi-GPU en un nodo
-    command: ["torchrun", "--nproc_per_node=4", "train.py"]
+      command: ["torchrun", "--nproc_per_node=4", "train.py"]
 
 
       # args: Arguments to pass to the ENTRYPOINT of your Docker container (train.py).
