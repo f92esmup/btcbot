@@ -1,4 +1,3 @@
-import collections
 import pandas as pd
 import threading
 import time
@@ -13,7 +12,7 @@ class BinanceLiveDataReader:
         self.interval = interval
         self.subscriber = subscriber
         self.warm_up_candles = warm_up_candles
-        self.historical_window = collections.deque(maxlen=warm_up_candles)
+        self.historical_df = pd.DataFrame()
         self.api_client = Client()
     
     def start(self):
@@ -46,9 +45,9 @@ class BinanceLiveDataReader:
         # Convertir timestamp a datetime
         df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
         
-        # Convertir a lista de diccionarios (manteniendo timestamp como columna)
-        records = df.to_dict('records')
-        self.historical_window.extend(records)
+        # Establecer timestamp como índice y asignar al DataFrame histórico
+        df.set_index('timestamp', inplace=True)
+        self.historical_df = df
     
     def _start_websocket_listener(self):
         print("Iniciando conexión WebSocket...")
@@ -80,7 +79,7 @@ class BinanceLiveDataReader:
             kline_data = msg['k']
             
             # Formatear los datos de la vela
-            candle = {
+            candle_data = {
                 'timestamp': pd.to_datetime(kline_data['t'], unit='ms'),
                 'Open': float(kline_data['o']),
                 'High': float(kline_data['h']),
@@ -89,15 +88,20 @@ class BinanceLiveDataReader:
                 'Volume': float(kline_data['v'])
             }
             
-            # Añadir la nueva vela a la ventana histórica
-            self.historical_window.append(candle)
+            # Convertir la nueva vela en un DataFrame de una sola fila con timestamp como índice
+            new_candle_df = pd.DataFrame([candle_data])
+            new_candle_df.set_index('timestamp', inplace=True)
             
-            # Crear DataFrame a partir de la ventana histórica
-            df = pd.DataFrame(list(self.historical_window))
+            # Concatenar la nueva vela al DataFrame histórico
+            self.historical_df = pd.concat([self.historical_df, new_candle_df])
             
-            # Establecer timestamp como índice
-            df.set_index('timestamp', inplace=True)
+            # Implementar lógica de de-duplicación: eliminar filas con índices duplicados,
+            # conservando la última aparición (el dato del WebSocket prevalece)
+            self.historical_df = self.historical_df[~self.historical_df.index.duplicated(keep='last')]
             
-            # Notificar al suscriptor si existe
+            # Recortar el DataFrame para mantener solo las últimas warm_up_candles filas
+            self.historical_df = self.historical_df.tail(self.warm_up_candles)
+            
+            # Notificar al suscriptor si existe, pasando una copia del DataFrame
             if self.subscriber is not None:
-                self.subscriber.on_new_candle(df)
+                self.subscriber.on_new_candle(self.historical_df.copy())

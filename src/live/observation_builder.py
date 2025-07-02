@@ -1,7 +1,6 @@
 import pandas as pd
 import numpy as np
 from src.training.run_manager import RunManager
-from src.data.indicadores import Indicadores
 from src.data.normalization import Normalization
 from src.entorno.environment import TipoOperacion
 
@@ -66,33 +65,37 @@ class LiveObservationBuilder:
         """
         Construye el vector de observación del mercado a partir de un DataFrame de datos de mercado en vivo.
         
+        Los datos de entrada ya vienen procesados con indicadores técnicos desde el LiveDataProcessor.
+        Esta función se encarga únicamente de la normalización de la ventana de observación relevante.
+        
         Args:
-            live_market_dataframe (pd.DataFrame): DataFrame con datos de mercado en vivo
+            live_market_dataframe (pd.DataFrame): DataFrame con datos de mercado en vivo ya procesados
             
         Returns:
             np.ndarray: Vector de características de mercado normalizado
         """
-        # 1. Calcular los indicadores técnicos sobre los datos en vivo, usando la configuración del run.
-        main_config = self.run_config.get('config', {})
-        indicadores = Indicadores(live_market_dataframe, config_dict=main_config)
-        df_with_indicators = indicadores.main()
+        # 1. Extraer el tamaño de la ventana de observación desde la configuración del entorno
+        ventana_size = self.env_config['ventana_observacion_size']
         
-        # 2. Asegurar que las columnas estén en el mismo orden que en el entrenamiento.
+        # 2. Seleccionar únicamente las últimas ventana_size filas del DataFrame
+        observation_window = live_market_dataframe.tail(ventana_size)
+        
+        # 3. Asegurar que las columnas estén en el mismo orden que en el entrenamiento.
         # El objeto scaler de scikit-learn guarda esta información.
         if hasattr(self.scaler, 'feature_names_in_'):
             feature_columns_in_order = self.scaler.feature_names_in_
-            data_to_transform = df_with_indicators[feature_columns_in_order]
+            data_to_transform = observation_window[feature_columns_in_order]
         else:
             # Fallback por si el scaler no tiene los nombres (versiones antiguas)
-            data_to_transform = df_with_indicators
+            data_to_transform = observation_window
         
-        # 3. Usar el scaler (cargado en __init__) para transformar los datos directamente.
+        # 4. Usar el scaler (cargado en __init__) para transformar los datos directamente.
         transformed_data = self.scaler.transform(data_to_transform)
         
-        # 4. Aplanar el array para crear el vector de estado final.
+        # 5. Aplanar el array para crear el vector de estado final.
         state_vector = transformed_data.ravel()
         
-        # 5. Devolver el vector de estado.
+        # 6. Devolver el vector de estado.
         return state_vector
 
     def _build_portfolio_observation(self, portfolio_state: dict) -> np.ndarray:
@@ -106,12 +109,12 @@ class LiveObservationBuilder:
             np.ndarray: Vector de características del portafolio normalizado
         """
         # 1. Tipo de posición normalizado
-        tipo_posicion = portfolio_state['tipo_posicion']
-        if tipo_posicion == 'BUY':
+        tipo_posicion_enum = portfolio_state['tipo']
+        if tipo_posicion_enum.name == 'LARGO':
             tipo_posicion_norm = 1.0
-        elif tipo_posicion == 'NEUTRAL':
+        elif tipo_posicion_enum.name == 'NEUTRAL':
             tipo_posicion_norm = 0.5
-        else:  # 'SELL'
+        else:  # 'CORTO'
             tipo_posicion_norm = 0.0
         
         # 2. PNL ROE normalizado y clipeado
@@ -134,7 +137,7 @@ class LiveObservationBuilder:
         pasos_norm = min(1.0, portfolio_state['pasos_en_posicion'] / self.env_config['max_pasos_en_posicion'])
         
         # 4. Precio de entrada normalizado
-        if portfolio_state['tipo_posicion'] != 'NEUTRAL' and portfolio_state['precio_entrada'] > 0:
+        if tipo_posicion_enum.name != 'NEUTRAL' and portfolio_state['precio_entrada'] > 0:
             # Usar el price_scaler para normalizar el precio de entrada
             precio_entrada_scaled = self.price_scaler.transform([[portfolio_state['precio_entrada']]])[0][0]
             precio_entrada_norm = np.clip(precio_entrada_scaled, 0.0, 1.0)
