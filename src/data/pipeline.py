@@ -4,7 +4,7 @@ Unifica todo el preprocesamiento de datos incluyendo adquisición, indicadores y
 """
 
 import logging
-from typing import Tuple
+from typing import Tuple, Dict, Optional
 import pandas as pd
 from pathlib import Path
 
@@ -16,7 +16,9 @@ from .normalization import Normalization
 class DataPipeline:
     """Clase que unifica todo el preprocesamiento de datos."""
     
-    def __init__(self, symbol: str, interval: str, start_date: str, run_id: str, base_path: str, end_date: str = None, save_artifacts: bool = True):
+    def __init__(self, symbol: str, interval: str, start_date: str, run_id: str, base_path: str, 
+                 full_config: Dict, end_date: str = None, save_artifacts: bool = True, 
+                 api_key: Optional[str] = None, api_secret: Optional[str] = None, gcs_utils=None):
         """
         Inicializa el pipeline de datos.
         
@@ -26,8 +28,12 @@ class DataPipeline:
             start_date (str): Fecha de inicio en formato YYYY-MM-DD
             run_id (str): Identificador único del entrenamiento
             base_path (str): Ruta base para guardar los artifacts del entrenamiento
+            full_config (Dict): Configuración completa para todas las clases del pipeline
             end_date (str, optional): Fecha de fin en formato YYYY-MM-DD
             save_artifacts (bool): Si True, guarda artefactos como scalers
+            api_key (str, optional): API key de Binance para adquisición de datos
+            api_secret (str, optional): API secret de Binance para adquisición de datos
+            gcs_utils: Instancia de GCSUtils para operaciones en la nube (opcional)
         """
         self.symbol = symbol
         self.interval = interval
@@ -36,6 +42,12 @@ class DataPipeline:
         self.run_id = run_id
         self.base_path = base_path
         self.save_artifacts = save_artifacts
+        
+        # Store injected configuration and dependencies
+        self.full_config = full_config
+        self.api_key = api_key
+        self.api_secret = api_secret
+        self.gcs_utils = gcs_utils
         
         # Configurar logging
         logging.basicConfig(level=logging.INFO)
@@ -46,13 +58,14 @@ class DataPipeline:
         self.logger.info(f"Run ID: {run_id}")
         self.logger.info(f"Base path: {base_path}")
         self.logger.info(f"Guardar artefactos: {save_artifacts}")
+        self.logger.info(f"Configuración inyectada: {len(self.full_config)} secciones")
     
-    def run(self) -> Tuple[pd.DataFrame, str]:
+    def run(self) -> Tuple[pd.DataFrame, object]:
         """
         Ejecuta el pipeline completo de preprocesamiento de datos.
         
         Returns:
-            Tuple[pd.DataFrame, str]: DataFrame normalizado y ruta del price_scaler
+            Tuple[pd.DataFrame, object]: DataFrame normalizado y el objeto price_scaler utilizado.
         """
         self.logger.info("=== Iniciando Pipeline de Datos ===")
         
@@ -62,7 +75,10 @@ class DataPipeline:
             symbol=self.symbol,
             interval=self.interval,
             start_date=self.start_date,
-            end_date=self.end_date
+            end_date=self.end_date,
+            config_dict=self.full_config,
+            api_key=self.api_key,
+            api_secret=self.api_secret
         )
         #dataframe = adquisicion.main()
         dataframe = adquisicion.main_parallel()
@@ -75,7 +91,10 @@ class DataPipeline:
         
         # Paso 2: Cálculo de indicadores técnicos
         self.logger.info("PASO 2: Cálculo de Indicadores Técnicos")
-        indicadores = Indicadores(dataframe)
+        indicadores = Indicadores(
+            dataframe, 
+            config_dict=self.full_config
+        )
         dataframe_with_indicators = indicadores.main()
         
         self.logger.info(f"Indicadores calculados exitosamente:")
@@ -96,7 +115,9 @@ class DataPipeline:
             dataframe_with_indicators, 
             base_path=self.base_path, 
             run_id=self.run_id,
-            save_artifacts=self.save_artifacts
+            save_artifacts=self.save_artifacts,
+            normalization_config=self.full_config.get('normalization', {}),
+            gcs_utils=self.gcs_utils
         )
         normalized_dataframe, scaler = normalization.main()
         
@@ -120,4 +141,4 @@ class DataPipeline:
         
         self.logger.info("=== Pipeline de Datos Completado ===")
         
-        return normalized_dataframe, normalization.price_scaler_path
+        return normalized_dataframe, normalization.price_scaler

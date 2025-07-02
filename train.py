@@ -16,19 +16,21 @@ from typing import Dict, Any, Optional, Tuple
 import time
 import re
 
+import yaml
+
 from src.data.pipeline import DataPipeline
 from src.entorno.environment import FuturesTradingEnv
+from src.entorno.portfolio import Portfolio
 from src.agente.agent import TransformerSACAgent
-from src.configuration.config import config
-from src.configuration.gcs_utils import GCSUtils
 from src.utils.system import setup_logging, set_seed, setup_device, setup_environment_and_distribution
 from src.utils.validation import validate_date_format
 from src.utils.cli import parse_arguments
 from src.analysis.logger import TensorboardLogger
 from src.training import RunManager, AgentEvaluator, Trainer
+from src.configuration.secret_utils import SecretManagerUtils
 
 
-def create_trading_environment(dataframe: Any, logger, run_manager: RunManager, price_scaler_path: Optional[str] = None, price_scaler_blob_name: Optional[str] = None) -> FuturesTradingEnv:
+def create_trading_environment(dataframe: Any, logger, run_manager: RunManager, env_config: dict, price_scaler_path: Optional[str] = None, price_scaler_blob_name: Optional[str] = None) -> FuturesTradingEnv:
     """
     Crea el entorno de trading con los datos procesados.
     
@@ -36,6 +38,7 @@ def create_trading_environment(dataframe: Any, logger, run_manager: RunManager, 
         dataframe: DataFrame con datos normalizados
         logger: Logger para mensajes
         run_manager: Instancia centralizada de RunManager
+        env_config: Diccionario con la configuración del entorno
         price_scaler_path: Ruta específica del price_scaler (opcional, para checkpoint loading)
         price_scaler_blob_name: Blob name específico en GCS (opcional, para checkpoint loading)
         
@@ -62,22 +65,26 @@ def create_trading_environment(dataframe: Any, logger, run_manager: RunManager, 
         logger.error("No se puede continuar sin el price_scaler. Deteniendo ejecución.")
         raise RuntimeError(f"Fallo al cargar price_scaler: {e}")
     
+    sim_portfolio = Portfolio(env_config)
+
     env = FuturesTradingEnv(
         data_df=dataframe,
-        price_scaler=price_scaler
+        price_scaler=price_scaler,
+        env_config=env_config, # Inyección de configuración
+        portfolio=sim_portfolio
     )
     
     logger.info(f"Entorno creado:")
-    logger.info(f"  - Balance inicial: ${config.capital_inicial:,.2f}")
-    logger.info(f"  - Apalancamiento: {config.apalancamiento}x")
-    logger.info(f"  - Ventana observación: {config.ventana_observacion_size}")
+    logger.info(f"  - Balance inicial: ${env_config['capital_inicial']:,.2f}")
+    logger.info(f"  - Apalancamiento: {env_config['apalancamiento']}x")
+    logger.info(f"  - Ventana observación: {env_config['ventana_observacion_size']}")
     logger.info(f"  - Espacio de observación: {env.observation_space}")
     logger.info(f"  - Espacio de acción: {env.action_space}")
     
     return env
 
 
-def create_sac_agent(env: FuturesTradingEnv, device: torch.device, logger, is_distributed: bool = False) -> TransformerSACAgent:
+def create_sac_agent(env: FuturesTradingEnv, device: torch.device, logger, agent_config: dict, is_distributed: bool = False) -> TransformerSACAgent:
     """
     Crea el agente SAC con arquitectura Transformer.
     
@@ -85,6 +92,7 @@ def create_sac_agent(env: FuturesTradingEnv, device: torch.device, logger, is_di
         env: Entorno de trading
         device: Device para el entrenamiento
         logger: Logger para mensajes
+        agent_config: Diccionario con la configuración del agente
         is_distributed: Si el entrenamiento es distribuido
         
     Returns:
@@ -97,10 +105,11 @@ def create_sac_agent(env: FuturesTradingEnv, device: torch.device, logger, is_di
     action_space_shape = env.action_space.shape
     
     # Calcular características de mercado y portfolio
-    ventana_size = config.ventana_observacion_size
+    ventana_size = env.config_entorno['ventana_observacion_size']
     num_features_mercado = len(env.column_names)
     market_features = num_features_mercado
-    portfolio_features = 4  # tipo_posicion, pnl_roe, pasos_posicion, precio_entrada
+    # Leer portfolio_features desde la configuración del agente
+    portfolio_features = agent_config.get('architecture', {}).get('portfolio_features', 4)
     sequence_length = ventana_size
     
     agent = TransformerSACAgent(
@@ -109,6 +118,7 @@ def create_sac_agent(env: FuturesTradingEnv, device: torch.device, logger, is_di
         market_features=market_features,
         portfolio_features=portfolio_features,
         sequence_length=sequence_length,
+        config_override=agent_config, # Inyección de configuración
         device=device,
         is_distributed=is_distributed
     )
@@ -123,10 +133,10 @@ def create_sac_agent(env: FuturesTradingEnv, device: torch.device, logger, is_di
     logger.info(f"  - Market features: {market_features}")
     logger.info(f"  - Portfolio features: {portfolio_features}")
     logger.info(f"  - Sequence length: {sequence_length}")
-    logger.info(f"  - Gamma: {config.gamma}")
-    logger.info(f"  - Tau: {config.tau}")
-    logger.info(f"  - Alpha inicial: {config.initial_log_alpha}")
-    logger.info(f"  - Learning rates: Actor={config.actor_learning_rate}, Critic={config.critic_learning_rate}")
+    logger.info(f"  - Gamma: {agent_config['hiperparametros_sac']['gamma']}")
+    logger.info(f"  - Tau: {agent_config['hiperparametros_sac']['tau']}")
+    logger.info(f"  - Alpha inicial: {agent_config['hiperparametros_sac']['initial_log_alpha']}")
+    logger.info(f"  - Learning rates: Actor={agent_config['hiperparametros_sac']['actor_learning_rate']}, Critic={agent_config['hiperparametros_sac']['critic_learning_rate']}")
     logger.info(f"  - Entrenamiento distribuido: {'Sí' if is_distributed else 'No'}")
     
     return agent
@@ -169,23 +179,67 @@ def main():
     
     # Parsear argumentos
     args = parse_arguments()
-    
-    # Configurar semilla aleatoria para reproducibilidad
-    set_seed(args.seed, logger)
-    
-    # Validar fecha de inicio
-    if not validate_date_format(args.start_date):
-        logger.error(f"Formato de fecha inválido: {args.start_date}. Use YYYY-MM-DD")
+
+    # --- LÓGICA DE CARGA DE CONFIGURACIÓN ---
+    # Determinar qué configuración usar: la del checkpoint (continuación) o la local (nuevo/fine-tune)
+    gcp_config_for_load = None
+    try:
+        with open('src/configuration/config.yaml', 'r') as f:
+            # Cargar gcp_config de la configuración local para poder usar RunManager
+            temp_config = yaml.safe_load(f)
+            if temp_config.get('normalization', {}).get('storage_mode') == 'gcp':
+                gcp_config_for_load = temp_config.get('gcp', {})
+    except FileNotFoundError:
+        logger.warning("No se encontró config.yaml local. Se asumirá que no se necesita gcp_config para cargar.")
+
+    if args.checkpoint and not args.fine_tune_mode:
+        logger.info(f"Modo 'Continuación Pura' detectado. Cargando configuración desde el run_id: {args.checkpoint}")
+        # Cargar la configuración del run anterior para una continuación exacta
+        config_dict = RunManager.load_run_config(args.checkpoint, gcp_config=gcp_config_for_load)
+        if not config_dict:
+            logger.error(f"No se pudo cargar la configuración para el run_id: {args.checkpoint}. Abortando.")
+            sys.exit(1)
+        # La configuración cargada del checkpoint ya contiene la sección 'config'
+        local_config_dict = config_dict.get('config', {})
+        logger.info(f"Configuración del run '{args.checkpoint}' cargada exitosamente como fuente de verdad.")
+    else:
+        # Modo 'Nuevo Entrenamiento' o 'Fine-Tuning': usar la configuración local
+        if args.checkpoint and args.fine_tune_mode:
+            logger.info(f"Modo 'Fine-Tuning' detectado. Usando configuración local 'config.yaml' para el nuevo run.")
+        else:
+            logger.info("Modo 'Nuevo Entrenamiento' detectado. Usando 'config.yaml' local.")
+        
+        try:
+            with open('src/configuration/config.yaml', 'r') as f:
+                local_config_dict = yaml.safe_load(f)
+            logger.info("Configuración local 'config.yaml' cargada exitosamente.")
+        except FileNotFoundError:
+            logger.error("No se encontró el archivo 'src/configuration/config.yaml'. Abortando.")
+            sys.exit(1)
+
+    # --- EXTRACCIÓN DE PARÁMETROS DEL EXPERIMENTO ---
+    try:
+        # Ahora extraemos la configuración de 'local_config_dict', que es la fuente de verdad correcta
+        exp_config = local_config_dict['experiment_definition']
+        symbol = exp_config['symbol']
+        interval = exp_config['interval']
+        start_date = exp_config['training_start_date']
+        end_date = exp_config.get('training_end_date')
+        seed = exp_config['seed']
+        logger.info(f"Configuración del experimento: {symbol}/{interval} desde {start_date}, Seed: {seed}")
+    except KeyError as e:
+        logger.error(f"Falta la clave de configuración requerida en 'experiment_definition': {e}")
         sys.exit(1)
-    
-    logger.info(f"Parámetros: Symbol={args.symbol}, Interval={args.interval}, Start Date={args.start_date}, Seed={args.seed}")
+
+    # Configurar semilla aleatoria para reproducibilidad
+    set_seed(seed, logger)
 
     # === GENERACIÓN Y SINCRONIZACIÓN DEL RUN_ID ===
     # Solo el proceso jefe genera el run_id, luego lo sincroniza con todos los procesos
     if is_chief:
         # Generar run_id único incluyendo la semilla
         current_time = datetime.now().strftime('%Y%m%d-%H%M%S')
-        run_id = f"{args.symbol}_{args.interval}_{args.seed}_{current_time}"
+        run_id = f"{symbol}_{interval}_{seed}_{current_time}"
         logger.info(f"[Proceso Jefe] Run ID generado: {run_id}")
     else:
         # Los procesos no-jefe inicializan run_id como None, se sincronizará después
@@ -221,14 +275,16 @@ def main():
     # === INICIALIZACIÓN DE COMPONENTES DE GESTIÓN ===
     # Crear instancia única de RunManager para TODOS los procesos (lectura)
     # pero solo el jefe realizará operaciones de escritura
-    gcs_utils = None
-    if config.storage_mode == "gcp":
-        from src.configuration.gcs_utils import gcs_utils
-        logger.info(f"[Proceso {rank}] Usando instancia global de GCSUtils para modo GCP")
+    storage_mode = local_config_dict.get('normalization', {}).get('storage_mode', 'local')
+    gcp_config = None
+    if storage_mode == "gcp":
+        gcp_config = local_config_dict.get('gcp', {})
+        logger.info(f"[Proceso {rank}] Configuración GCP cargada para RunManager")
 
     # Determinar base_path según storage_mode (todos los procesos)
-    if config.storage_mode == "gcp":
-        base_path = f"gs://{config.gcs_bucket_name}/{run_id}"
+    if storage_mode == "gcp":
+        gcs_bucket_name = gcp_config.get('storage', {}).get('bucket_name')
+        base_path = f"gs://{gcs_bucket_name}/{run_id}"
         logger.info(f"[Proceso {rank}] Modo GCP: Los artefactos se accederán desde {base_path}")
     else:
         base_path = Path("Entrenamientos") / run_id
@@ -237,7 +293,12 @@ def main():
         logger.info(f"[Proceso {rank}] Modo Local: Los artefactos se accederán desde {base_path}")
 
     # Crear instancia de RunManager para TODOS los procesos
-    run_manager = RunManager(base_path=str(base_path), run_id=run_id, gcs_utils=gcs_utils)
+    run_manager = RunManager(
+        base_path=str(base_path), 
+        run_id=run_id, 
+        storage_mode=storage_mode,
+        gcp_config=gcp_config
+    )
     logger.info(f"[Proceso {rank}] RunManager creado - Base path: {base_path}")
     
     # Solo el proceso jefe inicializa los componentes de logging y configuración
@@ -245,58 +306,45 @@ def main():
         logger.info("=== INICIALIZACIÓN DE COMPONENTES ADICIONALES (PROCESO JEFE) ===")
 
         # Lógica de TensorBoard modificada
-        # Para el modo local, seguimos creando un directorio.
-        # Para el modo GCP, log_dir no es estrictamente necesario, pero lo mantenemos por consistencia.
-        # El logger interno decidirá qué hacer.
-        if config.storage_mode == "local":
+        if storage_mode == "local":
             tensorboard_dir = Path(base_path) / "tensorboard"
             tensorboard_dir.mkdir(parents=True, exist_ok=True)
         else:
-            # En modo GCP, los logs se envían directamente a la API de Vertex,
-            # no se necesita un directorio local persistente.
             tensorboard_dir = None
 
         # Inicializar TensorBoard Logger
-        # Pasamos el run_id para que lo use como nombre del "run" en el experimento
-        tb_logger = TensorboardLogger(log_dir=str(tensorboard_dir) if tensorboard_dir else None, run_id=run_id)
+        vertex_ai_config = None
+        if storage_mode == "gcp":
+            # Pasar la configuración completa que incluye tanto tensorboard_vertex_ai como gcp
+            vertex_ai_config = local_config_dict
+            vertex_ai_config['storage_mode'] = storage_mode
         
-        if config.storage_mode == "local":
+        tb_logger = TensorboardLogger(
+            log_dir=str(tensorboard_dir) if tensorboard_dir else None, 
+            run_id=run_id,
+            vertex_ai_config=vertex_ai_config
+        )
+        
+        if storage_mode == "local":
             logger.info(f"TensorBoard logs se guardarán localmente en: {tensorboard_dir}")
         else:
             logger.info(f"TensorBoard logs se enviarán directamente a Vertex AI TensorBoard")
 
-        # Registrar Hiperparámetros
-        hparams = {
-            'run_id': run_id,
-            'symbol': args.symbol,
-            'interval': args.interval,
-            'start_date': args.start_date,
-            'seed': args.seed,
-            'episodes': args.episodes,
-            'eval_frequency': args.eval_frequency,
-            'save_frequency': args.save_frequency,
-            'actor_lr': config.actor_learning_rate,
-            'critic_lr': config.critic_learning_rate,
-            'alpha_lr': config.alpha_learning_rate,
-            'gamma': config.gamma,
-            'tau': config.tau,
-            'batch_size': config.batch_size,
-            'buffer_size': config.replay_buffer_size,
-            'd_model': config.d_model,
-            'n_head': config.n_head,
-            'num_encoder_layers': config.num_encoder_layers,
-            'ventana_observacion': config.ventana_observacion_size,
-            'capital_inicial': config.capital_inicial,
-            'apalancamiento': config.apalancamiento,
-            'storage_mode': config.storage_mode,
-            'base_path': str(base_path)
+        # Ensamblar la configuración completa del run
+        full_run_config = {
+            'run_info': {
+                'run_id': run_id,
+                'timestamp': datetime.now().isoformat(),
+                'storage_mode': storage_mode,
+                'base_path': str(base_path)
+            },
+            'command_line_args': vars(args),
+            'config': local_config_dict
         }
-        # Log hyperparameters
-        tb_logger.log_hyperparameters(hparams)
-        
+
         # Guardar configuración del run usando RunManager (SOLO EL JEFE ESCRIBE)
         try:
-            run_manager.save_run_config(hparams=hparams, args=args)
+            run_manager.save_run_config(full_run_config)
         except Exception as e:
             logger.error(f"Error al guardar config_run.yaml: {e}")
             # Continuar ejecución ya que este error no es crítico
@@ -311,14 +359,53 @@ def main():
         # === FASE 1: EL PROCESO JEFE GENERA Y GUARDA LOS ARTEFACTOS ===
         if is_chief:
             logger.info("=== FASE 1: Generando y Guardando Artefactos (PROCESO JEFE) ===")
+            
+            # Obtener credenciales de API desde Secret Manager o variables de entorno
+            api_key = None
+            api_secret = None
+            try:
+                gcp_config = local_config_dict.get('gcp', {})
+                project_id = gcp_config.get('project_id')
+                if project_id:
+                    logger.info("Intentando cargar credenciales desde Secret Manager...")
+                    secret_manager = SecretManagerUtils(project_id=project_id)
+                    secrets_config = local_config_dict.get('secrets', {})
+                    api_key_secret_id = secrets_config.get('binance_api_key_futures')
+                    api_secret_secret_id = secrets_config.get('binance_api_secret_futures')
+                    if api_key_secret_id and api_secret_secret_id:
+                        api_key = secret_manager.get_secret(api_key_secret_id)
+                        api_secret = secret_manager.get_secret(api_secret_secret_id)
+                        logger.info("✅ Credenciales de Binance cargadas desde Secret Manager.")
+            except (KeyError, RuntimeError) as e:
+                logger.warning(f"No se pudieron cargar las credenciales desde Secret Manager: {e}")
+
+            if not api_key or not api_secret:
+                logger.warning("Credenciales no encontradas en Secret Manager, intentando con variables de entorno...")
+                api_key = os.getenv('BINANCE_API_KEY')
+                api_secret = os.getenv('BINANCE_API_SECRET')
+                if api_key and api_secret:
+                    logger.info("✅ Credenciales de Binance cargadas desde variables de entorno.")
+                else:
+                    logger.warning("Credenciales de Binance no encontradas en variables de entorno. La adquisición de datos podría fallar si se requiere autenticación.")
+            
+            # Crear instancia local de GCSUtils si es necesario para compatibilidad
+            gcs_utils_for_pipeline = None
+            if storage_mode == "gcp":
+                from src.configuration.gcs_utils import GCSUtils
+                gcs_utils_for_pipeline = GCSUtils(gcp_config)
+            
             data_pipeline_chief = DataPipeline(
-                symbol=args.symbol,
-                interval=args.interval,
-                start_date=args.start_date,
-                end_date=args.end_date,
+                symbol=symbol,
+                interval=interval,
+                start_date=start_date,
+                end_date=end_date,
                 run_id=run_id,
                 base_path=str(base_path),
-                save_artifacts=True
+                full_config=local_config_dict,
+                save_artifacts=True,
+                api_key=api_key,
+                api_secret=api_secret,
+                gcs_utils=gcs_utils_for_pipeline
             )
             # El jefe ejecuta con save_artifacts=True para guardar scalers y metadatos
             _, _ = data_pipeline_chief.run()
@@ -333,14 +420,29 @@ def main():
         
         # === FASE 3: TODOS LOS PROCESOS CARGAN LOS DATOS EN MEMORIA ===
         logger.info(f"=== FASE 3: Cargando Datos en Memoria [Proceso {rank}] ===")
+        
+        # Obtener credenciales de API desde variables de entorno (para todos los procesos)
+        api_key = os.getenv('BINANCE_API_KEY')
+        api_secret = os.getenv('BINANCE_API_SECRET')
+        
+        # Crear instancia local de GCSUtils si es necesario para compatibilidad
+        gcs_utils_for_pipeline = None
+        if storage_mode == "gcp":
+            from src.configuration.gcs_utils import GCSUtils
+            gcs_utils_for_pipeline = GCSUtils(gcp_config)
+        
         data_pipeline = DataPipeline(
-            symbol=args.symbol,
-            interval=args.interval,
-            start_date=args.start_date,
-            end_date=args.end_date,
+            symbol=symbol,
+            interval=interval,
+            start_date=start_date,
+            end_date=end_date,
             run_id=run_id,
             base_path=str(base_path),
-            save_artifacts=False
+            full_config=local_config_dict,
+            save_artifacts=False,
+            api_key=api_key,
+            api_secret=api_secret,
+            gcs_utils=gcs_utils_for_pipeline
         )
         # Todos los procesos (incluido el jefe) ejecutan con save_artifacts=False
         # Esto carga los datos y los procesa en memoria, usando los scalers ya guardados
@@ -363,7 +465,7 @@ def main():
         start_episode = 0
         
         # Usar la ruta del price_scaler que devolvió el pipeline para nueva ejecución por defecto
-        if config.storage_mode == "gcp":
+        if storage_mode == "gcp":
             blob_name_price_scaler_a_cargar = f"{run_id}/price_scaler.pkl"
         else:
             path_price_scaler_a_cargar = price_scaler_path
@@ -374,13 +476,14 @@ def main():
             dataframe,  # Disponible en todos los procesos
             logger,
             run_manager,  # Ahora todos los procesos tienen run_manager
+            env_config=local_config_dict['environment'], # Inyección
             price_scaler_path=path_price_scaler_a_cargar,
             price_scaler_blob_name=blob_name_price_scaler_a_cargar
         )
         
         # Crear agente (todos los procesos) - CRUCIAL: Pasar is_distributed
         logger.info(f"[Proceso {rank}] Creando agente SAC...")
-        agent = create_sac_agent(env, device, logger, is_distributed=is_distributed)
+        agent = create_sac_agent(env, device, logger, agent_config=local_config_dict['agent'], is_distributed=is_distributed)
         
         # === FASE 5: GESTIÓN DE CHECKPOINTS Y SINCRONIZACIÓN (CENTRALIZADA EN EL JEFE) ===
         logger.info(f"=== FASE 5: Gestión de Checkpoints [Proceso {rank}] ===")
@@ -421,7 +524,7 @@ def main():
                         logger.info(f"  - Nuevos artefactos se guardarán en run_id: {run_id}")
                         
                         # Actualizar configuración de price_scaler para cargar desde checkpoint
-                        if config.storage_mode == "gcp":
+                        if storage_mode == "gcp":
                             blob_name_price_scaler_a_cargar = f"{args.checkpoint}/price_scaler.pkl"
                             logger.info(f"[Proceso Jefe] Actualizando price_scaler desde GCS (checkpoint): {blob_name_price_scaler_a_cargar}")
                         else:
@@ -500,18 +603,17 @@ def main():
         
         # Configuración para el trainer (todos los procesos)
         trainer_config = {
-            'seed': args.seed,
-            'batch_size': config.batch_size,
-            'min_buffer_for_learning': config.min_buffer_for_learning,
-            'replay_buffer_size': config.replay_buffer_size,
+            'seed': seed,
+            'batch_size': local_config_dict['agent']['batch_size'],
+            'min_buffer_for_learning': local_config_dict['agent']['min_buffer_for_learning'],
+            'replay_buffer_size': local_config_dict['agent']['replay_buffer_size'],
             'eval_frequency': args.eval_frequency,
             'eval_episodes': args.eval_episodes,
             'save_frequency': args.save_frequency,
-            'storage_mode': config.storage_mode,
+            'storage_mode': storage_mode,
             'run_id': run_id,
             'tensorboard_dir': tensorboard_dir if is_chief else None,
-            'gcs_bucket_name': getattr(config, 'gcs_bucket_name', None),
-            'gcs_utils': gcs_utils if is_chief else None
+            'gcs_bucket_name': gcp_config.get('storage', {}).get('bucket_name') if storage_mode == 'gcp' else None
         }
         
         # Crear trainer (todos los procesos) con instanciación condicional
@@ -566,8 +668,16 @@ def main():
 
 if __name__ == "__main__":
     # Forzar a NCCL a usar una interfaz de red común en entornos cloud para evitar timeouts.
-    os.environ['NCCL_SOCKET_IFNAME'] = 'eth0'
-    # AÑADE ESTA LÍNEA AQUÍ DENTRO:
+    # Leer desde la configuración para mayor flexibilidad.
+    try:
+        with open('src/configuration/config.yaml', 'r') as f:
+            config = yaml.safe_load(f)
+        nccl_socket_ifname = config.get('system', {}).get('nccl_socket_ifname', 'eth0')
+        os.environ['NCCL_SOCKET_IFNAME'] = nccl_socket_ifname
+        print(f"Establecida variable de entorno NCCL_SOCKET_IFNAME='{nccl_socket_ifname}'")
+    except Exception as e:
+        print(f"Advertencia: No se pudo leer nccl_socket_ifname de config.yaml. Usando valor por defecto 'eth0'. Error: {e}")
+        os.environ['NCCL_SOCKET_IFNAME'] = 'eth0'
 
     # Forzar el método 'spawn' para multiprocessing para evitar problemas de CUDA
     # en los procesos hijos que guardan los modelos. Es la solución estándar.

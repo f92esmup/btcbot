@@ -77,12 +77,13 @@ class StateTransformerEncoder(nn.Module):
     def __init__(
         self,
         input_features: int,
-        d_model: int = 128,
-        n_head: int = 4,
-        num_encoder_layers: int = 3,
-        dim_feedforward: int = 256,
-        dropout_rate: float = 0.1,
-        max_seq_len: int = 100
+        d_model: int,
+        n_head: int,
+        num_encoder_layers: int,
+        dim_feedforward: int,
+        dropout_rate: float,
+        max_seq_len: int,
+        positional_encoding_learnable: bool = False
     ):
         """
         Args:
@@ -93,6 +94,7 @@ class StateTransformerEncoder(nn.Module):
             dim_feedforward: Dimensión de la capa feedforward
             dropout_rate: Tasa de dropout
             max_seq_len: Longitud máxima de secuencia
+            positional_encoding_learnable: Si la codificación posicional es aprendible
         """
         super().__init__()
         
@@ -103,7 +105,9 @@ class StateTransformerEncoder(nn.Module):
         self.input_projection = nn.Linear(input_features, d_model)
         
         # Codificación posicional
-        self.positional_encoding = PositionalEncoding(d_model, max_seq_len, learnable=False)
+        self.positional_encoding = PositionalEncoding(
+            d_model, max_seq_len, learnable=positional_encoding_learnable
+        )
         
         # Capas del Transformer Encoder
         encoder_layer = nn.TransformerEncoderLayer(
@@ -169,8 +173,8 @@ class ActorNetwork(nn.Module):
         portfolio_features: int,
         transformer_config: dict,
         mlp_hidden_dims: list,
-        action_dim: int = 1,
-        max_seq_len: int = 100
+        action_dim: int,
+        agent_config: dict  # Nueva configuración completa del agente
     ):
         """
         Args:
@@ -179,13 +183,17 @@ class ActorNetwork(nn.Module):
             transformer_config: Configuración del Transformer
             mlp_hidden_dims: Dimensiones de las capas MLP ocultas
             action_dim: Dimensión del espacio de acción
-            max_seq_len: Longitud máxima de secuencia
+            agent_config: Configuración completa del agente para acceder a todos los parámetros
         """
         super().__init__()
         
         self.market_features = market_features
         self.portfolio_features = portfolio_features
         self.action_dim = action_dim
+        
+        # Extraer configuraciones específicas
+        architecture_config = agent_config.get('architecture', {})
+        sac_params = agent_config.get('hiperparametros_sac', {})
         
         # Encoder Transformer para datos de mercado
         self.transformer = StateTransformerEncoder(
@@ -195,7 +203,8 @@ class ActorNetwork(nn.Module):
             num_encoder_layers=transformer_config['num_encoder_layers'],
             dim_feedforward=transformer_config['dim_feedforward'],
             dropout_rate=transformer_config['dropout_rate'],
-            max_seq_len=max_seq_len
+            max_seq_len=architecture_config['transformer_max_seq_len'],
+            positional_encoding_learnable=architecture_config['positional_encoding_learnable']
         )
         
         # MLP head
@@ -220,9 +229,9 @@ class ActorNetwork(nn.Module):
         self.mean_layer = nn.Linear(prev_dim, action_dim)
         self.log_std_layer = nn.Linear(prev_dim, action_dim)
         
-        # Límites para log_std para estabilidad numérica
-        self.log_std_min = -20
-        self.log_std_max = 2
+        # Límites para log_std para estabilidad numérica (desde config)
+        self.log_std_min = sac_params['log_std_min']
+        self.log_std_max = sac_params['log_std_max']
         
         logger.info(f"ActorNetwork inicializado:")
         logger.info(f"  - Market features: {market_features}")
@@ -257,56 +266,6 @@ class ActorNetwork(nn.Module):
         log_std = torch.clamp(log_std, self.log_std_min, self.log_std_max)
         
         return mean, log_std
-    
-    def sample(self, market_data: torch.Tensor, portfolio_data: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        """
-        Muestrea una acción de la política y calcula su log_prob.
-        
-        Returns:
-            Tupla (action, log_prob)
-        """
-        mean, log_std = self.forward(market_data, portfolio_data)
-        std = torch.exp(log_std)
-        
-        # Distribución normal
-        normal = torch.distributions.Normal(mean, std)
-        
-        # Muestrear con reparametrización
-        x_t = normal.rsample()  # Para permitir backprop
-        
-        # Aplicar tanh para asegurar acción en [-1, 1]
-        action = torch.tanh(x_t)
-        
-        # Calcular log_prob con corrección de tanh
-        log_prob = normal.log_prob(x_t)
-        
-        # Corrección de Jacobiano para tanh
-        log_prob -= torch.log(1 - action.pow(2) + 1e-6)
-        log_prob = log_prob.sum(dim=1, keepdim=True)
-        
-        return action, log_prob
-    
-    def log_prob(self, market_data: torch.Tensor, portfolio_data: torch.Tensor, action: torch.Tensor) -> torch.Tensor:
-        """
-        Calcula log_prob para una acción dada.
-        """
-        mean, log_std = self.forward(market_data, portfolio_data)
-        std = torch.exp(log_std)
-        
-        # Invertir tanh para obtener x_t
-        # atanh está limitado a (-1, 1), así que clampeamos la acción
-        action_clamped = torch.clamp(action, -0.999, 0.999)
-        x_t = torch.atanh(action_clamped)
-        
-        # Distribución normal
-        normal = torch.distributions.Normal(mean, std)
-        log_prob = normal.log_prob(x_t)
-        
-        # Corrección de Jacobiano para tanh
-        log_prob -= torch.log(1 - action.pow(2) + 1e-6)
-        log_prob = log_prob.sum(dim=1, keepdim=True)
-        
-        return log_prob
 
 
 class CriticNetwork(nn.Module):
@@ -322,7 +281,7 @@ class CriticNetwork(nn.Module):
         action_dim: int,
         transformer_config: dict,
         mlp_hidden_dims: list,
-        max_seq_len: int = 100
+        agent_config: dict  # Nueva configuración completa del agente
     ):
         """
         Args:
@@ -331,13 +290,16 @@ class CriticNetwork(nn.Module):
             action_dim: Dimensión del espacio de acción
             transformer_config: Configuración del Transformer
             mlp_hidden_dims: Dimensiones de las capas MLP ocultas
-            max_seq_len: Longitud máxima de secuencia
+            agent_config: Configuración completa del agente para acceder a todos los parámetros
         """
         super().__init__()
         
         self.market_features = market_features
         self.portfolio_features = portfolio_features
         self.action_dim = action_dim
+        
+        # Extraer configuraciones específicas
+        architecture_config = agent_config.get('architecture', {})
         
         # Encoder Transformer para datos de mercado
         self.transformer = StateTransformerEncoder(
@@ -347,7 +309,8 @@ class CriticNetwork(nn.Module):
             num_encoder_layers=transformer_config['num_encoder_layers'],
             dim_feedforward=transformer_config['dim_feedforward'],
             dropout_rate=transformer_config['dropout_rate'],
-            max_seq_len=max_seq_len
+            max_seq_len=architecture_config['transformer_max_seq_len'],
+            positional_encoding_learnable=architecture_config['positional_encoding_learnable']
         )
         
         # MLP head

@@ -32,9 +32,6 @@ workerPoolSpecs:
       imageUri: 'europe-southwest1-docker.pkg.dev/btcbot-461022/btcbotrepo/btcbot-train-gpu:latest'
       command: ["torchrun", "--nproc_per_node=1", "train.py"]
       args:
-        - '--symbol=BTCUSDT'
-        - '--interval=1h'
-        - '--start-date=2025-01-01'
         - '--episodes=10'
         - '--eval-frequency=6'
         - '--save-frequency=8'
@@ -72,9 +69,6 @@ workerPoolSpecs:
       
       args:
         # Los argumentos deben ser idénticos a los del pool maestro.
-        - '--symbol=BTCUSDT'
-        - '--interval=1h'
-        - '--start-date=2025-01-01'
         - '--episodes=10'
         - '--eval-frequency=6'
         - '--save-frequency=8'

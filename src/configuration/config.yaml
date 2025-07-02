@@ -1,3 +1,16 @@
+# ----------------------------------------------------
+# SECCIÓN 1: DEFINICIÓN DEL EXPERIMENTO (QUÉ)
+# ----------------------------------------------------
+experiment_definition:
+  symbol: 'BTCUSDT'
+  interval: '1m'
+  training_start_date: '2025-07-01'
+  #training_end_date: '2023-01-31' # Opcional
+  seed: 73
+
+# ----------------------------------------------------
+# SECCIÓN 2: CONFIGURACIÓN DEL SISTEMA
+# ----------------------------------------------------
 # Configuración para el bot de trading de Bitcoin
 # Parámetros de la API de Binance
 api:
@@ -12,11 +25,19 @@ trading:
 
 # Configuración de Google Cloud
 gcp:
-  project_id: "btcbot-461022"  # Tu project ID de Google Cloud
+  project_id: "btcbot-2762"  # Tu project ID de Google Cloud
   storage:
-    bucket_name: "btcbot-training-ew4"  # Nombre del bucket para almacenar modelos
+    bucket_name: "btcbot-training-2762"  # Nombre del bucket para almacenar modelos
     scaler_blob_name: "scaler.pkl"  # Nombre del archivo scaler en GCS
     price_scaler_blob_name: "price_scaler.pkl"  # Nombre del archivo price_scaler en GCS
+  secrets:
+    # Nombres de los secretos tal como existen en Google Secret Manager
+    binance_api_key_futures: "BINANCE_API_KEY_FUTURES"
+    binance_api_secret_futures: "BINANCE_API_SECRET_FUTURES"
+    testnet_binance_api_key_futures: "TESTNET_BINANCE_API_KEY_FUTURES"
+    testnet_binance_api_secret_futures: "TESTNET_BINANCE_API_SECRET_FUTURES"
+    telegram_bot_token: "TELEGRAM_BOT_TOKEN"
+    telegram_chat_id: "TELEGRAM_CHAT_ID" 
 
 # Configuración de datos
 data:
@@ -50,7 +71,6 @@ interpolation:
 normalization:
   scaler_type: "MinMaxScaler"  # Tipo de escalador a usar
   feature_range: [0, 1]        # Rango de normalización
-  scaler_path: "models/scaler.pkl"  # Ruta donde guardar el scaler (modo local)
   storage_mode: "gcp"        # Modo de almacenamiento: "local" o "gcp"
 
 # Configuración para Vertex AI TensorBoard
@@ -59,41 +79,39 @@ tensorboard_vertex_ai:
   experiment_name: "BTCBot Trading Experiment" # Nuevo experimento creado
   location: "europe-west4" # La región de tu instancia de TensorBoard
 
-# Configuración de indicadores técnicos
-indicators:
-  # Indicadores de tendencia
-  trend:
-    ema_20:
-      period: 20
-      enabled: true
-    ema_50:
-      period: 50
-      enabled: true
-    adx:
-      period: 14
-      enabled: true
-  
-  # Indicadores de momento
-  momentum:
-    rsi:
-      period: 14
-      enabled: true
-    stoch:
-      k_period: 14
-      d_period: 3
-      smooth_k: 3
-      enabled: true
-  
-  # Indicadores de volatilidad
-  volatility:
-    atr:
-      period: 14
-      enabled: true
-  
-  # Indicadores de volumen
-  volume:
-    obv:
-      enabled: true
+# Indicadores de Tendencia
+trend_indicators:
+  ema_20:
+    period: 20
+    enabled: true
+  ema_50:
+    period: 50
+    enabled: true
+  adx:
+    period: 14
+    enabled: true
+
+# Indicadores de Momento
+momentum_indicators:
+  rsi:
+    period: 14
+    enabled: true
+  stoch:
+    k_period: 14
+    d_period: 3
+    smooth_k: 3
+    enabled: true
+
+# Indicadores de Volatilidad
+volatility_indicators:
+  atr:
+    period: 14
+    enabled: true
+
+# Indicadores de Volumen
+volume_indicators:
+  obv:
+    enabled: true
 
 # Configuración del entorno de trading (Environment)
 environment:
@@ -102,6 +120,7 @@ environment:
   apalancamiento: 10        # Apalancamiento máximo (ej. 10x)
   porcentaje_max_inversion_por_trade: 0.05  # 5% del balance como margen por trade
   max_drawdown_configurado_cuenta: 0.5      # 50% de drawdown máximo antes de terminated
+  max_consecutive_losses: 5  # Número máximo de pérdidas consecutivas permitidas
   
   # Costos de trading
   comision_taker_porcentaje: 0.0004    # 0.04% sobre valor nocional
@@ -122,8 +141,6 @@ environment:
   peso_recompensa_paso: 1.0           # Peso para recompensa por paso
   peso_recompensa_cierre: 1.0         # Peso para recompensa al cerrar operación
   peso_recompensa_episodio: 0.0       # Peso para Sortino (0 = no se usa por ahora)
-  usar_log1p_en_pnl: false            # Si aplicar log1p al PNL para suavizar, \ 
-  # RECOMENDADO EN false, ya que se ha incorporado normalización de recompensas en el agente y puede interferir (DEPRECIATED)
 
   # Condiciones de finalización
   usar_max_pasos_episodio: false      # Si limitar pasos por episodio
@@ -131,50 +148,65 @@ environment:
 
 # Configuración del Agente SAC con Transformer
 agent:
-  algorithm: "SAC" # Confirmando el algoritmo
-  
+  algorithm: "SAC"
+
+  # --- Arquitectura de la Red ---
+  architecture:
+    portfolio_features: 4
+    transformer_max_seq_len: 100
+    positional_encoding_learnable: false
+
   # --- Parámetros del Replay Buffer y Entrenamiento General ---
-  replay_buffer_size: 8000000   # Capacidad del buffer de repetición (8 millones de transiciones)
-  batch_size: 8192               # Tamaño del mini-batch para cada paso de aprendizaje
-  min_buffer_for_learning: 500000  # Mínimo número de experiencias antes de comenzar el aprendizaje
+  replay_buffer_size: 8000000
+  batch_size: 8192
+  min_buffer_for_learning: 500000
 
   # --- Hiperparámetros Específicos de SAC ---
-  hiperparametros_sac: # Usando un nombre un poco más específico que solo "hiperparametros"
-    gamma: 0.99                   # Factor de descuento para recompensas futuras
-    tau: 0.005                    # Coeficiente para la actualización suave de las redes objetivo
-    
-    actor_learning_rate: 0.0003   # Tasa de aprendizaje para la red del Actor (Adam optimizer)
-    critic_learning_rate: 0.0003  # Tasa de aprendizaje para las redes del Crítico (Adam optimizer)
-    
-    learn_alpha: True             # Si alpha (temperatura de entropía) es aprendible
-    alpha_learning_rate: 0.0003   # Tasa de aprendizaje para alpha (si es aprendible)
-    target_entropy: 'auto'        # Entropía objetivo. 'auto' calcula como -dim_accion (recomendado)
-                                  # También puedes usar un valor fijo como -1.0
-    initial_log_alpha: 0.0        # Valor inicial para log(alpha), resultando en alpha=1.0. Ajustable.
+  hiperparametros_sac:
+    gamma: 0.99
+    tau: 0.005
+    actor_learning_rate: 0.0003
+    critic_learning_rate: 0.0003
+    learn_alpha: True
+    alpha_learning_rate: 0.0003
+    target_entropy: 'auto'
+    initial_log_alpha: 0.0
+    log_std_min: -20  # Límite inferior para log_std
+    log_std_max: 2    # Límite superior para log_std
 
-  # --- Parámetros de la Arquitectura del Transformer (para StateTransformerEncoder) ---
-  # Asumimos que el Transformer procesa la ventana de datos de mercado.
-  # Número de características de mercado por paso de tiempo (5 OHLCV + 7 Indicadores = 12)
-  # input_features_per_step_transformer: 12 (Esto se derivaría de los datos, no es un hiperparámetro a tunear tanto como una especificación de entrada)
+  # --- Parámetros de la Arquitectura del Transformer ---
   transformer:
-    d_model: 128                  # Dimensión interna del Transformer (embeddings).
-    n_head: 4                     # Número de cabezales de atención (d_model debe ser divisible por n_head; 128/4=32).
-    num_encoder_layers: 3         # Número de capas de Encoder de Transformer apiladas (2-4 es un buen inicio).
-    dim_feedforward: 256          # Dimensión de la capa oculta en la FFN del Transformer (ej. 2*d_model).
-    dropout_rate: 0.1             # Tasa de dropout dentro del Transformer.
-  
-  # --- Parámetros de las Cabezas MLP (para Actor y Crítico después del Transformer) ---
-  # La entrada a estas MLP será la salida del Transformer (d_model) 
-  # concatenada con las características escalares del portafolio (asumimos 4: tipo_pos, pnl_norm, pasos_norm, entrada_norm).
-  # Input_dim_mlp = d_model (128) + num_portfolio_features (4) = 132
+    d_model: 128
+    n_head: 4
+    num_encoder_layers: 3
+    dim_feedforward: 256
+    dropout_rate: 0.1
+
+  # --- Parámetros de las Cabezas MLP ---
   mlp_heads:
-    hidden_dims: [256, 256]       # Lista de dimensiones para las capas ocultas de las MLP del Actor y Crítico.
-                                  # Ej: [256, 256] significa dos capas ocultas de 256 neuronas cada una.
+    hidden_dims: [256, 256]
 
   # --- Frecuencia de Entrenamiento ---
-  learning_frequency: 16         # Aprender cada N pasos
-  update_target_frequency: 2    # Actualizar redes objetivo cada N pasos de aprendizaje
-  
+  learning_frequency: 16
+  update_target_frequency: 2
+
   # --- Parámetros de Guardado y Carga ---
-  model_save_frequency: 10000   # Guardar modelo cada N pasos
-  models_directory: "models/agent"  # Directorio para guardar modelos
+  model_save_frequency: 10000
+  models_directory: "models/agent"
+
+# ----------------------------------------------------
+# SECCIÓN 3: CONFIGURACIÓN DE EJECUCIÓN
+# ----------------------------------------------------
+live_trading:
+  warm_up_candles: 200
+  default_model_to_load: "best_model"
+  bigquery_dataset_id: "trading_logs"
+  bigquery_table_id: "live_trading_log"
+
+system:
+  max_parallel_workers_api: 8
+  nccl_socket_ifname: 'eth0'
+
+evaluation:
+  temp_directory: "temp_evaluation"
+  default_model_to_load: "best"

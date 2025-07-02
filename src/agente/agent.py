@@ -14,9 +14,9 @@ import pickle
 import logging
 import tempfile
 import os
+from torch.cuda.amp import autocast, GradScaler
 
 from .networks import ActorNetwork, CriticNetwork
-from ..configuration.config import config
 
 logger = logging.getLogger(__name__)
 
@@ -39,8 +39,8 @@ class TransformerSACAgent:
         market_features: int,
         portfolio_features: int,
         sequence_length: int,
+        config_override: Dict[str, Any],  # Now mandatory
         device: Optional[torch.device] = None,
-        config_override: Optional[Dict[str, Any]] = None,
         is_distributed: bool = False  # Flag para activar el modo distribuido
     ):
         """
@@ -53,7 +53,7 @@ class TransformerSACAgent:
             portfolio_features: Número de características del portfolio
             sequence_length: Longitud de la secuencia (ventana)
             device: Dispositivo de cómputo
-            config_override: Configuración opcional para sobrescribir
+            config_override: Configuración requerida para el agente
             is_distributed: Flag para activar el modo distribuido con DDP
         """
         self.device = device or torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -67,12 +67,15 @@ class TransformerSACAgent:
         self.sequence_length = sequence_length
         self.action_dim = action_space_shape[0]
         
-        # Configuración
-        self.config = config_override or self._load_config_from_yaml()
+        # Configuración - ahora exclusivamente del parámetro config_override
+        self.config = config_override
+        
+        # Extraer sub-configuraciones para claridad
+        sac_params = self.config.get('hiperparametros_sac', {})
         
         # Hiperparámetros
-        self.gamma = self.config['gamma']
-        self.tau = self.config['tau']
+        self.gamma = sac_params['gamma']
+        self.tau = sac_params['tau']
         self.batch_size = self.config['batch_size']
         self.learning_frequency = self.config['learning_frequency']
         self.update_target_frequency = self.config['update_target_frequency']
@@ -88,10 +91,10 @@ class TransformerSACAgent:
         self._init_optimizers()
         
         # Parámetro de temperatura alpha (entropía)
-        self.learn_alpha = self.config['learn_alpha']
+        self.learn_alpha = sac_params['learn_alpha']
         
         # Manejar target_entropy: puede ser 'auto' o un valor numérico
-        target_entropy_config = self.config['target_entropy']
+        target_entropy_config = sac_params['target_entropy']
         if target_entropy_config == 'auto':
             # Calcular automáticamente como -dim_action
             self.target_entropy = -float(self.action_dim)
@@ -103,21 +106,21 @@ class TransformerSACAgent:
         
         if self.learn_alpha:
             self.log_alpha = torch.tensor(
-                self.config['initial_log_alpha'], 
+                sac_params['initial_log_alpha'], 
                 dtype=torch.float32, 
                 requires_grad=True, 
                 device=self.device
             )
-            self.alpha_optimizer = optim.Adam([self.log_alpha], lr=self.config['alpha_learning_rate'])
+            self.alpha_optimizer = optim.Adam([self.log_alpha], lr=sac_params['alpha_learning_rate'])
         else:
             self.log_alpha = torch.tensor(
-                self.config['initial_log_alpha'], 
+                sac_params['initial_log_alpha'], 
                 dtype=torch.float32, 
                 device=self.device
             )
         
         # Inicializar GradScaler para Automatic Mixed Precision (AMP)
-        self.scaler = torch.cuda.amp.GradScaler(enabled=(self.device.type == 'cuda'))
+        self.scaler = GradScaler(enabled=(self.device.type == 'cuda'))
         
         logger.info(f"TransformerSACAgent inicializado en {self.device}. Modo distribuido: {self.is_distributed}")
         logger.info(f"  - Observación shape: {observation_space_shape}")
@@ -129,34 +132,10 @@ class TransformerSACAgent:
         logger.info(f"  - Target entropy: {self.target_entropy}")
         logger.info(f"  - AMP habilitado: {self.device.type == 'cuda'}")
     
-    def _load_config_from_yaml(self) -> Dict[str, Any]:
-        """Carga configuración desde config.yaml."""
-        return {
-            'gamma': config.gamma,
-            'tau': config.tau,
-            'batch_size': config.batch_size,
-            'actor_learning_rate': config.actor_learning_rate,
-            'critic_learning_rate': config.critic_learning_rate,
-            'alpha_learning_rate': config.alpha_learning_rate,
-            'learn_alpha': config.learn_alpha,
-            'target_entropy': config.target_entropy,
-            'initial_log_alpha': config.initial_log_alpha,
-            'learning_frequency': config.learning_frequency,
-            'update_target_frequency': config.update_target_frequency,
-            'transformer_config': {
-                'd_model': config.d_model,
-                'n_head': config.n_head,
-                'num_encoder_layers': config.num_encoder_layers,
-                'dim_feedforward': config.dim_feedforward,
-                'dropout_rate': config.dropout_rate
-            },
-            'mlp_hidden_dims': config.hidden_dims
-        }
-    
     def _init_networks(self) -> None:
         """Inicializa las redes y las envuelve para DDP si está en modo distribuido."""
-        transformer_config = self.config['transformer_config']
-        mlp_hidden_dims = self.config['mlp_hidden_dims']
+        transformer_config = self.config['transformer']
+        mlp_hidden_dims = self.config['mlp_heads']['hidden_dims']
         
         # Red del Actor
         self.actor = ActorNetwork(
@@ -165,18 +144,18 @@ class TransformerSACAgent:
             transformer_config=transformer_config,
             mlp_hidden_dims=mlp_hidden_dims,
             action_dim=self.action_dim,
-            max_seq_len=self.sequence_length
+            agent_config=self.config  # Pasar la configuración completa
         ).to(self.device)
         logger.info("✅ ActorNetwork creado.")
 
-        # Redes de los Críticos (sin JIT)
+        # Redes de los Críticos
         self.critic_1 = CriticNetwork(
             market_features=self.market_features,
             portfolio_features=self.portfolio_features,
             action_dim=self.action_dim,
             transformer_config=transformer_config,
             mlp_hidden_dims=mlp_hidden_dims,
-            max_seq_len=self.sequence_length
+            agent_config=self.config  # Pasar la configuración completa
         ).to(self.device)
         
         self.critic_2 = CriticNetwork(
@@ -185,18 +164,18 @@ class TransformerSACAgent:
             action_dim=self.action_dim,
             transformer_config=transformer_config,
             mlp_hidden_dims=mlp_hidden_dims,
-            max_seq_len=self.sequence_length
+            agent_config=self.config  # Pasar la configuración completa
         ).to(self.device)
-        logger.info("✅ CriticNetworks creados (sin JIT).")
+        logger.info("✅ CriticNetworks creados.")
 
-        # Redes objetivo (copias de los críticos, sin JIT)
+        # Redes objetivo
         self.critic_target_1 = CriticNetwork(
             market_features=self.market_features,
             portfolio_features=self.portfolio_features,
             action_dim=self.action_dim,
             transformer_config=transformer_config,
             mlp_hidden_dims=mlp_hidden_dims,
-            max_seq_len=self.sequence_length
+            agent_config=self.config  # Pasar la configuración completa
         ).to(self.device)
         
         self.critic_target_2 = CriticNetwork(
@@ -205,7 +184,7 @@ class TransformerSACAgent:
             action_dim=self.action_dim,
             transformer_config=transformer_config,
             mlp_hidden_dims=mlp_hidden_dims,
-            max_seq_len=self.sequence_length
+            agent_config=self.config  # Pasar la configuración completa
         ).to(self.device)
         logger.info("✅ Critic Target Networks creados (sin JIT).")
 
@@ -239,19 +218,20 @@ class TransformerSACAgent:
     
     def _init_optimizers(self) -> None:
         """Inicializa los optimizadores."""
+        sac_params = self.config.get('hiperparametros_sac', {})
         self.actor_optimizer = optim.Adam(
             self.actor.parameters(), 
-            lr=self.config['actor_learning_rate']
+            lr=sac_params['actor_learning_rate']
         )
         
         self.critic_1_optimizer = optim.Adam(
             self.critic_1.parameters(), 
-            lr=self.config['critic_learning_rate']
+            lr=sac_params['critic_learning_rate']
         )
         
         self.critic_2_optimizer = optim.Adam(
             self.critic_2.parameters(), 
-            lr=self.config['critic_learning_rate']
+            lr=sac_params['critic_learning_rate']
         )
     
     @property
@@ -288,18 +268,39 @@ class TransformerSACAgent:
             Acción seleccionada
         """
         with torch.no_grad():
-            # Obtener el modelo actor subyacente
             actor_model = self._get_actor_model()
+            mean, _ = actor_model(market_data, portfolio_data)
             
             if deterministic:
-                # Para evaluación: usar la media de la distribución
-                mean, _ = actor_model(market_data, portfolio_data)
                 action = torch.tanh(mean)
             else:
-                # Para entrenamiento: muestrear de la distribución
-                action, _ = actor_model.sample(market_data, portfolio_data)
+                # Para entrenamiento, muestreamos desde la distribución que se crea aquí
+                mean, log_std = actor_model(market_data, portfolio_data)
+                std = torch.exp(log_std)
+                normal = torch.distributions.Normal(mean, std)
+                x_t = normal.rsample()  # Reparameterization trick
+                action = torch.tanh(x_t)
         
         return action.cpu().numpy().flatten()
+
+    def sample_action(self, market_data: torch.Tensor, portfolio_data: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Muestrea una acción de la política y calcula su log_prob.
+        Esto es usado durante el paso de aprendizaje.
+        """
+        actor_model = self._get_actor_model()
+        mean, log_std = actor_model(market_data, portfolio_data)
+        std = torch.exp(log_std)
+        
+        normal = torch.distributions.Normal(mean, std)
+        x_t = normal.rsample()  # Para permitir backprop
+        action = torch.tanh(x_t)
+        
+        log_prob = normal.log_prob(x_t)
+        log_prob -= torch.log(1 - action.pow(2) + 1e-6) # Corrección de Jacobiano para tanh
+        log_prob = log_prob.sum(dim=1, keepdim=True)
+        
+        return action, log_prob
     
     def learn(
         self,
@@ -345,7 +346,7 @@ class TransformerSACAgent:
             actor_model = self._get_actor_model()
             
             # Siguiente acción y log_prob usando la política actual
-            next_actions, next_log_probs = actor_model.sample(next_market_data, next_portfolio_data)
+            next_actions, next_log_probs = self.sample_action(next_market_data, next_portfolio_data)
             
             # Q-valores objetivo (las redes objetivo nunca están envueltas en DDP)
             target_q1 = self.critic_target_1(next_market_data, next_portfolio_data, next_actions)
@@ -358,7 +359,7 @@ class TransformerSACAgent:
             q_targets = scaled_rewards.unsqueeze(1) + self.gamma * (1 - done_mask.float().unsqueeze(1)) * target_q
         
         # Actualizar críticos
-        with torch.cuda.amp.autocast(enabled=(self.device.type == 'cuda')):
+        with autocast(enabled=(self.device.type == 'cuda')):
             # Obtener los modelos críticos subyacentes
             critic_1_model = self._get_critic_model(self.critic_1)
             critic_2_model = self._get_critic_model(self.critic_2)
@@ -380,10 +381,10 @@ class TransformerSACAgent:
         self.scaler.step(self.critic_2_optimizer)
         
         # Actualizar actor
-        with torch.cuda.amp.autocast(enabled=(self.device.type == 'cuda')):
+        with autocast(enabled=(self.device.type == 'cuda')):
             # Obtener los modelos subyacentes
             actor_model = self._get_actor_model()
-            new_actions, log_probs = actor_model.sample(market_data, portfolio_data)
+            new_actions, log_probs = self.sample_action(market_data, portfolio_data)
             
             # Obtener los modelos críticos subyacentes
             critic_1_model = self._get_critic_model(self.critic_1)
@@ -402,7 +403,7 @@ class TransformerSACAgent:
         # Actualizar alpha si es aprendible
         alpha_loss = torch.tensor(0.0)
         if self.learn_alpha:
-            with torch.cuda.amp.autocast(enabled=(self.device.type == 'cuda')):
+            with autocast(enabled=(self.device.type == 'cuda')):
                 alpha_loss = -(self.log_alpha * (log_probs + self.target_entropy).detach()).mean()
             
             self.alpha_optimizer.zero_grad()

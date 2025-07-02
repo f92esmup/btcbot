@@ -8,6 +8,7 @@ import torch
 from pathlib import Path
 from typing import Dict, Any, Optional, Tuple
 from src.agente.replay_buffer import ReplayBuffer
+from src.utils.observation_parser import parse_observation
 
 
 class Trainer:
@@ -49,34 +50,6 @@ class Trainer:
             action_dim=env.action_space.shape[0]
         )
         
-    def _parse_observation(self, observation: np.ndarray) -> Tuple[torch.Tensor, torch.Tensor]:
-        """
-        Parse observation from environment into market and portfolio tensors.
-        
-        Args:
-            observation: Raw observation from environment
-            
-        Returns:
-            Tuple[torch.Tensor, torch.Tensor]: (market_data, portfolio_data) tensors
-        """
-        # Environment observation is concatenated: [market_data_flat, portfolio_data]
-        ventana_size = self.env.config_entorno['ventana_observacion_size']
-        num_features_mercado = len(self.env.column_names)
-        market_features_total = ventana_size * num_features_mercado
-        
-        # Split observation
-        market_data_flat = observation[:market_features_total]
-        portfolio_data_flat = observation[market_features_total:]
-        
-        # Reshape market data to (sequence_length, num_features)
-        market_data = market_data_flat.reshape(ventana_size, num_features_mercado)
-        
-        # Convert to tensors and add batch dimension
-        market_tensor = torch.FloatTensor(market_data).unsqueeze(0).to(self.agent.device)
-        portfolio_tensor = torch.FloatTensor(portfolio_data_flat).unsqueeze(0).to(self.agent.device)
-        
-        return market_tensor, portfolio_tensor
-    
     def _parse_observation_batch(self, observations_batch: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Vectorized parsing of a batch of observations.
@@ -136,9 +109,9 @@ class Trainer:
             obs, _ = self.env.reset(seed=current_episode_seed)
             episode_return = 0
             episode_length = 0
-            initial_balance = self.env.balance_actual
-            initial_equity = self.env.equity_actual
-            max_equity_episode = self.env.equity_actual
+            initial_balance = self.env.portfolio.balance
+            initial_equity = self.env.portfolio.equity
+            max_equity_episode = self.env.portfolio.equity
             
             # Episode trading metrics
             episode_trades_count = 0
@@ -149,7 +122,7 @@ class Trainer:
             episode_total_roe_realized = 0.0
             episode_margins_used = []
             
-            num_trades_inicio_episodio = len(self.env.historial_trades)
+            num_trades_inicio_episodio = len(self.env.portfolio.historial_trades)
             
             # Episode loss tracking
             ep_actor_losses = []
@@ -160,7 +133,7 @@ class Trainer:
             done = False
             while not done:
                 # Parse observation and select action
-                market_data, portfolio_data = self._parse_observation(obs)
+                market_data, portfolio_data = parse_observation(obs, self.env.config_entorno, self.agent.device)
                 action = self.agent.select_action(market_data, portfolio_data, deterministic=False)
                 
                 # Execute action
@@ -208,14 +181,14 @@ class Trainer:
                 episode_length += 1
                 
                 # Update max equity for episode drawdown
-                max_equity_episode = max(max_equity_episode, self.env.equity_actual)
+                max_equity_episode = max(max_equity_episode, self.env.portfolio.equity)
                 
                 # Track individual trades
                 if info.get('trade_ejecutado') and info.get('pnl_realizado', 0) != 0:
                     self.global_trade_counter += 1
                     episode_trades_count += 1
                     
-                    ultimo_trade = self.env.historial_trades[-1]
+                    ultimo_trade = self.env.portfolio.historial_trades[-1]
                     
                     pnl_abs_trade = ultimo_trade.get('pnl_abs', 0.0)
                     roe_trade = ultimo_trade.get('roe', 0.0)
@@ -246,7 +219,7 @@ class Trainer:
                         self.logger.log_per_trade_metrics(self.global_trade_counter, trade_data)
             
             # Calculate episode profit
-            final_balance = self.env.balance_actual
+            final_balance = self.env.portfolio.balance
             profit_pct = ((final_balance - initial_balance) / initial_balance) * 100
             
             # Store metrics
@@ -262,7 +235,7 @@ class Trainer:
                 alpha_values.append(self.agent.alpha.item())
             
             # Prepare metrics for logging
-            drawdown_episode = (max_equity_episode - self.env.equity_actual) / max_equity_episode if max_equity_episode > 0 else 0
+            drawdown_episode = (max_equity_episode - self.env.portfolio.equity) / max_equity_episode if max_equity_episode > 0 else 0
             win_rate_episode = (episode_winning_trades / episode_trades_count) * 100 if episode_trades_count > 0 else 0
             avg_roe_episode = (episode_total_roe_realized / episode_trades_count) if episode_trades_count > 0 else 0.0
             avg_margin_used_episode = np.mean(episode_margins_used) if episode_margins_used else 0.0
@@ -280,7 +253,7 @@ class Trainer:
             
             env_metrics = {
                 'drawdown_episode': drawdown_episode,
-                'final_balance': self.env.balance_actual,
+                'final_balance': self.env.portfolio.balance,
                 'initial_balance': initial_balance
             }
             
