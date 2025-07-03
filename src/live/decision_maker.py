@@ -37,21 +37,17 @@ class DecisionMaker:
         self.env_config = main_config.get('environment', {})
         agent_config = main_config.get('agent', {})
 
-        # 2. Use the injected scaler instead of loading it
-        # Asegurarse de que el scaler esté ajustado
+        # 2. Asegurarse de que el scaler esté ajustado
         if not hasattr(self.scaler, 'n_features_in_'):
              raise ValueError("El scaler inyectado no parece estar ajustado (no tiene 'n_features_in_').")
-        # 3. Inferir parámetros del scaler y run_config
-        self.market_features = self.scaler.n_features_in_
-        sequence_length = self.env_config['ventana_observacion_size']
-        # Leer el número de características del portfolio desde la configuración del agente
-        self.portfolio_features = agent_config.get('architecture', {}).get('portfolio_features', 4)
-        # Las características de mercado son el total menos las del portfolio
-        # self.market_features = (num_total_features - self.portfolio_features) // sequence_length
-        self.sequence_length = sequence_length
 
-        # 4. Instanciar el agente con config_override
-        observation_space_shape = (sequence_length * self.market_features + self.portfolio_features,)
+        # 3. Determinar la arquitectura del agente desde la "Fuente de la Verdad"
+        self.market_features = self.scaler.n_features_in_
+        self.sequence_length = self.env_config['ventana_observacion_size']
+        self.portfolio_features = agent_config.get('architecture', {}).get('portfolio_features', 4)
+
+        # 4. Instanciar el agente con la configuración y arquitectura correctas
+        observation_space_shape = (self.sequence_length * self.market_features + self.portfolio_features,)
         action_space_shape = (1,)
         
         self.agent = TransformerSACAgent(
@@ -82,7 +78,7 @@ class DecisionMaker:
         self.agent.eval_mode()
         
         print(f"✅ Agente cargado exitosamente desde run_id: {self.run_id}")
-        print(f"   - Arquitectura inferida del scaler: {num_total_features} features total.")
+        print(f"   - Arquitectura del modelo cargada desde la configuración del run.")
     
     def get_action(self, observation: np.ndarray) -> float:
         """

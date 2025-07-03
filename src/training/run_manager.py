@@ -526,12 +526,11 @@ class RunManager:
             checkpoint_path = f"gs://{self.gcs_utils.bucket_name}/{path_prefix}"
         else:
             # Ensure checkpoint directory exists using prefix
-            checkpoint_dir = Path(f"{prefix}/checkpoints")
-            checkpoint_dir.mkdir(parents=True, exist_ok=True)
-            path_prefix = str(checkpoint_dir / f"checkpoint_episode_{episode + 1}")
-            args = (agent_state, path_prefix)
+            path_prefix = Path(f"{prefix}/checkpoints/checkpoint_episode_{episode + 1}")
+            path_prefix.mkdir(parents=True, exist_ok=True)
+            args = (agent_state, str(path_prefix))
             target_worker = _save_worker_local
-            checkpoint_path = path_prefix
+            checkpoint_path = str(path_prefix)
         
         # Launch asynchronous save process
         save_process = Process(target=target_worker, args=args)
@@ -689,15 +688,14 @@ class RunManager:
             path_prefix = f"{prefix}/best_model"
             args = (agent_state, path_prefix, self.gcp_config)
             target_worker = _save_worker_gcs
-            best_model_path = f"gs://{self.gcs_utils.bucket_name}/{prefix}/best_model"
+            best_model_path = f"gs://{self.gcs_utils.bucket_name}/{path_prefix}"
         else:
             # Ensure best model directory exists using prefix
-            best_model_dir = Path(f"{prefix}/best_model")
-            best_model_dir.mkdir(parents=True, exist_ok=True)
-            path_prefix = str(best_model_dir / "best_model")
-            args = (agent_state, path_prefix)
+            path_prefix = Path(f"{prefix}/best_model")
+            path_prefix.mkdir(parents=True, exist_ok=True)
+            args = (agent_state, str(path_prefix))
             target_worker = _save_worker_local
-            best_model_path = path_prefix
+            best_model_path = str(path_prefix)
         
         # Launch asynchronous save process
         save_process = Process(target=target_worker, args=args)
@@ -751,15 +749,14 @@ class RunManager:
             path_prefix = f"{prefix}/final_model"
             args = (agent_state, path_prefix, self.gcp_config)
             target_worker = _save_worker_gcs
-            final_model_path = f"gs://{self.gcs_utils.bucket_name}/{prefix}/final_model"
+            final_model_path = f"gs://{self.gcs_utils.bucket_name}/{path_prefix}"
         else:
             # Ensure final model directory exists using prefix
-            final_model_dir = Path(f"{prefix}/final_model")
-            final_model_dir.mkdir(parents=True, exist_ok=True)
-            path_prefix = str(final_model_dir / "final_model")
-            args = (agent_state, path_prefix)
+            path_prefix = Path(f"{prefix}/final_model")
+            path_prefix.mkdir(parents=True, exist_ok=True)
+            args = (agent_state, str(path_prefix))
             target_worker = _save_worker_local
-            final_model_path = path_prefix
+            final_model_path = str(path_prefix)
         
         # Launch asynchronous save process
         save_process = Process(target=target_worker, args=args)

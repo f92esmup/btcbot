@@ -219,14 +219,14 @@ def main():
             # Construir ruta de metadatos
             storage_mode = local_config_dict.get('normalization', {}).get('storage_mode', 'local')
             
-            # Create a temporary RunManager instance just for loading metadata
-            temp_run_manager = RunManager(
+            # Crear instancia única de RunManager
+            run_manager = RunManager(
                 storage_mode=storage_mode,
                 gcp_config=gcp_config_for_load
             )
             
-            # Use the new centralized method to load metadata
-            data_run_metadata = temp_run_manager.load_data_run_metadata(args.data_run_id)
+            # Usar la instancia única para cargar metadatos
+            data_run_metadata = run_manager.load_data_run_metadata(args.data_run_id)
             
             # Verificar que los metadatos sean válidos
             if 'experiment_parameters' not in data_run_metadata:

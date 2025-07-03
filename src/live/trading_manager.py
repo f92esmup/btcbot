@@ -133,6 +133,9 @@ class LiveTradingManager:
     def on_new_candle(self, live_dataframe: pd.DataFrame):
         print(f"\n--- Nueva Vela Recibida: {live_dataframe.index[-1]} ---")
         
+        # Sincronizar el balance al inicio de cada ciclo
+        self.portfolio.sync_balance()
+
         log_data = {
             'run_id': self.run_id,
             'symbol': self.symbol,

@@ -127,6 +127,7 @@ class Adquisicion:
         self.end_date = end_date
         self.raw_data = []
         self.dataframe = None
+        self.time_offset_ms = 0
         
         # Almacenar configuración inyectada
         self.config = config_dict or {}
@@ -163,6 +164,20 @@ class Adquisicion:
             self.logger.warning(f"Error inicializando cliente de Binance: {e}")
             self.logger.info("Inicializando cliente sin API keys (solo datos públicos)")
             self.client = Client()
+        
+        # Sincronizar tiempo con el servidor de Binance
+        self._sync_time()
+        
+    def _sync_time(self):
+        """Sincroniza el tiempo local con el del servidor de Binance para calcular un offset."""
+        try:
+            server_time = self.client.get_server_time()['serverTime']
+            local_time = int(time.time() * 1000)
+            self.time_offset_ms = server_time - local_time
+            self.logger.info(f"Sincronización de tiempo con Binance completada. Offset: {self.time_offset_ms} ms")
+        except (BinanceAPIException, BinanceRequestException) as e:
+            self.logger.warning(f"No se pudo sincronizar el tiempo con Binance: {e}. Se usará el tiempo local (offset 0 ms).")
+            self.time_offset_ms = 0
         
     def main(self) -> pd.DataFrame:
         """
@@ -244,8 +259,8 @@ class Adquisicion:
             end_date_obj = datetime.strptime(self.end_date, '%Y-%m-%d')
             end_timestamp = int(end_date_obj.replace(tzinfo=timezone.utc).timestamp() * 1000)
         else:
-            # Si no se especifica end_date, usar el timestamp actual
-            end_timestamp = int(datetime.now(timezone.utc).timestamp() * 1000)
+            # Si no se especifica end_date, usar el timestamp actual ajustado con el offset
+            end_timestamp = int(time.time() * 1000) + self.time_offset_ms
         
         current_timestamp = end_timestamp
         
@@ -357,8 +372,8 @@ class Adquisicion:
             end_date_obj = datetime.strptime(self.end_date, '%Y-%m-%d')
             end_timestamp = int(end_date_obj.replace(tzinfo=timezone.utc).timestamp() * 1000)
         else:
-            # Si no se especifica end_date, usar el timestamp actual
-            end_timestamp = int(datetime.now(timezone.utc).timestamp() * 1000)
+            # Si no se especifica end_date, usar el timestamp actual ajustado con el offset
+            end_timestamp = int(time.time() * 1000) + self.time_offset_ms
         
         current_timestamp = end_timestamp
         

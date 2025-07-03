@@ -65,6 +65,22 @@ class LivePortfolio(BasePortfolio):
         }
         print(f"✅ Estado sincronizado. Balance inicial: {self._balance:.2f} USDT")
 
+    def sync_balance(self):
+        """
+        Sincroniza el balance local con el balance real de la cuenta de Binance.
+        """
+        try:
+            account_balance_info = self.client.futures_account_balance()
+            for asset in account_balance_info:
+                if asset['asset'] == 'USDT':
+                    balance_remoto = float(asset['balance'])
+                    if abs(self._balance - balance_remoto) > 0.01: # Comprobar si hay una diferencia significativa
+                        print(f"🔄 Sincronizando balance. Local: {self._balance:.2f}, Remoto: {balance_remoto:.2f}. Diferencia: {balance_remoto - self._balance:.2f}")
+                        self._balance = balance_remoto
+                    return
+        except BinanceAPIException as e:
+            print(f"⚠️ Error de API al sincronizar balance: {e}. Se usará el balance local.")
+
     def execute_order(self, intencion: str, magnitud: float, precio: float) -> Tuple[bool, float]:
         posicion_actual_tipo = self._current_position['tipo']
 
@@ -150,7 +166,12 @@ class LivePortfolio(BasePortfolio):
 
         print(f"PnL Real (API): {pnl_real:.4f} USDT")
 
-        # 4. Actualizar el historial y el estado del portfolio
+        # 4. Actualizar el balance local con el PnL y registrarlo
+        balance_anterior = self._balance
+        self._balance += pnl_real
+        print(f"Balance actualizado: {balance_anterior:.2f} -> {self._balance:.2f} USDT")
+
+        # 5. Actualizar el historial y el estado del portfolio
         self._historial_trades.append({
             'tipo': self._current_position['tipo'].name,
             'pnl_abs': pnl_real 
