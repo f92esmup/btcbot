@@ -144,17 +144,13 @@ class RunManager:
         """
         return {k: v.cpu() if hasattr(v, 'cpu') else v for k, v in state_dict.items()}
     
-    def __init__(self, base_path: str = None, run_id: str = None, gcs_utils=None, 
-                 storage_mode: str = "local", gcp_config: Dict[str, Any] = None):
+    def __init__(self, storage_mode: str = "local", gcp_config: Optional[Dict[str, Any]] = None):
         """
         Initialize the RunManager.
         
         Args:
-            base_path: Base path for storing artifacts (optional, will use default if not provided)
-            run_id: Unique identifier for this training run (optional, will generate if not provided)
-            gcs_utils: GCS utilities instance (optional, will create if needed for GCP mode)
             storage_mode: Storage mode ('local' or 'gcp', defaults to 'local')
-            gcp_config: GCP configuration dictionary (required when storage_mode is 'gcp' and gcs_utils is None)
+            gcp_config: GCP configuration dictionary (required when storage_mode is 'gcp')
         """
         self.storage_mode = storage_mode
         
@@ -168,61 +164,61 @@ class RunManager:
         if self.storage_mode == "gcp" and not self.gcs_bucket_name:
             raise ValueError("gcs_bucket_name is required when storage_mode is 'gcp'. Provide it via gcp_config parameter.")
         
-        # Handle base_path
-        if base_path is None:
-            if self.storage_mode == "gcp":
-                # For GCP, we'll set base_path later when run_id is known
-                self.base_path = None
-            else:
-                self.base_path = "training_runs"
-        else:
-            self.base_path = base_path
-        
-        # Handle run_id
-        if run_id is None:
-            # Generate a temporary run_id that can be overridden later
-            from datetime import datetime
-            current_time = datetime.now().strftime('%Y%m%d-%H%M%S')
-            self.run_id = f"temp_{current_time}"
-            self._temp_run_id = True
-        else:
-            self.run_id = run_id
-            self._temp_run_id = False
-        
-        # Update base_path with run_id if needed
-        if self.base_path is None and self.storage_mode == "gcp":
-            self.base_path = f"gs://{self.gcs_bucket_name}/training_runs/{self.run_id}"
-        
         # Store gcp_config for worker processes
         self.gcp_config = gcp_config
         
         # Handle GCS utils
         if self.storage_mode == "gcp":
-            if gcs_utils is None:
-                if gcp_config is None:
-                    raise ValueError("gcp_config is required when storage_mode is 'gcp' and gcs_utils is not provided")
-                
-                # Create new GCSUtils instance with the provided configuration
-                from src.configuration.gcs_utils import GCSUtils
-                self.gcs_utils = GCSUtils(gcp_config)
-            else:
-                self.gcs_utils = gcs_utils
+            if gcp_config is None:
+                raise ValueError("gcp_config is required when storage_mode is 'gcp'")
+            
+            # Create new GCSUtils instance with the provided configuration
+            from src.configuration.gcs_utils import GCSUtils
+            self.gcs_utils = GCSUtils(gcp_config)
         else:
-            self.gcs_utils = gcs_utils
+            self.gcs_utils = None
         
         # Setup logging
         self.logger = logging.getLogger(__name__)
     
-    def save_run_config(self, full_run_config: Dict[str, Any]) -> None:
+    def _get_data_run_prefix(self, data_run_id: str) -> str:
+        """
+        Get the path prefix for a specific data run.
+        
+        Args:
+            data_run_id: The unique identifier for the data run
+            
+        Returns:
+            The path prefix string for the data run (e.g., "data_runs/ID_123")
+        """
+        return f"data_runs/{data_run_id}"
+    
+    def _get_training_run_prefix(self, training_run_id: str) -> str:
+        """
+        Get the path prefix for a specific training run.
+        
+        Args:
+            training_run_id: The unique identifier for the training run
+            
+        Returns:
+            The path prefix string for the training run (e.g., "training_runs/ID_ABC")
+        """
+        return f"training_runs/{training_run_id}"
+    
+    def save_run_config(self, training_run_id: str, full_run_config: Dict[str, Any]) -> None:
         """
         Saves the complete, pre-assembled run configuration to config_run.yaml.
 
         Args:
+            training_run_id: The ID of the training run to save configuration for
             full_run_config (Dict[str, Any]): The complete configuration dictionary to save.
                                           This dictionary should already contain all necessary
                                           sections (run_info, command_line_args, config).
         """
-        self.logger.info("Saving run configuration...")
+        self.logger.info(f"Saving run configuration for training run: {training_run_id}")
+        
+        # Get training run prefix using helper
+        prefix = self._get_training_run_prefix(training_run_id)
 
         if self.storage_mode == "gcp":
             # For GCP, save temporarily and upload
@@ -231,8 +227,8 @@ class RunManager:
                 temp_path = temp_file.name
             
             try:
-                # Upload to GCS in training_runs directory
-                gcs_blob_name = f"training_runs/{self.run_id}/config_run.yaml"
+                # Upload to GCS using the prefix
+                gcs_blob_name = f"{prefix}/config_run.yaml"
                 if self.gcs_utils.upload_file_to_gcs(temp_path, gcs_blob_name):
                     self.logger.info(f"Run configuration saved to GCS: gs://{self.gcs_bucket_name}/{gcs_blob_name}")
                 else:
@@ -240,29 +236,32 @@ class RunManager:
             finally:
                 os.unlink(temp_path)
         else:
-            # For local, save directly to training_runs directory
-            config_path = Path(f"training_runs/{self.run_id}") / "config_run.yaml"
+            # For local, save using the prefix
+            config_path = Path(prefix) / "config_run.yaml"
             config_path.parent.mkdir(parents=True, exist_ok=True)
             with open(config_path, 'w', encoding='utf-8') as f:
                 yaml.dump(full_run_config, f, default_flow_style=False, allow_unicode=True)
             self.logger.info(f"Run configuration saved to: {config_path}")
     
-    def find_latest_checkpoint(self, run_id_to_check: str) -> Optional[Tuple[str, int]]:
+    def find_latest_checkpoint(self, training_run_id: str) -> Optional[Tuple[str, int]]:
         """
-        Find the latest checkpoint in a specific run.
+        Find the latest checkpoint in a specific training run.
         
         Args:
-            run_id_to_check: The run ID to search for checkpoints
+            training_run_id: The training run ID to search for checkpoints
             
         Returns:
             Tuple of (checkpoint_path, episode_number) if found, None otherwise
         """
-        self.logger.info(f"Searching for checkpoints in run: {run_id_to_check}")
+        self.logger.info(f"Searching for checkpoints in training run: {training_run_id}")
+        
+        # Get training run prefix using helper
+        prefix = self._get_training_run_prefix(training_run_id)
         
         try:
             if self.storage_mode == "gcp":
                 # GCP mode: search in GCS
-                checkpoint_prefix = f"training_runs/{run_id_to_check}/checkpoints/"
+                checkpoint_prefix = f"{prefix}/checkpoints/"
                 
                 # Search for checkpoint metadata files in the specific run
                 bucket = self.gcs_utils._get_bucket()
@@ -282,16 +281,16 @@ class RunManager:
                             latest_episode = episode_num
                 
                 if latest_episode != -1:
-                    latest_checkpoint_prefix = f"training_runs/{run_id_to_check}/checkpoints/checkpoint_episode_{latest_episode}"
+                    latest_checkpoint_prefix = f"{prefix}/checkpoints/checkpoint_episode_{latest_episode}"
                     self.logger.info(f"Último checkpoint encontrado en GCS: {latest_checkpoint_prefix} (episodio {latest_episode})")
                     return (latest_checkpoint_prefix, latest_episode)
                 else:
-                    self.logger.info(f"No se encontraron checkpoints válidos en el run {run_id_to_check} en GCS")
+                    self.logger.info(f"No se encontraron checkpoints válidos en el training run {training_run_id} en GCS")
                     return None
                     
             else:
                 # Local mode: search in local directory
-                checkpoint_dir = Path(f"training_runs/{run_id_to_check}/checkpoints/")
+                checkpoint_dir = Path(f"{prefix}/checkpoints/")
                 self.logger.info(f"Searching locally: {checkpoint_dir}")
                 
                 if not checkpoint_dir.exists():
@@ -327,11 +326,11 @@ class RunManager:
                     self.logger.info(f"Checkpoint found locally: {latest_checkpoint_path} (episode {latest_episode_number})")
                     return (str(latest_checkpoint_path), latest_episode_number)
                 else:
-                    self.logger.info(f"No valid checkpoints found in run {run_id_to_check}")
+                    self.logger.info(f"No valid checkpoints found in training run {training_run_id}")
                     return None
                     
         except Exception as e:
-            self.logger.error(f"Error searching for checkpoints in run {run_id_to_check}: {e}")
+            self.logger.error(f"Error searching for checkpoints in training run {training_run_id}: {e}")
             return None
     
     def load_data_artifacts(self, data_run_id: str) -> Tuple[Any, Any, Any]:
@@ -346,6 +345,9 @@ class RunManager:
         """
         self.logger.info(f"Loading data artifacts from data_run: {data_run_id}")
         
+        # Get data run prefix using helper
+        prefix = self._get_data_run_prefix(data_run_id)
+        
         try:
             if self.storage_mode == "gcp":
                 # GCP mode: load from Google Cloud Storage
@@ -359,7 +361,7 @@ class RunManager:
                     temp_dataframe_path = temp_file.name
                 
                 try:
-                    dataframe_blob_name = f"{data_run_id}/normalized_dataframe.pkl"
+                    dataframe_blob_name = f"{prefix}/normalized_dataframe.pkl"
                     if self.gcs_utils.download_file_from_gcs(dataframe_blob_name, temp_dataframe_path):
                         with open(temp_dataframe_path, 'rb') as f:
                             normalized_dataframe = pickle.load(f)
@@ -370,20 +372,20 @@ class RunManager:
                     os.unlink(temp_dataframe_path)
                 
                 # Load scaler
-                scaler_blob_name = f"{data_run_id}/scaler.pkl"
+                scaler_blob_name = f"{prefix}/scaler.pkl"
                 scaler = self.gcs_utils.load_scaler_from_gcs(scaler_blob_name)
                 self.logger.info("Scaler loaded from GCS")
                 
                 # Load price_scaler
-                price_scaler_blob_name = f"{data_run_id}/price_scaler.pkl"
+                price_scaler_blob_name = f"{prefix}/price_scaler.pkl"
                 price_scaler = self.gcs_utils.load_price_scaler_from_gcs(price_scaler_blob_name)
                 self.logger.info("Price scaler loaded from GCS")
                 
                 return normalized_dataframe, scaler, price_scaler
                 
             else:
-                # Local mode
-                data_run_path = Path(f"{data_run_id}")
+                # Local mode using prefix
+                data_run_path = Path(prefix)
                 
                 if not data_run_path.exists():
                     raise FileNotFoundError(f"Data run directory not found: {data_run_path}")
@@ -431,10 +433,13 @@ class RunManager:
         """
         self.logger.info(f"Loading metadata from data_run: {data_run_id}")
         
+        # Get data run prefix using helper
+        prefix = self._get_data_run_prefix(data_run_id)
+        
         try:
             if self.storage_mode == "gcp":
                 # GCP mode: load from Google Cloud Storage
-                blob_name = f"{data_run_id}/data_run_metadata.yaml"
+                blob_name = f"{prefix}/data_run_metadata.yaml"
                 
                 # Download blob content directly to memory
                 bucket = self.gcs_utils.client.bucket(self.gcs_bucket_name)
@@ -450,8 +455,8 @@ class RunManager:
                 return metadata
                 
             else:
-                # Local mode
-                metadata_path = Path(f"{data_run_id}/data_run_metadata.yaml")
+                # Local mode using prefix
+                metadata_path = Path(f"{prefix}/data_run_metadata.yaml")
                 
                 if not metadata_path.exists():
                     raise FileNotFoundError(f"Data run metadata not found: {metadata_path}")
@@ -466,17 +471,21 @@ class RunManager:
             self.logger.error(f"Error loading data run metadata for {data_run_id}: {str(e)}")
             raise
     
-    def save_agent_checkpoint(self, agent: TransformerSACAgent, episode: int) -> str:
+    def save_agent_checkpoint(self, training_run_id: str, agent: TransformerSACAgent, episode: int) -> str:
         """
         Save agent checkpoint for a specific episode asynchronously.
         
         Args:
+            training_run_id: The ID of the training run to save checkpoint for
             agent: The agent to save
             episode: Episode number for checkpoint naming
             
         Returns:
             Path where checkpoint will be saved
         """
+        # Get training run prefix using helper
+        prefix = self._get_training_run_prefix(training_run_id)
+        
         # Extract state dictionaries and move to CPU for multiprocessing safety
         # Using "Clean Save" principle: get underlying models without DDP wrappers
         agent_state = {
@@ -505,13 +514,13 @@ class RunManager:
         
         # Determine path and worker function based on storage mode
         if self.storage_mode == "gcp":
-            path_prefix = f"training_runs/{self.run_id}/checkpoints/checkpoint_episode_{episode + 1}"
+            path_prefix = f"{prefix}/checkpoints/checkpoint_episode_{episode + 1}"
             args = (agent_state, path_prefix, self.gcp_config)
             target_worker = _save_worker_gcs
             checkpoint_path = f"gs://{self.gcs_utils.bucket_name}/{path_prefix}"
         else:
-            # Ensure checkpoint directory exists for training runs
-            checkpoint_dir = Path(f"training_runs/{self.run_id}/checkpoints")
+            # Ensure checkpoint directory exists using prefix
+            checkpoint_dir = Path(f"{prefix}/checkpoints")
             checkpoint_dir.mkdir(parents=True, exist_ok=True)
             path_prefix = str(checkpoint_dir / f"checkpoint_episode_{episode + 1}")
             args = (agent_state, path_prefix)
@@ -630,16 +639,20 @@ class RunManager:
             self.logger.error(f"Error loading checkpoint: {str(e)}")
             raise
     
-    def save_best_model(self, agent: TransformerSACAgent) -> str:
+    def save_best_model(self, training_run_id: str, agent: TransformerSACAgent) -> str:
         """
         Save the best performing model asynchronously.
         
         Args:
+            training_run_id: The ID of the training run to save best model for
             agent: The agent to save
             
         Returns:
             Path where model will be saved
         """
+        # Get training run prefix using helper
+        prefix = self._get_training_run_prefix(training_run_id)
+        
         # Extract state dictionaries and move to CPU for multiprocessing safety
         # Using "Clean Save" principle: get underlying models without DDP wrappers
         agent_state = {
@@ -667,13 +680,13 @@ class RunManager:
         
         # Determine path and worker function based on storage mode
         if self.storage_mode == "gcp":
-            path_prefix = f"training_runs/{self.run_id}/best_model"
+            path_prefix = f"{prefix}/best_model"
             args = (agent_state, path_prefix, self.gcp_config)
             target_worker = _save_worker_gcs
-            best_model_path = f"gs://{self.gcs_utils.bucket_name}/training_runs/{self.run_id}/best_model"
+            best_model_path = f"gs://{self.gcs_utils.bucket_name}/{prefix}/best_model"
         else:
-            # Ensure best model directory exists for training runs
-            best_model_dir = Path(f"training_runs/{self.run_id}/best_model")
+            # Ensure best model directory exists using prefix
+            best_model_dir = Path(f"{prefix}/best_model")
             best_model_dir.mkdir(parents=True, exist_ok=True)
             path_prefix = str(best_model_dir / "best_model")
             args = (agent_state, path_prefix)
@@ -688,16 +701,20 @@ class RunManager:
         
         return str(best_model_path)
     
-    def save_final_model(self, agent: TransformerSACAgent) -> str:
+    def save_final_model(self, training_run_id: str, agent: TransformerSACAgent) -> str:
         """
         Save the final model at the end of training asynchronously.
         
         Args:
+            training_run_id: The ID of the training run to save final model for
             agent: The agent to save
             
         Returns:
             Path where model will be saved
         """
+        # Get training run prefix using helper
+        prefix = self._get_training_run_prefix(training_run_id)
+        
         # Extract state dictionaries and move to CPU for multiprocessing safety
         # Using "Clean Save" principle: get underlying models without DDP wrappers
         agent_state = {
@@ -725,13 +742,13 @@ class RunManager:
         
         # Determine path and worker function based on storage mode
         if self.storage_mode == "gcp":
-            path_prefix = f"training_runs/{self.run_id}/final_model"
+            path_prefix = f"{prefix}/final_model"
             args = (agent_state, path_prefix, self.gcp_config)
             target_worker = _save_worker_gcs
-            final_model_path = f"gs://{self.gcs_utils.bucket_name}/training_runs/{self.run_id}/final_model"
+            final_model_path = f"gs://{self.gcs_utils.bucket_name}/{prefix}/final_model"
         else:
-            # Ensure final model directory exists for training runs
-            final_model_dir = Path(f"training_runs/{self.run_id}/final_model")
+            # Ensure final model directory exists using prefix
+            final_model_dir = Path(f"{prefix}/final_model")
             final_model_dir.mkdir(parents=True, exist_ok=True)
             path_prefix = str(final_model_dir / "final_model")
             args = (agent_state, path_prefix)
@@ -745,31 +762,6 @@ class RunManager:
         self.logger.info(f"🚀 Guardado asíncrono del modelo final iniciado en segundo plano.")
         
         return str(final_model_path)
-    
-    def set_run_context(self, run_id: str, base_path: str = None):
-        """
-        Update the run context with specific run_id and base_path.
-        
-        This is useful when RunManager is created without parameters
-        and the context becomes available later.
-        
-        Args:
-            run_id: The actual run_id to use
-            base_path: The actual base_path to use (optional)
-        """
-        self.run_id = run_id
-        self._temp_run_id = False
-        
-        if base_path is not None:
-            self.base_path = base_path
-        elif self.storage_mode == "gcp":
-            self.base_path = f"gs://{self.gcs_bucket_name}/training_runs/{self.run_id}"
-        else:
-            self.base_path = f"training_runs/{self.run_id}"
-        
-        self.logger.info(f"RunManager context updated - run_id: {self.run_id}, base_path: {self.base_path}")
-
-    
     
     @staticmethod
     def load_training_run_config(training_run_id: str, storage_mode: str = None, gcp_config: Dict[str, Any] = None) -> Optional[Dict[str, Any]]:
@@ -788,10 +780,13 @@ class RunManager:
         logger = logging.getLogger(__name__)
         logger.info(f"Loading configuration for training run: {training_run_id}")
         
+        # Get training run prefix using the same logic as the helper
+        prefix = f"training_runs/{training_run_id}"
+        
         # If storage_mode not provided, try to determine it
         if storage_mode is None:
             # Try local first
-            local_config_path = Path(f"training_runs/{training_run_id}/config_run.yaml")
+            local_config_path = Path(f"{prefix}/config_run.yaml")
             if local_config_path.exists():
                 storage_mode = "local"
             else:
@@ -816,8 +811,8 @@ class RunManager:
                 if not gcs_bucket_name:
                     raise ValueError("bucket_name is required in gcp_config")
                 
-                # Construct GCS blob name for training runs
-                blob_name = f"training_runs/{training_run_id}/config_run.yaml"
+                # Construct GCS blob name using prefix
+                blob_name = f"{prefix}/config_run.yaml"
                 logger.info(f"Downloading config from GCS: {blob_name}")
                 
                 # Download blob content directly to memory
@@ -838,8 +833,8 @@ class RunManager:
                 return config_data
                             
             else:
-                # Local storage mode
-                config_path = Path(f"training_runs/{training_run_id}/config_run.yaml")
+                # Local storage mode using prefix
+                config_path = Path(f"{prefix}/config_run.yaml")
                 logger.info(f"Loading config from local path: {config_path}")
                 
                 if not config_path.exists():

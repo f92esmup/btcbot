@@ -376,25 +376,12 @@ def main():
         gcp_config = local_config_dict.get('gcp', {})
         logger.info(f"[Proceso {rank}] Configuración GCP cargada para RunManager")
 
-    # Determinar base_path según storage_mode (todos los procesos)
-    if storage_mode == "gcp":
-        gcs_bucket_name = gcp_config.get('storage', {}).get('bucket_name')
-        base_path = f"gs://{gcs_bucket_name}/training_runs/{run_id}"
-        logger.info(f"[Proceso {rank}] Modo GCP: Los artefactos se accederán desde {base_path}")
-    else:
-        base_path = Path("training_runs") / run_id
-        if is_chief:
-            base_path.mkdir(parents=True, exist_ok=True)
-        logger.info(f"[Proceso {rank}] Modo Local: Los artefactos se accederán desde {base_path}")
-
     # Crear instancia de RunManager para TODOS los procesos
     run_manager = RunManager(
-        base_path=str(base_path), 
-        run_id=run_id, 
         storage_mode=storage_mode,
         gcp_config=gcp_config
     )
-    logger.info(f"[Proceso {rank}] RunManager creado - Base path: {base_path}")
+    logger.info(f"[Proceso {rank}] RunManager creado para modo: {storage_mode}")
     
     # Solo el proceso jefe inicializa los componentes de logging y configuración
     if is_chief:
@@ -402,7 +389,8 @@ def main():
 
         # Lógica de TensorBoard modificada
         if storage_mode == "local":
-            tensorboard_dir = Path(base_path) / "tensorboard"
+            training_run_prefix = run_manager._get_training_run_prefix(run_id)
+            tensorboard_dir = Path(training_run_prefix) / "tensorboard"
             tensorboard_dir.mkdir(parents=True, exist_ok=True)
         else:
             tensorboard_dir = None
@@ -431,7 +419,7 @@ def main():
                 'run_id': run_id,
                 'timestamp': datetime.now().isoformat(),
                 'storage_mode': storage_mode,
-                'base_path': str(base_path),
+                'base_path': run_manager._get_training_run_prefix(run_id),
                 'operation_mode': operation_mode
             },
             'command_line_args': vars(args),
@@ -452,7 +440,7 @@ def main():
         if is_new_training or operation_mode == "fine_tuning":
             # Guardar configuración del run usando RunManager (SOLO EL JEFE ESCRIBE)
             try:
-                run_manager.save_run_config(full_run_config)
+                run_manager.save_run_config(run_id, full_run_config)
                 logger.info(f"✅ Configuración del training_run guardada con linaje a data_run: {data_run_id}")
             except Exception as e:
                 logger.error(f"❌ Error al guardar config_training_run.yaml: {e}")
@@ -653,6 +641,7 @@ def main():
             evaluator=evaluator,  # Solo el jefe tiene evaluador
             logger=tb_logger if is_chief else None,  # Solo el jefe tiene tb_logger
             run_manager=run_manager if is_chief else None,  # Solo el jefe usa run_manager para escritura
+            training_run_id=run_id if is_chief else None,  # Solo el jefe necesita el training_run_id
             trainer_config=trainer_config,
             logger_console=logger
         )

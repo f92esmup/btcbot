@@ -228,18 +228,16 @@ def main() -> None:
     gcp_config = system_config.get('gcp', {}) if storage_mode == 'gcp' else None
     
     run_manager = RunManager(
-        run_id=data_run_id,
-        base_path=data_run_path,
         storage_mode=storage_mode,
         gcp_config=gcp_config
     )
     
-    # Guardar metadatos del data_run
+    # Guardar metadatos del data_run usando el RunManager
     logger.info("💾 GUARDANDO METADATOS DEL DATASET:")
     metadata_filename = "data_run_metadata.yaml"
     
     if storage_mode == "gcp":
-        # Para GCP, guardamos temporalmente y subimos
+        # Para GCP, guardamos temporalmente y subimos usando RunManager
         import tempfile
         import os
         
@@ -248,7 +246,8 @@ def main() -> None:
             temp_path = temp_file.name
         
         try:
-            gcs_blob_name = f"{data_run_id}/{metadata_filename}"
+            data_run_prefix = run_manager._get_data_run_prefix(data_run_id)
+            gcs_blob_name = f"{data_run_prefix}/{metadata_filename}"
             if run_manager.gcs_utils.upload_file_to_gcs(temp_path, gcs_blob_name):
                 logger.info(f"  ✅ Metadatos guardados en GCS: gs://{run_manager.gcs_bucket_name}/{gcs_blob_name}")
             else:
@@ -257,8 +256,9 @@ def main() -> None:
         finally:
             os.unlink(temp_path)
     else:
-        # Para almacenamiento local
-        metadata_path = Path(data_run_path) / metadata_filename
+        # Para almacenamiento local usando el prefix del RunManager
+        data_run_prefix = run_manager._get_data_run_prefix(data_run_id)
+        metadata_path = Path(data_run_prefix) / metadata_filename
         metadata_path.parent.mkdir(parents=True, exist_ok=True)
         
         with open(metadata_path, 'w', encoding='utf-8') as f:
@@ -353,7 +353,7 @@ def main() -> None:
         # Mostrar resumen final
         logger.info("📊 RESUMEN DEL DATASET CREADO:")
         logger.info(f"  • Data Run ID: {data_run_id}")
-        logger.info(f"  • Ubicación: {data_run_path}")
+        logger.info(f"  • Ubicación: {run_manager._get_data_run_prefix(data_run_id)}")
         logger.info(f"  • Forma del DataFrame: {normalized_dataframe.shape}")
         logger.info(f"  • Rango temporal: {normalized_dataframe.index.min()} → {normalized_dataframe.index.max()}")
         logger.info(f"  • Modo de almacenamiento: {storage_mode}")

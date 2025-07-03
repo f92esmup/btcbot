@@ -17,7 +17,7 @@ class Trainer:
     Uses dependency injection for all components.
     """
     
-    def __init__(self, agent, env, evaluator, logger, run_manager, trainer_config, logger_console):
+    def __init__(self, agent, env, evaluator, logger, run_manager, training_run_id, trainer_config, logger_console):
         """
         Initialize trainer with all dependencies.
         
@@ -27,6 +27,7 @@ class Trainer:
             evaluator: AgentEvaluator instance for periodic evaluation
             logger: TensorboardLogger instance for metrics logging
             run_manager: RunManager instance for file operations
+            training_run_id: The ID of the training run (used for saving models/checkpoints)
             trainer_config: Configuration dict with training parameters
             logger_console: Console logger for status messages
         """
@@ -35,6 +36,7 @@ class Trainer:
         self.evaluator = evaluator
         self.logger = logger
         self.run_manager = run_manager
+        self.training_run_id = training_run_id
         self.config = trainer_config
         self.logger_console = logger_console
         
@@ -331,17 +333,17 @@ class Trainer:
                 # Save best model using RunManager (solo si hay run_manager)
                 if self.run_manager and eval_metrics['mean_return'] > self.best_eval_return:
                     self.best_eval_return = eval_metrics['mean_return']
-                    best_model_path = self.run_manager.save_best_model(self.agent)
+                    best_model_path = self.run_manager.save_best_model(self.training_run_id, self.agent)
                     self.logger_console.info(f"  - Nuevo mejor modelo guardado: {best_model_path}")
             
             # Periodic checkpoint saving (solo si hay run_manager)
             if (episode + 1) % self.config['save_frequency'] == 0 and self.run_manager:
-                self.run_manager.save_agent_checkpoint(self.agent, episode + 1)
+                self.run_manager.save_agent_checkpoint(self.training_run_id, self.agent, episode + 1)
         
         # Final save (solo si hay run_manager)
         final_model_path = None
         if self.run_manager:
-            final_model_path = self.run_manager.save_final_model(self.agent)
+            final_model_path = self.run_manager.save_final_model(self.training_run_id, self.agent)
         
         total_time = time.time() - start_time
         self.logger_console.info(f"\n=== Entrenamiento Completado ===")

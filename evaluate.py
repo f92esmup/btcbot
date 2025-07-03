@@ -270,7 +270,6 @@ def main():
         logger.info(f"Dispositivo configurado: {device}")
 
         run_manager = RunManager(
-            run_id=args.run_id,
             storage_mode=storage_mode,
             gcp_config=gcp_config
         )
