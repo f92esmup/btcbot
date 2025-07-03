@@ -11,7 +11,7 @@ class DecisionMaker:
     Se encarga de cargar el modelo entrenado y proporcionar decisiones.
     """
     
-    def __init__(self, scaler, run_manager: RunManager, run_config: dict, device: torch.device):
+    def __init__(self, scaler, run_manager: RunManager, run_config: dict, device: torch.device, run_id: str):
         """
         Inicializa el DecisionMaker.
 
@@ -20,12 +20,13 @@ class DecisionMaker:
             run_manager (RunManager): Instancia del gestor del run para cargar el modelo.
             run_config (dict): Configuración completa del run.
             device (torch.device): Dispositivo donde ejecutar el modelo (CPU/GPU).
+            run_id (str): El ID del run de entrenamiento a utilizar.
         """
         self.scaler = scaler
         self.run_manager = run_manager
         self.run_config = run_config
         self.device = device
-        self.run_id = run_manager.run_id
+        self.run_id = run_id
 
         # Validar que el scaler inyectado no sea None
         if self.scaler is None:
@@ -68,7 +69,8 @@ class DecisionMaker:
         # 5. Cargar checkpoint con model_prefix correcto
         live_config = main_config.get('live_trading', {})
         model_to_load = live_config.get('default_model_to_load', 'best_model')
-        model_prefix = f"{self.run_id}/{model_to_load}"
+        training_run_prefix = self.run_manager._get_training_run_prefix(self.run_id)
+        model_prefix = f"{training_run_prefix}/{model_to_load}"
         print(f"Cargando modelo: {model_prefix}")
 
         self.run_manager.load_agent_from_checkpoint(

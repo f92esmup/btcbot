@@ -211,12 +211,12 @@ class Normalization:
             self.logger.info("Guardando scaler en Google Cloud Storage...")
             
             try:
-                if self.base_path and self.run_id:
-                    # Usar nueva estructura con run_id
-                    gcs_blob_name = f"{self.run_id}/scaler.pkl"
+                if self.base_path:
+                    # Usar la ruta base completa que ya incluye el run_id
+                    gcs_blob_name = f"{self.base_path}/scaler.pkl"
                     success = self.gcs_utils.save_scaler_to_gcs(self.scaler, gcs_blob_name) if self.gcs_utils else False
                 else:
-                    # Fallback al método original
+                    # Fallback por si base_path no estuviera definido
                     success = self.gcs_utils.save_scaler_to_gcs(self.scaler) if self.gcs_utils else False
                 
                 if success:
@@ -260,12 +260,12 @@ class Normalization:
             self.logger.info("Guardando price_scaler en Google Cloud Storage...")
             
             try:
-                if self.base_path and self.run_id:
-                    # Usar nueva estructura con run_id
-                    gcs_blob_name = f"{self.run_id}/price_scaler.pkl"
+                if self.base_path:
+                    # Usar la ruta base completa que ya incluye el run_id
+                    gcs_blob_name = f"{self.base_path}/price_scaler.pkl"
                     success = self.gcs_utils.save_price_scaler_to_gcs(self.price_scaler, gcs_blob_name) if self.gcs_utils else False
                 else:
-                    # Fallback al método original
+                    # Fallback por si base_path no estuviera definido
                     success = self.gcs_utils.save_price_scaler_to_gcs(self.price_scaler) if self.gcs_utils else False
                 
                 if success:

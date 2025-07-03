@@ -173,7 +173,7 @@ class AgentEvaluator:
             env.historial_equity
         )
         
-        # Construir el diccionario de métricas finales
+        # Construir el diccionario de métricas finales con valores por defecto
         final_metrics = {
             # Métricas básicas del backtest
             'total_return': total_return,
@@ -183,6 +183,8 @@ class AgentEvaluator:
             'final_equity': final_equity,
             
             # Métricas de retornos
+            'mean_return': returns_mean,
+            'std_return': returns_std,
             'mean_step_return': returns_mean,
             'std_step_return': returns_std,
             'volatility': returns_std * np.sqrt(252) if returns_std > 0 else 0.0,  # Anualizada
@@ -203,6 +205,13 @@ class AgentEvaluator:
             'equity_volatility': np.std(equity_curve) if len(equity_curve) > 1 else 0.0,
         }
         
+        # Añadir métricas que podrían no existir si no hay trades
+        final_metrics.update({
+            'mean_profit_pct': final_metrics.get('total_profit_pct', 0.0), # Usar el total como fallback
+            'std_profit_pct': np.std([t['roe'] for t in env.portfolio.historial_trades]) if env.portfolio.historial_trades else 0.0,
+            'mean_episode_length': step_count # Para un solo backtest, es la longitud total
+        })
+
         # Combinar con análisis detallado de trades
         final_metrics.update(trades_summary)
         

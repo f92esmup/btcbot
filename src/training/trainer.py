@@ -315,7 +315,7 @@ class Trainer:
                 self.logger_console.info(f"\n=== Evaluación en episodio {episode + 1} ===")
                 
                 # Use AgentEvaluator for evaluation
-                eval_metrics = self.evaluator.evaluate(self.agent, self.env, self.config['eval_episodes'])
+                eval_metrics, _, _ = self.evaluator.evaluate(self.agent, self.env)
                 
                 self.logger_console.info(f"Métricas de evaluación:")
                 self.logger_console.info(f"  - Return promedio: {eval_metrics['mean_return']:.2f} ± {eval_metrics['std_return']:.2f}")

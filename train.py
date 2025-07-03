@@ -288,6 +288,15 @@ def main():
         is_new_training = False
 
     # --- EXTRACCIÓN DE PARÁMETROS DEL EXPERIMENTO Y ENTRENAMIENTO ---
+    # Crear instancia de RunManager para TODOS los procesos
+    storage_mode = local_config_dict.get('normalization', {}).get('storage_mode', 'local')
+    gcp_config = local_config_dict.get('gcp', {}) if storage_mode == 'gcp' else None
+    run_manager = RunManager(
+        storage_mode=storage_mode,
+        gcp_config=gcp_config
+    )
+    logger.info(f"[Proceso {rank}] RunManager creado para modo: {storage_mode}")
+
     try:
         # El 'symbol' y el 'interval' se cargarán ahora desde los metadatos del data_run.
         # El 'seed' se carga desde la configuración principal del sistema.

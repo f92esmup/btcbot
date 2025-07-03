@@ -36,24 +36,24 @@ def _save_worker_local(agent_state_dicts: Dict[str, Any], path_prefix: str) -> N
     """
     try:
         # Save networks
-        torch.save(agent_state_dicts['actor'], f"{path_prefix}_actor.pth")
-        torch.save(agent_state_dicts['critic_1'], f"{path_prefix}_critic_1.pth")
-        torch.save(agent_state_dicts['critic_2'], f"{path_prefix}_critic_2.pth")
-        torch.save(agent_state_dicts['critic_target_1'], f"{path_prefix}_critic_target_1.pth")
-        torch.save(agent_state_dicts['critic_target_2'], f"{path_prefix}_critic_target_2.pth")
+        torch.save(agent_state_dicts['actor'], f"{path_prefix}/actor.pth")
+        torch.save(agent_state_dicts['critic_1'], f"{path_prefix}/critic_1.pth")
+        torch.save(agent_state_dicts['critic_2'], f"{path_prefix}/critic_2.pth")
+        torch.save(agent_state_dicts['critic_target_1'], f"{path_prefix}/critic_target_1.pth")
+        torch.save(agent_state_dicts['critic_target_2'], f"{path_prefix}/critic_target_2.pth")
         
         # Save optimizers
-        torch.save(agent_state_dicts['actor_optimizer'], f"{path_prefix}_actor_optimizer.pth")
-        torch.save(agent_state_dicts['critic_1_optimizer'], f"{path_prefix}_critic_1_optimizer.pth")
-        torch.save(agent_state_dicts['critic_2_optimizer'], f"{path_prefix}_critic_2_optimizer.pth")
+        torch.save(agent_state_dicts['actor_optimizer'], f"{path_prefix}/actor_optimizer.pth")
+        torch.save(agent_state_dicts['critic_1_optimizer'], f"{path_prefix}/critic_1_optimizer.pth")
+        torch.save(agent_state_dicts['critic_2_optimizer'], f"{path_prefix}/critic_2_optimizer.pth")
         
         # Save alpha and its optimizer if present
-        torch.save(agent_state_dicts['log_alpha'], f"{path_prefix}_log_alpha.pth")
+        torch.save(agent_state_dicts['log_alpha'], f"{path_prefix}/log_alpha.pth")
         if 'alpha_optimizer' in agent_state_dicts:
-            torch.save(agent_state_dicts['alpha_optimizer'], f"{path_prefix}_alpha_optimizer.pth")
+            torch.save(agent_state_dicts['alpha_optimizer'], f"{path_prefix}/alpha_optimizer.pth")
         
         # Save metadata
-        torch.save(agent_state_dicts['metadata'], f"{path_prefix}_metadata.pth")
+        torch.save(agent_state_dicts['metadata'], f"{path_prefix}/metadata.pth")
         
         print(f"✅ Guardado local completado: {path_prefix}")
         
@@ -79,37 +79,27 @@ def _save_worker_gcs(agent_state_dicts: Dict[str, Any], gcs_prefix: str, gcp_con
         
         with tempfile.TemporaryDirectory() as temp_dir:
             # Save all state dictionaries to temporary directory
-            prefix = os.path.join(temp_dir, gcs_prefix.split('/')[-1])
-            
-            # Save networks
-            torch.save(agent_state_dicts['actor'], f"{prefix}_actor.pth")
-            torch.save(agent_state_dicts['critic_1'], f"{prefix}_critic_1.pth")
-            torch.save(agent_state_dicts['critic_2'], f"{prefix}_critic_2.pth")
-            torch.save(agent_state_dicts['critic_target_1'], f"{prefix}_critic_target_1.pth")
-            torch.save(agent_state_dicts['critic_target_2'], f"{prefix}_critic_target_2.pth")
-            
-            # Save optimizers
-            torch.save(agent_state_dicts['actor_optimizer'], f"{prefix}_actor_optimizer.pth")
-            torch.save(agent_state_dicts['critic_1_optimizer'], f"{prefix}_critic_1_optimizer.pth")
-            torch.save(agent_state_dicts['critic_2_optimizer'], f"{prefix}_critic_2_optimizer.pth")
-            
-            # Save alpha and its optimizer if present
-            torch.save(agent_state_dicts['log_alpha'], f"{prefix}_log_alpha.pth")
+            # Note: path_prefix is now the directory to save into
+            path_prefix = Path(temp_dir)
+            torch.save(agent_state_dicts['actor'], path_prefix / "actor.pth")
+            torch.save(agent_state_dicts['critic_1'], path_prefix / "critic_1.pth")
+            torch.save(agent_state_dicts['critic_2'], path_prefix / "critic_2.pth")
+            torch.save(agent_state_dicts['critic_target_1'], path_prefix / "critic_target_1.pth")
+            torch.save(agent_state_dicts['critic_target_2'], path_prefix / "critic_target_2.pth")
+            torch.save(agent_state_dicts['actor_optimizer'], path_prefix / "actor_optimizer.pth")
+            torch.save(agent_state_dicts['critic_1_optimizer'], path_prefix / "critic_1_optimizer.pth")
+            torch.save(agent_state_dicts['critic_2_optimizer'], path_prefix / "critic_2_optimizer.pth")
+            torch.save(agent_state_dicts['log_alpha'], path_prefix / "log_alpha.pth")
             if 'alpha_optimizer' in agent_state_dicts:
-                torch.save(agent_state_dicts['alpha_optimizer'], f"{prefix}_alpha_optimizer.pth")
-            
-            # Save metadata
-            torch.save(agent_state_dicts['metadata'], f"{prefix}_metadata.pth")
-            
-            # Upload each file to GCS
+                torch.save(agent_state_dicts['alpha_optimizer'], path_prefix / "alpha_optimizer.pth")
+            torch.save(agent_state_dicts['metadata'], path_prefix / "metadata.pth")
+
+            # Upload each file from the temporary directory to the GCS prefix
             success_count = 0
             total_files = 0
-            
-            for local_file_path in Path(temp_dir).glob(f"{gcs_prefix.split('/')[-1]}_*"):
+            for local_file_path in path_prefix.glob('*.pth'):
                 total_files += 1
-                local_file_name_only = local_file_path.name
-                gcs_blob_name = f"{gcs_prefix}/{local_file_name_only}"
-                
+                gcs_blob_name = f"{gcs_prefix}/{local_file_path.name}"
                 if gcs_utils.upload_file_to_gcs(str(local_file_path), gcs_blob_name):
                     success_count += 1
                 else:
@@ -263,21 +253,36 @@ class RunManager:
             if self.storage_mode == "gcp":
                 # GCP mode: search in GCS
                 checkpoint_prefix = f"{prefix}/checkpoints/"
-                
+                self.logger.info(f"Searching for checkpoint metadata in GCS prefix: {checkpoint_prefix}")
+
                 # Search for checkpoint metadata files in the specific run
                 bucket = self.gcs_utils._get_bucket()
                 blobs = bucket.list_blobs(prefix=checkpoint_prefix)
                 
                 # Regex para encontrar el número de episodio en la ruta
-                # Ej: .../checkpoints/checkpoint_episode_123/checkpoint_episode_123_metadata.pth
-                metadata_pattern = re.compile(r"checkpoint_episode_(\d+)/checkpoint_episode_\1_metadata\.pth$")
-                
+                # Ej: .../checkpoints/checkpoint_episode_123/metadata.pth
+                metadata_pattern = re.compile(r"/checkpoint_episode_(\d+)/metadata\.pth$")
+                self.logger.info(f"Using regex pattern: {metadata_pattern.pattern}")
+
                 latest_episode = -1
                 
+                # Log all found blobs for debugging
+                found_blobs = [blob.name for blob in blobs]
+                if not found_blobs:
+                    self.logger.warning(f"No blobs found in GCS prefix: {checkpoint_prefix}")
+                else:
+                    self.logger.info(f"Found {len(found_blobs)} blobs in prefix. Checking for matches...")
+                    for blob_name in found_blobs:
+                        self.logger.info(f"  - Checking blob: {blob_name}")
+
+                # Re-initialize blobs iterator
+                blobs = bucket.list_blobs(prefix=checkpoint_prefix)
+
                 for blob in blobs:
                     match = metadata_pattern.search(blob.name)
                     if match:
                         episode_num = int(match.group(1))
+                        self.logger.info(f"    -> Match found! Episode: {episode_num}")
                         if episode_num > latest_episode:
                             latest_episode = episode_num
                 
@@ -568,7 +573,7 @@ class RunManager:
                     
                     # Download each component file
                     for component_file in component_files:
-                        gcs_blob_name = f"{checkpoint_prefix}/{checkpoint_prefix.split('/')[-1]}_{component_file}"
+                        gcs_blob_name = f"{checkpoint_prefix}/{component_file}"
                         local_file_path = os.path.join(temp_dir, component_file)
                         
                         if not self.gcs_utils.download_file_from_gcs(gcs_blob_name, local_file_path):
@@ -606,33 +611,33 @@ class RunManager:
                         
             else:
                 # Local mode: load directly from files
-                prefix = Path(checkpoint_prefix)
+                path_prefix = Path(checkpoint_prefix)
                 
                 # Load metadata first
-                metadata_path = f"{prefix}_metadata.pth"
-                if os.path.exists(metadata_path):
+                metadata_path = path_prefix / "metadata.pth"
+                if metadata_path.exists():
                     metadata = torch.load(metadata_path, map_location=agent.device)
                     agent.total_steps = metadata.get('total_steps', 0)
                     agent.learning_steps = metadata.get('learning_steps', 0)
                     self.logger.info(f"Loaded metadata: episode={metadata.get('episode', 'unknown')}, steps={agent.total_steps}")
                 
                 # Load network state dictionaries
-                agent.actor.load_state_dict(torch.load(f"{prefix}_actor.pth", map_location=agent.device))
-                agent.critic_1.load_state_dict(torch.load(f"{prefix}_critic_1.pth", map_location=agent.device))
-                agent.critic_2.load_state_dict(torch.load(f"{prefix}_critic_2.pth", map_location=agent.device))
-                agent.critic_target_1.load_state_dict(torch.load(f"{prefix}_critic_target_1.pth", map_location=agent.device))
-                agent.critic_target_2.load_state_dict(torch.load(f"{prefix}_critic_target_2.pth", map_location=agent.device))
+                agent.actor.load_state_dict(torch.load(path_prefix / "actor.pth", map_location=agent.device))
+                agent.critic_1.load_state_dict(torch.load(path_prefix / "critic_1.pth", map_location=agent.device))
+                agent.critic_2.load_state_dict(torch.load(path_prefix / "critic_2.pth", map_location=agent.device))
+                agent.critic_target_1.load_state_dict(torch.load(path_prefix / "critic_target_1.pth", map_location=agent.device))
+                agent.critic_target_2.load_state_dict(torch.load(path_prefix / "critic_target_2.pth", map_location=agent.device))
                 
                 # Load optimizer state dictionaries and log_alpha only if not in fine-tuning mode
                 if not reset_optimizers:
-                    agent.actor_optimizer.load_state_dict(torch.load(f"{prefix}_actor_optimizer.pth", map_location=agent.device))
-                    agent.critic_1_optimizer.load_state_dict(torch.load(f"{prefix}_critic_1_optimizer.pth", map_location=agent.device))
-                    agent.critic_2_optimizer.load_state_dict(torch.load(f"{prefix}_critic_2_optimizer.pth", map_location=agent.device))
+                    agent.actor_optimizer.load_state_dict(torch.load(path_prefix / "actor_optimizer.pth", map_location=agent.device))
+                    agent.critic_1_optimizer.load_state_dict(torch.load(path_prefix / "critic_1_optimizer.pth", map_location=agent.device))
+                    agent.critic_2_optimizer.load_state_dict(torch.load(path_prefix / "critic_2_optimizer.pth", map_location=agent.device))
                     
                     # Load alpha and its optimizer
-                    agent.log_alpha = torch.load(f"{prefix}_log_alpha.pth", map_location=agent.device)
-                    if agent.learn_alpha and os.path.exists(f"{prefix}_alpha_optimizer.pth"):
-                        agent.alpha_optimizer.load_state_dict(torch.load(f"{prefix}_alpha_optimizer.pth", map_location=agent.device))
+                    agent.log_alpha = torch.load(path_prefix / "log_alpha.pth", map_location=agent.device)
+                    if agent.learn_alpha and (path_prefix / "alpha_optimizer.pth").exists():
+                        agent.alpha_optimizer.load_state_dict(torch.load(path_prefix / "alpha_optimizer.pth", map_location=agent.device))
             
             self.logger.info("✅ Checkpoint loaded successfully")
             

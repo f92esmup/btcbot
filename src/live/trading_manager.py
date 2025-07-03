@@ -42,7 +42,6 @@ class LiveTradingManager:
         gcp_config = main_config.get('gcp') if storage_mode == 'gcp' else None
 
         self.run_manager = RunManager(
-            run_id=self.run_id,
             storage_mode=storage_mode,
             gcp_config=gcp_config
         )
@@ -72,7 +71,7 @@ class LiveTradingManager:
         # Initialize components with injected scalers
         self.observation_builder = LiveObservationBuilder(self.scaler, self.price_scaler, self.run_config)
         self.data_processor = LiveDataProcessor(self.run_config)
-        self.decision_maker = DecisionMaker(self.scaler, self.run_manager, self.run_config, self.device)
+        self.decision_maker = DecisionMaker(self.scaler, self.run_manager, self.run_config, self.device, self.run_id)
 
         if self.telegram_bot_token and self.telegram_chat_id:
             try:

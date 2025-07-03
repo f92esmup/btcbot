@@ -333,7 +333,7 @@ def main() -> None:
                 temp_path = temp_file.name
             
             try:
-                gcs_blob_name = f"{data_run_id}/normalized_dataframe.pkl"
+                gcs_blob_name = f"{data_run_path}/normalized_dataframe.pkl"
                 if run_manager.gcs_utils.upload_file_to_gcs(temp_path, gcs_blob_name):
                     logger.info(f"  ✅ DataFrame guardado en GCS: gs://{run_manager.gcs_bucket_name}/{gcs_blob_name}")
                 else:

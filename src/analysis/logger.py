@@ -141,27 +141,27 @@ class TensorboardLogger:
         self.writer.add_scalar('Episode_Metrics/Length', episode_length, episode)
         
         # Trade metrics
-        if 'trades_count' in trade_metrics:
+        if trade_metrics.get('trades_count') is not None:
             self.writer.add_scalar('Trading_Episode/Total_Trades_Executed', trade_metrics['trades_count'], episode)
-        if 'winning_trades' in trade_metrics:
+        if trade_metrics.get('winning_trades') is not None:
             self.writer.add_scalar('Trading_Episode/Number_Winning_Trades', trade_metrics['winning_trades'], episode)
-        if 'long_trades' in trade_metrics:
+        if trade_metrics.get('long_trades') is not None:
             self.writer.add_scalar('Trading_Episode/Number_Long_Trades', trade_metrics['long_trades'], episode)
-        if 'short_trades' in trade_metrics:
+        if trade_metrics.get('short_trades') is not None:
             self.writer.add_scalar('Trading_Episode/Number_Short_Trades', trade_metrics['short_trades'], episode)
-        if 'total_pnl_realized_abs' in trade_metrics:
+        if trade_metrics.get('total_pnl_realized_abs') is not None:
             self.writer.add_scalar('Trading_Episode/Total_PNL_Realized_Absolute', trade_metrics['total_pnl_realized_abs'], episode)
-        if 'total_roe_realized' in trade_metrics:
+        if trade_metrics.get('total_roe_realizado') is not None:
             self.writer.add_scalar('Trading_Episode/Total_ROE_Realizado', trade_metrics['total_roe_realizado'], episode)
-        if 'avg_margin_used' in trade_metrics:
+        if trade_metrics.get('avg_margin_used') is not None:
             self.writer.add_scalar('Trading_Episode/Average_Margin_Used_per_Trade', trade_metrics['avg_margin_used'], episode)
         
         # Environment metrics
-        if 'drawdown_episode' in env_metrics:
+        if env_metrics.get('drawdown_episode') is not None:
             self.writer.add_scalar('Environment_Episode/Drawdown_Percentage', env_metrics['drawdown_episode'] * 100, episode)
-        if 'final_balance' in env_metrics:
+        if env_metrics.get('final_balance') is not None:
             self.writer.add_scalar('Environment_Episode/Final_Balance', env_metrics['final_balance'], episode)
-        if 'initial_balance' in env_metrics:
+        if env_metrics.get('initial_balance') is not None:
             self.writer.add_scalar('Environment_Episode/Final_Equity', env_metrics['final_balance'], episode)  # Using final_balance as equity for now
     
     def log_per_trade_metrics(self, trade_counter: int, trade_data: Dict[str, Any]) -> None:
