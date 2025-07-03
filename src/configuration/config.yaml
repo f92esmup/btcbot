@@ -1,12 +1,8 @@
 # ----------------------------------------------------
-# SECCIÓN 1: DEFINICIÓN DEL EXPERIMENTO (QUÉ)
+# SECCIÓN 1: CONFIGURACIÓN DEL ENTRENAMIENTO
 # ----------------------------------------------------
-experiment_definition:
-  symbol: 'BTCUSDT'
-  interval: '1m'
-  training_start_date: '2025-01-01'
-  #training_end_date: '2023-01-31' # Opcional
-  seed: 73
+training_setup:
+  seed: 73  # Semilla para la reproducibilidad del entrenamiento
 
 # ----------------------------------------------------
 # SECCIÓN 2: CONFIGURACIÓN DEL SISTEMA

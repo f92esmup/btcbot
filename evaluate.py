@@ -246,12 +246,23 @@ def main():
 
         # --- EXTRAER SYMBOL E INTERVALO DEL RUN CONFIG ---
         try:
-            exp_config = main_config['experiment_definition']
-            symbol = exp_config['symbol']
-            interval = exp_config['interval']
-            logger.info(f"Símbolo ({symbol}) e Intervalo ({interval}) extraídos del run_id: {args.run_id}")
-        except KeyError:
-            logger.error(f"La configuración para '{args.run_id}' no contiene 'experiment_definition'.")
+            # Intentar cargar desde experiment_definition (legacy) primero
+            if 'experiment_definition' in main_config:
+                exp_config = main_config['experiment_definition']
+                symbol = exp_config['symbol']
+                interval = exp_config['interval']
+                logger.info(f"Símbolo ({symbol}) e Intervalo ({interval}) extraídos de 'experiment_definition' (legacy).")
+            # Si no existe, cargar desde metadata.experiment_parameters (nueva estructura)
+            elif 'metadata' in main_config and 'experiment_parameters' in main_config['metadata']:
+                exp_params = main_config['metadata']['experiment_parameters']
+                symbol = exp_params['symbol']
+                interval = exp_params['interval']
+                logger.info(f"Símbolo ({symbol}) e Intervalo ({interval}) extraídos de 'metadata.experiment_parameters'.")
+            else:
+                raise KeyError("No se encontró ni 'experiment_definition' ni 'metadata.experiment_parameters'")
+                
+        except KeyError as e:
+            logger.error(f"La configuración para '{args.run_id}' no contiene información del experimento: {e}")
             sys.exit(1)
 
         # --- 2. Inicialización de Componentes Esenciales ---

@@ -287,18 +287,31 @@ def main():
         # Variables para el entrenamiento existente
         is_new_training = False
 
-    # --- EXTRACCIÓN DE PARÁMETROS DEL EXPERIMENTO ---
+    # --- EXTRACCIÓN DE PARÁMETROS DEL EXPERIMENTO Y ENTRENAMIENTO ---
     try:
-        # Ahora extraemos la configuración de 'local_config_dict', que es la fuente de verdad correcta
-        exp_config = local_config_dict['experiment_definition']
-        symbol = exp_config['symbol']
-        interval = exp_config['interval']
-        start_date = exp_config['training_start_date']
-        end_date = exp_config.get('training_end_date')
-        seed = exp_config['seed']
-        logger.info(f"Configuración del experimento: {symbol}/{interval} desde {start_date}, Seed: {seed}")
+        # El 'symbol' y el 'interval' se cargarán ahora desde los metadatos del data_run.
+        # El 'seed' se carga desde la configuración principal del sistema.
+        
+        # Cargar metadatos del data_run para obtener la definición del experimento
+        data_run_metadata = run_manager.load_data_run_metadata(data_run_id)
+        exp_params = data_run_metadata['experiment_parameters']
+        symbol = exp_params['symbol']
+        interval = exp_params['interval']
+        start_date = exp_params['start_date']
+        end_date = exp_params.get('end_date')
+
+        # Cargar el seed desde la nueva sección en config.yaml
+        seed = local_config_dict['training_setup']['seed']
+        
+        logger.info(f"Configuración del experimento cargada desde '{data_run_id}': {symbol}/{interval}")
+        logger.info(f"Rango de fechas: {start_date} - {end_date if end_date else 'presente'}")
+        logger.info(f"Semilla de entrenamiento cargada desde config.yaml: {seed}")
+
     except KeyError as e:
-        logger.error(f"Falta la clave de configuración requerida en 'experiment_definition': {e}")
+        logger.error(f"Falta la clave de configuración requerida: {e}")
+        sys.exit(1)
+    except Exception as e:
+        logger.error(f"Error cargando la configuración del experimento desde los metadatos: {e}")
         sys.exit(1)
 
     # Configurar semilla aleatoria para reproducibilidad
@@ -423,7 +436,15 @@ def main():
             },
             'command_line_args': vars(args),
             'config': local_config_dict,
-            'lineage': training_run_lineage  # Información del data_run origen
+            'lineage': training_run_lineage,  # Información del data_run origen
+            'metadata': {
+                'experiment_parameters': {
+                    'symbol': symbol,
+                    'interval': interval,
+                    'start_date': start_date,
+                    'end_date': end_date
+                }
+            }
         }
 
         # Solo guardar configuración para nuevos entrenamientos y fine-tuning
