@@ -4,7 +4,7 @@
 experiment_definition:
   symbol: 'BTCUSDT'
   interval: '1m'
-  training_start_date: '2025-07-01'
+  training_start_date: '2025-01-01'
   #training_end_date: '2023-01-31' # Opcional
   seed: 73
 

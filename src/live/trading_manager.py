@@ -2,6 +2,7 @@ import pandas as pd
 import torch
 import time
 from src.live.data_reader import BinanceLiveDataReader
+from src.live.live_data_processor import LiveDataProcessor
 from src.live.observation_builder import LiveObservationBuilder
 from src.live.decision_maker import DecisionMaker
 from src.live.live_portfolio import LivePortfolio
@@ -48,6 +49,7 @@ class LiveTradingManager:
         print(f"RunManager inicializado en modo '{storage_mode}'.")
 
         self.observation_builder = LiveObservationBuilder(self.run_manager, self.run_config)
+        self.data_processor = LiveDataProcessor(self.run_config)
         self.decision_maker = DecisionMaker(self.run_manager, self.run_config, self.device)
 
         if self.telegram_bot_token and self.telegram_chat_id:
@@ -113,7 +115,7 @@ class LiveTradingManager:
         log_data = {
             'run_id': self.run_id,
             'symbol': self.symbol,
-            'candle_timestamp': live_dataframe.index[-1].to_pydatetime()
+            'candle_timestamp': live_dataframe.index[-1].to_pydatetime().isoformat()
         }
         
         self.portfolio.advance_step()
@@ -157,7 +159,25 @@ class LiveTradingManager:
             'position_entry_price': live_portfolio_state['precio_entrada']
         })
 
-        observation_vector = self.observation_builder.build(live_market_dataframe=live_dataframe, live_portfolio_state=live_portfolio_state)
+        # Procesar los datos crudos antes de construir la observación
+        try:
+            processed_dataframe = self.data_processor.process(live_dataframe)
+        except ValueError as e:
+            print(f"❌ Error crítico en el procesamiento de datos: {e}")
+            print("🛑 Deteniendo operativa para prevenir decisiones con datos corruptos.")
+            self.is_trading_halted = True
+            
+            log_data.update({
+                'agent_action': 0.0,
+                'interpreted_intent': "HALTED_BY_DATA_ERROR",
+                'trade_executed': False,
+                'position_status': 'HALTED'
+            })
+            if self.bq_logger:
+                self.bq_logger.log_step_data(log_data)
+            return
+
+        observation_vector = self.observation_builder.build(live_market_dataframe=processed_dataframe, live_portfolio_state=live_portfolio_state)
         
         action = self.decision_maker.get_action(observation_vector)
         print(f"Decisión del agente: {action:.4f}")

@@ -27,8 +27,7 @@ class TelegramNotifier:
         """
         payload = {
             'chat_id': self.chat_id,
-            'text': message,
-            'parse_mode': 'Markdown'
+            'text': message
         }
         try:
             response = requests.post(self.api_url, data=payload, timeout=5)
