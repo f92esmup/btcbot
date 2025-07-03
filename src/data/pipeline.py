@@ -80,8 +80,8 @@ class DataPipeline:
             api_key=self.api_key,
             api_secret=self.api_secret
         )
-        #dataframe = adquisicion.main()
-        dataframe = adquisicion.main_parallel()
+        dataframe = adquisicion.main()
+        #dataframe = adquisicion.main_parallel()
 
         self.logger.info(f"Datos adquiridos exitosamente:")
         self.logger.info(f"  - Forma del DataFrame: {dataframe.shape}")
