@@ -42,6 +42,7 @@ class Trainer:
         
         # Training state
         self.best_eval_return = float('-inf')
+        self.best_model_path = None
         self.global_trade_counter = 0
         self.learning_started = False
         
@@ -333,8 +334,8 @@ class Trainer:
                 # Save best model using RunManager (solo si hay run_manager)
                 if self.run_manager and eval_metrics['mean_return'] > self.best_eval_return:
                     self.best_eval_return = eval_metrics['mean_return']
-                    best_model_path = self.run_manager.save_best_model(self.training_run_id, self.agent)
-                    self.logger_console.info(f"  - Nuevo mejor modelo guardado: {best_model_path}")
+                    self.best_model_path = self.run_manager.save_best_model(self.training_run_id, self.agent)
+                    self.logger_console.info(f"  - Nuevo mejor modelo guardado: {self.best_model_path}")
             
             # Periodic checkpoint saving (solo si hay run_manager)
             if (episode + 1) % self.config['save_frequency'] == 0 and self.run_manager:
@@ -353,6 +354,75 @@ class Trainer:
         self.logger_console.info(f"Mejor evaluación: {self.best_eval_return:.2f}")
         if final_model_path:
             self.logger_console.info(f"Modelo final guardado: {final_model_path}")
+        
+        # === EVALUACIÓN FINAL ===
+        if self.evaluator:
+            self.logger_console.info(f"\n🎯 === INICIANDO EVALUACIÓN FINAL ===")
+            
+            # Cargar el mejor modelo si existe, sino usar el modelo actual
+            if self.best_model_path and self.run_manager:
+                self.logger_console.info(f"📦 Cargando el mejor modelo desde: {self.best_model_path}")
+                try:
+                    # Extraer el checkpoint prefix correcto según el modo de almacenamiento
+                    if self.best_model_path.startswith("gs://"):
+                        # Para GCS, extraer solo la parte después del bucket
+                        checkpoint_prefix = "/".join(self.best_model_path.split("/")[3:])
+                    else:
+                        # Para local, usar la ruta tal como está
+                        checkpoint_prefix = self.best_model_path
+                    
+                    self.run_manager.load_agent_from_checkpoint(self.agent, checkpoint_prefix)
+                    self.logger_console.info("✅ Mejor modelo cargado exitosamente")
+                except Exception as e:
+                    self.logger_console.warning(f"⚠️  Error cargando mejor modelo: {e}. Usando modelo final.")
+            else:
+                self.logger_console.info("📝 Usando modelo final para evaluación (no hay mejor modelo guardado)")
+            
+            # Ejecutar evaluación final
+            self.logger_console.info("🔍 Ejecutando evaluación final completa...")
+            final_metrics, equity_curve, trade_pnl_list = self.evaluator.evaluate(self.agent, self.env)
+            
+            # Guardar resumen de evaluación
+            if self.run_manager:
+                try:
+                    evaluation_path = self.run_manager.save_evaluation_summary(self.training_run_id, final_metrics)
+                    self.logger_console.info(f"💾 Resumen de evaluación guardado en: {evaluation_path}")
+                except Exception as e:
+                    self.logger_console.error(f"❌ Error guardando resumen de evaluación: {e}")
+            
+            # Preparar hiperparámetros para TensorBoard
+            hparams = {
+                'episodes': total_episodes,
+                'learning_rate_actor': self.config.get('learning_rate_actor', 'N/A'),
+                'learning_rate_critic': self.config.get('learning_rate_critic', 'N/A'),
+                'batch_size': self.config.get('batch_size', 'N/A'),
+                'replay_buffer_capacity': self.config.get('replay_buffer_capacity', 
+                                                        self.config.get('replay_buffer_size', 'N/A')),
+                'tau': self.config.get('tau', 'N/A'),
+                'gamma': self.config.get('gamma', 'N/A'),
+                'eval_episodes': self.config.get('eval_episodes', 'N/A'),
+                'target_entropy_coef': self.config.get('target_entropy_coef', 'N/A')
+            }
+            
+            # Registrar evaluación final en TensorBoard
+            if self.logger:
+                try:
+                    self.logger.log_evaluation_summary(hparams, final_metrics, equity_curve, trade_pnl_list)
+                    self.logger_console.info("📊 Resultados de evaluación final registrados en TensorBoard")
+                except Exception as e:
+                    self.logger_console.error(f"❌ Error registrando en TensorBoard: {e}")
+            
+            # Mostrar resumen de resultados
+            self.logger_console.info(f"\n📈 === RESUMEN DE EVALUACIÓN FINAL ===")
+            self.logger_console.info(f"📊 Episodios evaluados: {final_metrics.get('total_episodes', 'N/A')}")
+            self.logger_console.info(f"💰 Return promedio: {final_metrics.get('mean_return', 0):.2f} ± {final_metrics.get('std_return', 0):.2f}")
+            self.logger_console.info(f"📈 Profit promedio: {final_metrics.get('mean_profit_pct', 0):.2f}% ± {final_metrics.get('std_profit_pct', 0):.2f}%")
+            self.logger_console.info(f"🏆 Win rate: {final_metrics.get('win_rate', 0):.2%}")
+            self.logger_console.info(f"📉 Máximo Drawdown: {final_metrics.get('max_drawdown', 0) * 100:.2f}%")
+            self.logger_console.info(f"⚡ Sharpe Ratio: {final_metrics.get('sharpe_ratio', 0):.4f}")
+            self.logger_console.info(f"🎯 Sortino Ratio: {final_metrics.get('sortino_ratio', 0):.4f}")
+            self.logger_console.info(f"🔄 Total trades: {final_metrics.get('total_trades', 0)}")
+            self.logger_console.info(f"💎 Valor final del portfolio: ${final_metrics.get('final_portfolio_value', 0):,.2f}")
         
         # Close TensorBoard writer (solo si hay logger)
         if self.logger:

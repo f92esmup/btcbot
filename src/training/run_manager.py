@@ -14,6 +14,7 @@ import re
 import tempfile
 import logging
 import pickle
+import json
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Any, Optional, Tuple, Union
@@ -762,6 +763,57 @@ class RunManager:
         self.logger.info(f"🚀 Guardado asíncrono del modelo final iniciado en segundo plano.")
         
         return str(final_model_path)
+    
+    def save_evaluation_summary(self, training_run_id: str, metrics: dict) -> str:
+        """
+        Save evaluation metrics summary to evaluation_summary.json file.
+        
+        Args:
+            training_run_id: The ID of the training run to save evaluation summary for
+            metrics: Dictionary containing evaluation metrics to save
+            
+        Returns:
+            Path to the saved evaluation summary file (local path or GCS URI)
+        """
+        self.logger.info(f"Saving evaluation summary for training run: {training_run_id}")
+        
+        # Get training run prefix using helper
+        prefix = self._get_training_run_prefix(training_run_id)
+        
+        try:
+            if self.storage_mode == "gcp":
+                # For GCP, save temporarily and upload
+                with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as temp_file:
+                    json.dump(metrics, temp_file, indent=2, ensure_ascii=False)
+                    temp_path = temp_file.name
+                
+                try:
+                    # Upload to GCS using the prefix with evaluation subdirectory
+                    gcs_blob_name = f"{prefix}/evaluation/evaluation_summary.json"
+                    if self.gcs_utils.upload_file_to_gcs(temp_path, gcs_blob_name):
+                        final_path = f"gs://{self.gcs_bucket_name}/{gcs_blob_name}"
+                        self.logger.info(f"Evaluation summary saved to GCS: {final_path}")
+                        return final_path
+                    else:
+                        self.logger.error("Error saving evaluation summary to GCS")
+                        raise RuntimeError("Failed to upload evaluation summary to GCS")
+                finally:
+                    os.unlink(temp_path)
+            else:
+                # For local storage, create evaluation subdirectory and save
+                evaluation_dir = Path(prefix) / "evaluation"
+                evaluation_dir.mkdir(parents=True, exist_ok=True)
+                
+                summary_path = evaluation_dir / "evaluation_summary.json"
+                with open(summary_path, 'w', encoding='utf-8') as f:
+                    json.dump(metrics, f, indent=2, ensure_ascii=False)
+                
+                self.logger.info(f"Evaluation summary saved to: {summary_path}")
+                return str(summary_path)
+                
+        except Exception as e:
+            self.logger.error(f"Error saving evaluation summary for training run {training_run_id}: {str(e)}")
+            raise
     
     @staticmethod
     def load_training_run_config(training_run_id: str, storage_mode: str = None, gcp_config: Dict[str, Any] = None) -> Optional[Dict[str, Any]]:

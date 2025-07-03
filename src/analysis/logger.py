@@ -7,6 +7,7 @@ This module provides the TensorboardLogger class for centralized TensorBoard log
 from typing import Dict, Any, Optional
 from torch.utils.tensorboard import SummaryWriter
 import logging
+import numpy as np
 
 # Importar aiplatform para la integración con Vertex AI
 try:
@@ -151,7 +152,7 @@ class TensorboardLogger:
         if 'total_pnl_realized_abs' in trade_metrics:
             self.writer.add_scalar('Trading_Episode/Total_PNL_Realized_Absolute', trade_metrics['total_pnl_realized_abs'], episode)
         if 'total_roe_realized' in trade_metrics:
-            self.writer.add_scalar('Trading_Episode/Total_ROE_Realized', trade_metrics['total_roe_realized'], episode)
+            self.writer.add_scalar('Trading_Episode/Total_ROE_Realizado', trade_metrics['total_roe_realizado'], episode)
         if 'avg_margin_used' in trade_metrics:
             self.writer.add_scalar('Trading_Episode/Average_Margin_Used_per_Trade', trade_metrics['avg_margin_used'], episode)
         
@@ -215,6 +216,112 @@ class TensorboardLogger:
         if 'sortino_ratio' in eval_metrics:
             self.writer.add_scalar('Evaluation/Sortino_Ratio', eval_metrics['sortino_ratio'], episode)
     
+    def log_evaluation_summary(self, hparams: dict, final_metrics: dict, equity_curve: list, trade_pnl_list: list) -> None:
+        """
+        Registra un resumen completo de la evaluación final en TensorBoard.
+        
+        Este método es el punto de entrada principal para registrar todos los resultados
+        de la evaluación final, incluyendo curva de equity, distribución de PnL,
+        métricas finales y la vinculación con hiperparámetros.
+        
+        Args:
+            hparams: Diccionario con los hiperparámetros del experimento
+            final_metrics: Diccionario con todas las métricas finales calculadas
+            equity_curve: Lista con la serie temporal completa del equity
+            trade_pnl_list: Lista con los PnL de todos los trades ejecutados
+        """
+        if self.writer is None:
+            self.logger.warning("TensorBoard writer no está inicializado. No se pueden registrar métricas.")
+            return
+        
+        # 1. Registrar la curva de equity como serie temporal
+        if equity_curve:
+            for step, equity_value in enumerate(equity_curve):
+                self.writer.add_scalar('Evaluation/Final_Equity_Curve', equity_value, step)
+        
+        # 2. Registrar la distribución de PnL de trades como histograma
+        if trade_pnl_list:
+            # Convertir a numpy array para el histograma
+            trade_pnl_array = np.array(trade_pnl_list)
+            self.writer.add_histogram('Evaluation/Trade_PNL_Distribution', trade_pnl_array, 0)
+        
+        # 3. Crear un resumen de texto con las métricas finales
+        metrics_summary = self._format_metrics_summary(final_metrics)
+        self.writer.add_text('Evaluation/Final_Summary_Metrics', metrics_summary, 0)
+        
+        # 4. Registrar la vinculación entre hiperparámetros y métricas finales
+        # Esto es crucial para comparar experimentos en TensorBoard
+        self.writer.add_hparams(hparams, final_metrics)
+        
+        # 5. Asegurar que todos los datos se escriban
+        self.writer.flush()
+        
+        self.logger.info("✅ Resumen de evaluación final registrado en TensorBoard.")
+    
+    def _format_metrics_summary(self, metrics: dict) -> str:
+        """
+        Formatea el diccionario de métricas en un texto legible para TensorBoard.
+        
+        Args:
+            metrics: Diccionario con las métricas a formatear
+            
+        Returns:
+            str: Texto formateado con las métricas
+        """
+        lines = ["## 📊 Resumen de Evaluación Final", ""]
+        
+        # Agrupar métricas por categorías
+        basic_metrics = ['total_return', 'total_profit_pct', 'total_steps', 'initial_equity', 'final_equity']
+        risk_metrics = ['max_drawdown', 'sharpe_ratio', 'sortino_ratio', 'volatility']
+        trading_metrics = ['total_trades', 'successful_trades', 'win_rate', 'mean_roe', 'total_pnl_abs']
+        
+        # Métricas básicas
+        lines.append("### 🎯 Métricas Básicas")
+        for metric in basic_metrics:
+            if metric in metrics:
+                value = metrics[metric]
+                if isinstance(value, float):
+                    lines.append(f"- **{metric}**: {value:.4f}")
+                else:
+                    lines.append(f"- **{metric}**: {value}")
+        lines.append("")
+        
+        # Métricas de riesgo
+        lines.append("### ⚠️ Métricas de Riesgo")
+        for metric in risk_metrics:
+            if metric in metrics:
+                value = metrics[metric]
+                if isinstance(value, float):
+                    lines.append(f"- **{metric}**: {value:.4f}")
+                else:
+                    lines.append(f"- **{metric}**: {value}")
+        lines.append("")
+        
+        # Métricas de trading
+        lines.append("### 💰 Métricas de Trading")
+        for metric in trading_metrics:
+            if metric in metrics:
+                value = metrics[metric]
+                if isinstance(value, float):
+                    lines.append(f"- **{metric}**: {value:.4f}")
+                else:
+                    lines.append(f"- **{metric}**: {value}")
+        lines.append("")
+        
+        # Otras métricas no categorizadas
+        categorized = set(basic_metrics + risk_metrics + trading_metrics)
+        other_metrics = {k: v for k, v in metrics.items() if k not in categorized}
+        
+        if other_metrics:
+            lines.append("### 📈 Otras Métricas")
+            for metric, value in other_metrics.items():
+                if isinstance(value, float):
+                    lines.append(f"- **{metric}**: {value:.4f}")
+                else:
+                    lines.append(f"- **{metric}**: {value}")
+        
+        return "\n".join(lines)
+
     def close(self) -> None:
         """Cierra el writer de TensorBoard y limpia los recursos."""
         if self.writer is not None:
