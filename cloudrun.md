@@ -94,7 +94,7 @@ Este es el comando final para lanzar (o actualizar) tu bot. Asegúrate de reempl
 ```bash
 gcloud beta run worker-pools deploy btcbot-live-worker \
   --image europe-southwest1-docker.pkg.dev/btcbot-2762/btcbotrepo/btcbot-train-gpu:latest \
-  --service-account btcbot-live-runner@btcbot-2762.iam.gserviceaccount.com \
+  --service-account btcbot-training-sa@btcbot-2762.iam.gserviceaccount.com \
   --command="python" \
   --args="live.py,--run-id=ID_DEL_RUN_A_USAR,--mode=testnet" \
   --cpu=1 \
