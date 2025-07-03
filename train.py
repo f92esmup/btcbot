@@ -404,12 +404,20 @@ def main():
         else:
             tensorboard_dir = None
 
+        # Generar nombre de experimento dinámico
+        experiment_name = f"{symbol.upper()}_{interval}_Trading_Experiments"
+        logger.info(f"Nombre de experimento dinámico generado: {experiment_name}")
+
         # Inicializar TensorBoard Logger
         vertex_ai_config = None
         if storage_mode == "gcp":
             # Pasar la configuración completa que incluye tanto tensorboard_vertex_ai como gcp
             vertex_ai_config = local_config_dict
             vertex_ai_config['storage_mode'] = storage_mode
+            # Inyectar el nombre de experimento dinámico
+            if 'tensorboard_vertex_ai' not in vertex_ai_config:
+                vertex_ai_config['tensorboard_vertex_ai'] = {}
+            vertex_ai_config['tensorboard_vertex_ai']['experiment_name'] = experiment_name
         
         tb_logger = TensorboardLogger(
             log_dir=str(tensorboard_dir) if tensorboard_dir else None, 

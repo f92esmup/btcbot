@@ -95,6 +95,7 @@ class TensorboardLogger:
         except Exception as e:
             self.logger.error(f"Error al inicializar Vertex AI TensorBoard Writer: {e}")
             self.writer = None  # Asegurar que no se intente usar un writer fallido
+            raise RuntimeError(f"No se pudo inicializar TensorBoard, el entrenamiento no puede continuar: {e}")
     
     def log_hyperparameters(self, hparams: Dict[str, Any]) -> None:
         """

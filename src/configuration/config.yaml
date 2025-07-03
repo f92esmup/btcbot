@@ -71,7 +71,7 @@ normalization:
 
 # Configuración para Vertex AI TensorBoard
 tensorboard_vertex_ai:
-  instance_name: "8452737531086110720" # Nueva instancia de TensorBoard creada
+  instance_name: "3595323857990320128" # Nueva instancia de TensorBoard creada
   experiment_name: "BTCBot Trading Experiment" # Nuevo experimento creado
   location: "europe-west4" # La región de tu instancia de TensorBoard
 
@@ -153,7 +153,7 @@ agent:
     positional_encoding_learnable: false
 
   # --- Parámetros del Replay Buffer y Entrenamiento General ---
-  replay_buffer_size: 8000000
+  replay_buffer_size: 100000
   batch_size: 8192
   min_buffer_for_learning: 500000
 
