@@ -174,7 +174,7 @@ class RunManager:
                 # For GCP, we'll set base_path later when run_id is known
                 self.base_path = None
             else:
-                self.base_path = "Entrenamientos"
+                self.base_path = "training_runs"
         else:
             self.base_path = base_path
         
@@ -191,7 +191,7 @@ class RunManager:
         
         # Update base_path with run_id if needed
         if self.base_path is None and self.storage_mode == "gcp":
-            self.base_path = f"gs://{self.gcs_bucket_name}/{self.run_id}"
+            self.base_path = f"gs://{self.gcs_bucket_name}/training_runs/{self.run_id}"
         
         # Store gcp_config for worker processes
         self.gcp_config = gcp_config
@@ -231,8 +231,8 @@ class RunManager:
                 temp_path = temp_file.name
             
             try:
-                # Upload to GCS
-                gcs_blob_name = f"{self.run_id}/config_run.yaml"
+                # Upload to GCS in training_runs directory
+                gcs_blob_name = f"training_runs/{self.run_id}/config_run.yaml"
                 if self.gcs_utils.upload_file_to_gcs(temp_path, gcs_blob_name):
                     self.logger.info(f"Run configuration saved to GCS: gs://{self.gcs_bucket_name}/{gcs_blob_name}")
                 else:
@@ -240,8 +240,8 @@ class RunManager:
             finally:
                 os.unlink(temp_path)
         else:
-            # For local, save directly
-            config_path = Path(self.base_path) / "config_run.yaml"
+            # For local, save directly to training_runs directory
+            config_path = Path(f"training_runs/{self.run_id}") / "config_run.yaml"
             config_path.parent.mkdir(parents=True, exist_ok=True)
             with open(config_path, 'w', encoding='utf-8') as f:
                 yaml.dump(full_run_config, f, default_flow_style=False, allow_unicode=True)
@@ -262,7 +262,7 @@ class RunManager:
         try:
             if self.storage_mode == "gcp":
                 # GCP mode: search in GCS
-                checkpoint_prefix = f"{run_id_to_check}/checkpoints/"
+                checkpoint_prefix = f"training_runs/{run_id_to_check}/checkpoints/"
                 
                 # Search for checkpoint metadata files in the specific run
                 bucket = self.gcs_utils._get_bucket()
@@ -282,7 +282,7 @@ class RunManager:
                             latest_episode = episode_num
                 
                 if latest_episode != -1:
-                    latest_checkpoint_prefix = f"{run_id_to_check}/checkpoints/checkpoint_episode_{latest_episode}"
+                    latest_checkpoint_prefix = f"training_runs/{run_id_to_check}/checkpoints/checkpoint_episode_{latest_episode}"
                     self.logger.info(f"Último checkpoint encontrado en GCS: {latest_checkpoint_prefix} (episodio {latest_episode})")
                     return (latest_checkpoint_prefix, latest_episode)
                 else:
@@ -291,7 +291,7 @@ class RunManager:
                     
             else:
                 # Local mode: search in local directory
-                checkpoint_dir = Path(f"Entrenamientos/{run_id_to_check}/checkpoints/")
+                checkpoint_dir = Path(f"training_runs/{run_id_to_check}/checkpoints/")
                 self.logger.info(f"Searching locally: {checkpoint_dir}")
                 
                 if not checkpoint_dir.exists():
@@ -334,72 +334,136 @@ class RunManager:
             self.logger.error(f"Error searching for checkpoints in run {run_id_to_check}: {e}")
             return None
     
-    def load_scaler(self, scaler_path: Optional[str] = None, blob_name: Optional[str] = None):
+    def load_data_artifacts(self, data_run_id: str) -> Tuple[Any, Any, Any]:
         """
-        Load a previously saved scaler.
+        Load all data artifacts from a specific data_run.
         
         Args:
-            scaler_path: Specific scaler path (optional, for checkpoint loading)
-            blob_name: Specific blob name in GCS (optional, for checkpoint loading)
+            data_run_id: The ID of the data_run to load artifacts from
             
         Returns:
-            Loaded scaler object
+            Tuple of (normalized_dataframe, scaler, price_scaler)
         """
+        self.logger.info(f"Loading data artifacts from data_run: {data_run_id}")
+        
         try:
             if self.storage_mode == "gcp":
                 # GCP mode: load from Google Cloud Storage
-                self.logger.info("Loading scaler from Google Cloud Storage...")
-                if blob_name is None:
-                    blob_name = f"{self.run_id}/scaler.pkl"
-                return self.gcs_utils.load_scaler_from_gcs(blob_name)
+                self.logger.info("Loading data artifacts from Google Cloud Storage...")
+                
+                # Use temporary files for downloading
+                import tempfile
+                
+                # Load normalized_dataframe
+                with tempfile.NamedTemporaryFile(suffix='.pkl', delete=False) as temp_file:
+                    temp_dataframe_path = temp_file.name
+                
+                try:
+                    dataframe_blob_name = f"data_runs/{data_run_id}/normalized_dataframe.pkl"
+                    if self.gcs_utils.download_file_from_gcs(dataframe_blob_name, temp_dataframe_path):
+                        with open(temp_dataframe_path, 'rb') as f:
+                            normalized_dataframe = pickle.load(f)
+                        self.logger.info(f"DataFrame loaded from GCS - Shape: {normalized_dataframe.shape}")
+                    else:
+                        raise FileNotFoundError(f"Failed to download dataframe from GCS: {dataframe_blob_name}")
+                finally:
+                    os.unlink(temp_dataframe_path)
+                
+                # Load scaler
+                scaler_blob_name = f"data_runs/{data_run_id}/scaler.pkl"
+                scaler = self.gcs_utils.load_scaler_from_gcs(scaler_blob_name)
+                self.logger.info("Scaler loaded from GCS")
+                
+                # Load price_scaler
+                price_scaler_blob_name = f"data_runs/{data_run_id}/price_scaler.pkl"
+                price_scaler = self.gcs_utils.load_price_scaler_from_gcs(price_scaler_blob_name)
+                self.logger.info("Price scaler loaded from GCS")
+                
+                return normalized_dataframe, scaler, price_scaler
+                
             else:
                 # Local mode
-                if scaler_path is None:
-                    scaler_path = str(Path(self.base_path) / "scaler.pkl")
+                data_run_path = Path(f"data_runs/{data_run_id}")
                 
-                if not os.path.exists(scaler_path):
-                    raise FileNotFoundError(f"Scaler file not found: {scaler_path}")
+                if not data_run_path.exists():
+                    raise FileNotFoundError(f"Data run directory not found: {data_run_path}")
+                
+                # Load normalized_dataframe
+                dataframe_path = data_run_path / "normalized_dataframe.pkl"
+                if not dataframe_path.exists():
+                    raise FileNotFoundError(f"Normalized dataframe not found: {dataframe_path}")
+                
+                with open(dataframe_path, 'rb') as f:
+                    normalized_dataframe = pickle.load(f)
+                self.logger.info(f"DataFrame loaded from: {dataframe_path} - Shape: {normalized_dataframe.shape}")
+                
+                # Load scaler
+                scaler_path = data_run_path / "scaler.pkl"
+                if not scaler_path.exists():
+                    raise FileNotFoundError(f"Scaler not found: {scaler_path}")
                 
                 scaler = joblib.load(scaler_path)
-                self.logger.info(f"Scaler loaded successfully from: {scaler_path}")
-                return scaler
+                self.logger.info(f"Scaler loaded from: {scaler_path}")
+                
+                # Load price_scaler
+                price_scaler_path = data_run_path / "price_scaler.pkl"
+                if not price_scaler_path.exists():
+                    raise FileNotFoundError(f"Price scaler not found: {price_scaler_path}")
+                
+                price_scaler = joblib.load(price_scaler_path)
+                self.logger.info(f"Price scaler loaded from: {price_scaler_path}")
+                
+                return normalized_dataframe, scaler, price_scaler
                 
         except Exception as e:
-            self.logger.error(f"Error loading scaler: {str(e)}")
+            self.logger.error(f"Error loading data artifacts from data_run {data_run_id}: {str(e)}")
             raise
-    
-    def load_price_scaler(self, price_scaler_path: Optional[str] = None, blob_name: Optional[str] = None):
+
+    def load_data_run_metadata(self, data_run_id: str) -> Dict[str, Any]:
         """
-        Load a previously saved price scaler.
+        Load metadata from a specific data_run.
         
         Args:
-            price_scaler_path: Specific price scaler path (optional, for checkpoint loading)
-            blob_name: Specific blob name in GCS (optional, for checkpoint loading)
+            data_run_id: The ID of the data_run to load metadata from
             
         Returns:
-            Loaded price scaler object
+            Dictionary containing the data_run metadata
         """
+        self.logger.info(f"Loading metadata from data_run: {data_run_id}")
+        
         try:
             if self.storage_mode == "gcp":
                 # GCP mode: load from Google Cloud Storage
-                self.logger.info("Loading price_scaler from Google Cloud Storage...")
-                if blob_name is None:
-                    blob_name = f"{self.run_id}/price_scaler.pkl"
-                return self.gcs_utils.load_price_scaler_from_gcs(blob_name)
+                blob_name = f"data_runs/{data_run_id}/data_run_metadata.yaml"
+                
+                # Download blob content directly to memory
+                bucket = self.gcs_utils.client.bucket(self.gcs_bucket_name)
+                blob = bucket.blob(blob_name)
+                
+                if not blob.exists():
+                    raise FileNotFoundError(f"Data run metadata not found in GCS: {blob_name}")
+                
+                yaml_content = blob.download_as_string().decode('utf-8')
+                metadata = yaml.safe_load(yaml_content)
+                self.logger.info(f"Data run metadata loaded from GCS: {blob_name}")
+                
+                return metadata
+                
             else:
                 # Local mode
-                if price_scaler_path is None:
-                    price_scaler_path = str(Path(self.base_path) / "price_scaler.pkl")
+                metadata_path = Path(f"data_runs/{data_run_id}/data_run_metadata.yaml")
                 
-                if not os.path.exists(price_scaler_path):
-                    raise FileNotFoundError(f"Price scaler file not found: {price_scaler_path}")
+                if not metadata_path.exists():
+                    raise FileNotFoundError(f"Data run metadata not found: {metadata_path}")
                 
-                price_scaler = joblib.load(price_scaler_path)
-                self.logger.info(f"Price scaler loaded successfully from: {price_scaler_path}")
-                return price_scaler
+                with open(metadata_path, 'r', encoding='utf-8') as f:
+                    metadata = yaml.safe_load(f)
+                
+                self.logger.info(f"Data run metadata loaded from: {metadata_path}")
+                return metadata
                 
         except Exception as e:
-            self.logger.error(f"Error loading price scaler: {str(e)}")
+            self.logger.error(f"Error loading data run metadata for {data_run_id}: {str(e)}")
             raise
     
     def save_agent_checkpoint(self, agent: TransformerSACAgent, episode: int) -> str:
@@ -441,13 +505,13 @@ class RunManager:
         
         # Determine path and worker function based on storage mode
         if self.storage_mode == "gcp":
-            path_prefix = f"{self.run_id}/checkpoints/checkpoint_episode_{episode + 1}"
+            path_prefix = f"training_runs/{self.run_id}/checkpoints/checkpoint_episode_{episode + 1}"
             args = (agent_state, path_prefix, self.gcp_config)
             target_worker = _save_worker_gcs
             checkpoint_path = f"gs://{self.gcs_utils.bucket_name}/{path_prefix}"
         else:
-            # Ensure checkpoint directory exists
-            checkpoint_dir = Path(self.base_path) / "checkpoints"
+            # Ensure checkpoint directory exists for training runs
+            checkpoint_dir = Path(f"training_runs/{self.run_id}/checkpoints")
             checkpoint_dir.mkdir(parents=True, exist_ok=True)
             path_prefix = str(checkpoint_dir / f"checkpoint_episode_{episode + 1}")
             args = (agent_state, path_prefix)
@@ -603,13 +667,13 @@ class RunManager:
         
         # Determine path and worker function based on storage mode
         if self.storage_mode == "gcp":
-            path_prefix = f"{self.run_id}/best_model"
+            path_prefix = f"training_runs/{self.run_id}/best_model"
             args = (agent_state, path_prefix, self.gcp_config)
             target_worker = _save_worker_gcs
-            best_model_path = f"gs://{self.gcs_utils.bucket_name}/{self.run_id}/best_model"
+            best_model_path = f"gs://{self.gcs_utils.bucket_name}/training_runs/{self.run_id}/best_model"
         else:
-            # Ensure best model directory exists
-            best_model_dir = Path(self.base_path) / "best_model"
+            # Ensure best model directory exists for training runs
+            best_model_dir = Path(f"training_runs/{self.run_id}/best_model")
             best_model_dir.mkdir(parents=True, exist_ok=True)
             path_prefix = str(best_model_dir / "best_model")
             args = (agent_state, path_prefix)
@@ -661,13 +725,13 @@ class RunManager:
         
         # Determine path and worker function based on storage mode
         if self.storage_mode == "gcp":
-            path_prefix = f"{self.run_id}/final_model"
+            path_prefix = f"training_runs/{self.run_id}/final_model"
             args = (agent_state, path_prefix, self.gcp_config)
             target_worker = _save_worker_gcs
-            final_model_path = f"gs://{self.gcs_utils.bucket_name}/{self.run_id}/final_model"
+            final_model_path = f"gs://{self.gcs_utils.bucket_name}/training_runs/{self.run_id}/final_model"
         else:
-            # Ensure final model directory exists
-            final_model_dir = Path(self.base_path) / "final_model"
+            # Ensure final model directory exists for training runs
+            final_model_dir = Path(f"training_runs/{self.run_id}/final_model")
             final_model_dir.mkdir(parents=True, exist_ok=True)
             path_prefix = str(final_model_dir / "final_model")
             args = (agent_state, path_prefix)
@@ -699,22 +763,22 @@ class RunManager:
         if base_path is not None:
             self.base_path = base_path
         elif self.storage_mode == "gcp":
-            self.base_path = f"gs://{self.gcs_bucket_name}/{self.run_id}"
+            self.base_path = f"gs://{self.gcs_bucket_name}/training_runs/{self.run_id}"
         else:
-            self.base_path = f"Entrenamientos/{self.run_id}"
+            self.base_path = f"training_runs/{self.run_id}"
         
         self.logger.info(f"RunManager context updated - run_id: {self.run_id}, base_path: {self.base_path}")
 
     
     
     @staticmethod
-    def load_run_config(run_id: str, storage_mode: str = None, gcp_config: Dict[str, Any] = None) -> Optional[Dict[str, Any]]:
+    def load_training_run_config(training_run_id: str, storage_mode: str = None, gcp_config: Dict[str, Any] = None) -> Optional[Dict[str, Any]]:
         """
-        Load run configuration without requiring a full RunManager instance.
+        Load training run configuration without requiring a full RunManager instance.
         This method is useful when you need to load configuration to determine how to create a RunManager.
         
         Args:
-            run_id: The run ID for which to load the configuration
+            training_run_id: The training run ID for which to load the configuration
             storage_mode: Storage mode ('local' or 'gcp'). If None, tries to determine automatically
             gcp_config: GCP configuration dictionary (required if storage_mode is 'gcp')
             
@@ -722,19 +786,19 @@ class RunManager:
             Dict containing the configuration, or None if file doesn't exist or error occurs
         """
         logger = logging.getLogger(__name__)
-        logger.info(f"Loading configuration for run: {run_id}")
+        logger.info(f"Loading configuration for training run: {training_run_id}")
         
         # If storage_mode not provided, try to determine it
         if storage_mode is None:
             # Try local first
-            local_config_path = Path(f"Entrenamientos/{run_id}/config_run.yaml")
+            local_config_path = Path(f"training_runs/{training_run_id}/config_run.yaml")
             if local_config_path.exists():
                 storage_mode = "local"
             else:
                 # If not found locally, assume GCP as a fallback strategy.
                 # This avoids a hard dependency on a global config file.
                 storage_mode = "gcp"
-                logger.info(f"Configuracion no encontrada localmente para el run_id {run_id}, asumiendo storage_mode='gcp'.")
+                logger.info(f"Configuracion no encontrada localmente para el training_run_id {training_run_id}, asumiendo storage_mode='gcp'.")
                 # Note: gcp_config must be provided by the caller in this case.
         
         try:
@@ -752,8 +816,8 @@ class RunManager:
                 if not gcs_bucket_name:
                     raise ValueError("bucket_name is required in gcp_config")
                 
-                # Construct GCS blob name
-                blob_name = f"{run_id}/config_run.yaml"
+                # Construct GCS blob name for training runs
+                blob_name = f"training_runs/{training_run_id}/config_run.yaml"
                 logger.info(f"Downloading config from GCS: {blob_name}")
                 
                 # Download blob content directly to memory
@@ -761,35 +825,35 @@ class RunManager:
                 blob = bucket.blob(blob_name)
                 
                 if not blob.exists():
-                    logger.warning(f"Configuration file not found in GCS: {blob_name}")
+                    logger.warning(f"Training run configuration file not found in GCS: {blob_name}")
                     return None
                 
                 # Download as string and parse YAML
                 yaml_content = blob.download_as_string().decode('utf-8')
-                logger.info("Configuration downloaded successfully from GCS")
+                logger.info("Training run configuration downloaded successfully from GCS")
                 
                 # Load YAML content
                 config_data = yaml.safe_load(yaml_content)
-                logger.info("Configuration loaded successfully from GCS")
+                logger.info("Training run configuration loaded successfully from GCS")
                 return config_data
                             
             else:
                 # Local storage mode
-                config_path = Path(f"Entrenamientos/{run_id}/config_run.yaml")
+                config_path = Path(f"training_runs/{training_run_id}/config_run.yaml")
                 logger.info(f"Loading config from local path: {config_path}")
                 
                 if not config_path.exists():
-                    logger.warning(f"Configuration file not found locally: {config_path}")
+                    logger.warning(f"Training run configuration file not found locally: {config_path}")
                     return None
                 
                 with open(config_path, 'r', encoding='utf-8') as f:
                     config_data = yaml.safe_load(f)
                 
-                logger.info("Configuration loaded successfully from local storage")
+                logger.info("Training run configuration loaded successfully from local storage")
                 return config_data
                 
         except Exception as e:
-            logger.error(f"Error loading configuration for run {run_id}: {str(e)}")
+            logger.error(f"Error loading configuration for training run {training_run_id}: {str(e)}")
             import traceback
             logger.error(f"Traceback: {traceback.format_exc()}")
             return None

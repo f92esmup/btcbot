@@ -8,3 +8,5 @@ runs/
 .conda/
 Entrenamientos/
 .env
+data_runs/
+training_runs/

@@ -30,40 +30,28 @@ from src.training import RunManager, AgentEvaluator, Trainer
 from src.configuration.secret_utils import SecretManagerUtils
 
 
-def create_trading_environment(dataframe: Any, logger, run_manager: RunManager, env_config: dict, price_scaler_path: Optional[str] = None, price_scaler_blob_name: Optional[str] = None) -> FuturesTradingEnv:
+def create_trading_environment(dataframe: Any, logger, price_scaler: Any, env_config: dict) -> FuturesTradingEnv:
     """
     Crea el entorno de trading con los datos procesados.
     
     Args:
         dataframe: DataFrame con datos normalizados
         logger: Logger para mensajes
-        run_manager: Instancia centralizada de RunManager
+        price_scaler: Price scaler ya cargado
         env_config: Diccionario con la configuración del entorno
-        price_scaler_path: Ruta específica del price_scaler (opcional, para checkpoint loading)
-        price_scaler_blob_name: Blob name específico en GCS (opcional, para checkpoint loading)
         
     Returns:
         FuturesTradingEnv: Entorno configurado
     """
     logger.info("Creando entorno de trading...")
     
-    # Cargar el price_scaler usando RunManager
-    logger.info("Cargando price_scaler desde almacenamiento...")
-    try:
-        price_scaler = run_manager.load_price_scaler(price_scaler_path, price_scaler_blob_name)
-        
-        # Obtener información del rango para logging
-        if hasattr(price_scaler, 'data_min_') and hasattr(price_scaler, 'data_max_'):
-            close_min = price_scaler.data_min_[0]
-            close_max = price_scaler.data_max_[0]
-            logger.info(f"Price scaler cargado exitosamente - Rango Close: {close_min:.2f} - {close_max:.2f}")
-        else:
-            logger.info("Price scaler cargado exitosamente")
-        
-    except Exception as e:
-        logger.error(f"Error crítico al cargar price_scaler: {e}")
-        logger.error("No se puede continuar sin el price_scaler. Deteniendo ejecución.")
-        raise RuntimeError(f"Fallo al cargar price_scaler: {e}")
+    # Obtener información del rango para logging
+    if hasattr(price_scaler, 'data_min_') and hasattr(price_scaler, 'data_max_'):
+        close_min = price_scaler.data_min_[0]
+        close_max = price_scaler.data_max_[0]
+        logger.info(f"Price scaler cargado exitosamente - Rango Close: {close_min:.2f} - {close_max:.2f}")
+    else:
+        logger.info("Price scaler cargado exitosamente")
     
     sim_portfolio = Portfolio(env_config)
 
@@ -179,9 +167,29 @@ def main():
     
     # Parsear argumentos
     args = parse_arguments()
+    
+    # === NUEVA LÓGICA: DETERMINAR MODO DE OPERACIÓN ===
+    logger.info("=== DETERMINANDO MODO DE OPERACIÓN ===")
+    
+    if args.data_run_id:
+        logger.info(f"🆕 MODO: Nuevo Entrenamiento desde data_run: {args.data_run_id}")
+        operation_mode = "new_training"
+        source_id = args.data_run_id
+    elif args.checkpoint:
+        if args.fine_tune_mode:
+            logger.info(f"🔧 MODO: Fine-Tuning desde training_run: {args.checkpoint}")
+            operation_mode = "fine_tuning"
+        else:
+            logger.info(f"▶️ MODO: Continuación desde training_run: {args.checkpoint}")
+            operation_mode = "resume_training"
+        source_id = args.checkpoint
+    else:
+        # Esto no debería ocurrir por el mutually_exclusive_group, pero por seguridad
+        logger.error("❌ ERROR: Debe especificar --data-run-id o --checkpoint")
+        sys.exit(1)
 
     # --- LÓGICA DE CARGA DE CONFIGURACIÓN ---
-    # Determinar qué configuración usar: la del checkpoint (continuación) o la local (nuevo/fine-tune)
+    # Preparar gcp_config para operaciones de carga
     gcp_config_for_load = None
     try:
         with open('src/configuration/config.yaml', 'r') as f:
@@ -192,30 +200,92 @@ def main():
     except FileNotFoundError:
         logger.warning("No se encontró config.yaml local. Se asumirá que no se necesita gcp_config para cargar.")
 
-    if args.checkpoint and not args.fine_tune_mode:
-        logger.info(f"Modo 'Continuación Pura' detectado. Cargando configuración desde el run_id: {args.checkpoint}")
-        # Cargar la configuración del run anterior para una continuación exacta
-        config_dict = RunManager.load_run_config(args.checkpoint, gcp_config=gcp_config_for_load)
-        if not config_dict:
-            logger.error(f"No se pudo cargar la configuración para el run_id: {args.checkpoint}. Abortando.")
-            sys.exit(1)
-        # La configuración cargada del checkpoint ya contiene la sección 'config'
-        local_config_dict = config_dict.get('config', {})
-        logger.info(f"Configuración del run '{args.checkpoint}' cargada exitosamente como fuente de verdad.")
-    else:
-        # Modo 'Nuevo Entrenamiento' o 'Fine-Tuning': usar la configuración local
-        if args.checkpoint and args.fine_tune_mode:
-            logger.info(f"Modo 'Fine-Tuning' detectado. Usando configuración local 'config.yaml' para el nuevo run.")
-        else:
-            logger.info("Modo 'Nuevo Entrenamiento' detectado. Usando 'config.yaml' local.")
+    if operation_mode == "new_training":
+        # === MODO: NUEVO ENTRENAMIENTO DESDE DATA_RUN ===
+        logger.info(f"📊 Cargando configuración local para nuevo entrenamiento...")
         
+        # Cargar configuración local como base
         try:
             with open('src/configuration/config.yaml', 'r') as f:
                 local_config_dict = yaml.safe_load(f)
-            logger.info("Configuración local 'config.yaml' cargada exitosamente.")
+            logger.info("✅ Configuración local 'config.yaml' cargada exitosamente.")
         except FileNotFoundError:
-            logger.error("No se encontró el archivo 'src/configuration/config.yaml'. Abortando.")
+            logger.error("❌ No se encontró el archivo 'src/configuration/config.yaml'. Abortando.")
             sys.exit(1)
+        
+        # Cargar metadatos del data_run para establecer el linaje
+        logger.info(f"📋 Cargando metadatos del data_run: {args.data_run_id}")
+        try:
+            # Construir ruta de metadatos
+            storage_mode = local_config_dict.get('normalization', {}).get('storage_mode', 'local')
+            
+            # Create a temporary RunManager instance just for loading metadata
+            temp_run_manager = RunManager(
+                storage_mode=storage_mode,
+                gcp_config=gcp_config_for_load
+            )
+            
+            # Use the new centralized method to load metadata
+            data_run_metadata = temp_run_manager.load_data_run_metadata(args.data_run_id)
+            
+            # Verificar que los metadatos sean válidos
+            if 'experiment_parameters' not in data_run_metadata:
+                raise ValueError("Metadatos del data_run inválidos: falta 'experiment_parameters'")
+                
+            logger.info(f"📊 Dataset Info - Símbolo: {data_run_metadata['experiment_parameters']['symbol']}, "
+                       f"Intervalo: {data_run_metadata['experiment_parameters']['interval']}, "
+                       f"Período: {data_run_metadata['experiment_parameters']['start_date']} → "
+                       f"{data_run_metadata['experiment_parameters'].get('end_date', 'ahora')}")
+            
+        except Exception as e:
+            logger.error(f"❌ Error cargando metadatos del data_run '{args.data_run_id}': {e}")
+            sys.exit(1)
+            
+        # Variables para el nuevo entrenamiento
+        is_new_training = True
+        data_run_id = args.data_run_id
+        training_run_lineage = {
+            'data_run_id': args.data_run_id,
+            'data_run_creation_timestamp': data_run_metadata['data_run_info']['creation_timestamp'],
+            'data_run_description': data_run_metadata['data_run_info']['description']
+        }
+        
+    else:
+        # === MODO: REANUDAR O FINE-TUNE DESDE TRAINING_RUN ===
+        logger.info(f"🔄 Cargando configuración desde training_run: {args.checkpoint}")
+        
+        # Cargar la configuración del training_run anterior
+        config_dict = RunManager.load_training_run_config(args.checkpoint, gcp_config=gcp_config_for_load)
+        if not config_dict:
+            logger.error(f"❌ No se pudo cargar la configuración para el training_run: {args.checkpoint}. Abortando.")
+            sys.exit(1)
+        
+        if operation_mode == "fine_tuning":
+            # Fine-tuning: usar configuración local pero mantener el linaje
+            logger.info("🔧 Modo Fine-Tuning: usando configuración local con linaje del training_run original")
+            try:
+                with open('src/configuration/config.yaml', 'r') as f:
+                    local_config_dict = yaml.safe_load(f)
+                logger.info("✅ Configuración local cargada para fine-tuning.")
+            except FileNotFoundError:
+                logger.error("❌ No se encontró el archivo 'src/configuration/config.yaml'. Abortando.")
+                sys.exit(1)
+        else:
+            # Continuación: usar configuración del checkpoint
+            local_config_dict = config_dict.get('config', {})
+            logger.info(f"✅ Configuración del training_run '{args.checkpoint}' cargada como fuente de verdad.")
+        
+        # Extraer el data_run_id del linaje
+        training_run_lineage = config_dict.get('lineage', {})
+        if 'data_run_id' not in training_run_lineage:
+            logger.error("❌ El training_run especificado no contiene información de linaje (data_run_id)")
+            sys.exit(1)
+            
+        data_run_id = training_run_lineage['data_run_id']
+        logger.info(f"📊 Data_run original identificado: {data_run_id}")
+        
+        # Variables para el entrenamiento existente
+        is_new_training = False
 
     # --- EXTRACCIÓN DE PARÁMETROS DEL EXPERIMENTO ---
     try:
@@ -235,12 +305,24 @@ def main():
     set_seed(seed, logger)
 
     # === GENERACIÓN Y SINCRONIZACIÓN DEL RUN_ID ===
-    # Solo el proceso jefe genera el run_id, luego lo sincroniza con todos los procesos
+    # Solo el proceso jefe genera el training_run_id, luego lo sincroniza con todos los procesos
     if is_chief:
-        # Generar run_id único incluyendo la semilla
-        current_time = datetime.now().strftime('%Y%m%d-%H%M%S')
-        run_id = f"{symbol}_{interval}_{seed}_{current_time}"
-        logger.info(f"[Proceso Jefe] Run ID generado: {run_id}")
+        if is_new_training:
+            # Generar nuevo training_run_id para entrenamientos desde data_run
+            current_time = datetime.now().strftime('%Y%m%d-%H%M%S')
+            run_id = f"training_{symbol}_{interval}_{seed}_{current_time}"
+            logger.info(f"[Proceso Jefe] Nuevo Training Run ID generado: {run_id}")
+        else:
+            # Para continuaciones y fine-tuning, usar el mismo run_id o generar uno nuevo para fine-tuning
+            if operation_mode == "fine_tuning":
+                # Fine-tuning: generar nuevo run_id pero mantener el linaje
+                current_time = datetime.now().strftime('%Y%m%d-%H%M%S')
+                run_id = f"finetune_{symbol}_{interval}_{seed}_{current_time}"
+                logger.info(f"[Proceso Jefe] Fine-Tuning Run ID generado: {run_id}")
+            else:
+                # Continuación: usar el mismo run_id del checkpoint
+                run_id = args.checkpoint
+                logger.info(f"[Proceso Jefe] Reanudando Training Run ID: {run_id}")
     else:
         # Los procesos no-jefe inicializan run_id como None, se sincronizará después
         run_id = None
@@ -284,10 +366,10 @@ def main():
     # Determinar base_path según storage_mode (todos los procesos)
     if storage_mode == "gcp":
         gcs_bucket_name = gcp_config.get('storage', {}).get('bucket_name')
-        base_path = f"gs://{gcs_bucket_name}/{run_id}"
+        base_path = f"gs://{gcs_bucket_name}/training_runs/{run_id}"
         logger.info(f"[Proceso {rank}] Modo GCP: Los artefactos se accederán desde {base_path}")
     else:
-        base_path = Path("Entrenamientos") / run_id
+        base_path = Path("training_runs") / run_id
         if is_chief:
             base_path.mkdir(parents=True, exist_ok=True)
         logger.info(f"[Proceso {rank}] Modo Local: Los artefactos se accederán desde {base_path}")
@@ -336,18 +418,26 @@ def main():
                 'run_id': run_id,
                 'timestamp': datetime.now().isoformat(),
                 'storage_mode': storage_mode,
-                'base_path': str(base_path)
+                'base_path': str(base_path),
+                'operation_mode': operation_mode
             },
             'command_line_args': vars(args),
-            'config': local_config_dict
+            'config': local_config_dict,
+            'lineage': training_run_lineage  # Información del data_run origen
         }
 
-        # Guardar configuración del run usando RunManager (SOLO EL JEFE ESCRIBE)
-        try:
-            run_manager.save_run_config(full_run_config)
-        except Exception as e:
-            logger.error(f"Error al guardar config_run.yaml: {e}")
-            # Continuar ejecución ya que este error no es crítico
+        # Solo guardar configuración para nuevos entrenamientos y fine-tuning
+        # (las continuaciones ya tienen su configuración)
+        if is_new_training or operation_mode == "fine_tuning":
+            # Guardar configuración del run usando RunManager (SOLO EL JEFE ESCRIBE)
+            try:
+                run_manager.save_run_config(full_run_config)
+                logger.info(f"✅ Configuración del training_run guardada con linaje a data_run: {data_run_id}")
+            except Exception as e:
+                logger.error(f"❌ Error al guardar config_training_run.yaml: {e}")
+                # Continuar ejecución ya que este error no es crítico
+        else:
+            logger.info(f"ℹ️ Reanudando entrenamiento existente - no se actualiza la configuración")
     else:
         # Los procesos no-jefe inicializan variables de gestión que no usan a None
         tensorboard_dir = None
@@ -356,103 +446,32 @@ def main():
         logger.info(f"[Proceso {rank}] Variables de logging inicializadas como None")
     
     try:
-        # === FASE 1: EL PROCESO JEFE GENERA Y GUARDA LOS ARTEFACTOS ===
-        if is_chief:
-            logger.info("=== FASE 1: Generando y Guardando Artefactos (PROCESO JEFE) ===")
-            
-            # Obtener credenciales de API desde Secret Manager o variables de entorno
-            api_key = None
-            api_secret = None
-            try:
-                gcp_config = local_config_dict.get('gcp', {})
-                project_id = gcp_config.get('project_id')
-                if project_id:
-                    logger.info("Intentando cargar credenciales desde Secret Manager...")
-                    secret_manager = SecretManagerUtils(project_id=project_id)
-                    secrets_config = local_config_dict.get('secrets', {})
-                    api_key_secret_id = secrets_config.get('binance_api_key_futures')
-                    api_secret_secret_id = secrets_config.get('binance_api_secret_futures')
-                    if api_key_secret_id and api_secret_secret_id:
-                        api_key = secret_manager.get_secret(api_key_secret_id)
-                        api_secret = secret_manager.get_secret(api_secret_secret_id)
-                        logger.info("✅ Credenciales de Binance cargadas desde Secret Manager.")
-            except (KeyError, RuntimeError) as e:
-                logger.warning(f"No se pudieron cargar las credenciales desde Secret Manager: {e}")
-
-            if not api_key or not api_secret:
-                logger.warning("Credenciales no encontradas en Secret Manager, intentando con variables de entorno...")
-                api_key = os.getenv('BINANCE_API_KEY')
-                api_secret = os.getenv('BINANCE_API_SECRET')
-                if api_key and api_secret:
-                    logger.info("✅ Credenciales de Binance cargadas desde variables de entorno.")
-                else:
-                    logger.warning("Credenciales de Binance no encontradas en variables de entorno. La adquisición de datos podría fallar si se requiere autenticación.")
-            
-            # Crear instancia local de GCSUtils si es necesario para compatibilidad
-            gcs_utils_for_pipeline = None
-            if storage_mode == "gcp":
-                from src.configuration.gcs_utils import GCSUtils
-                gcs_utils_for_pipeline = GCSUtils(gcp_config)
-            
-            data_pipeline_chief = DataPipeline(
-                symbol=symbol,
-                interval=interval,
-                start_date=start_date,
-                end_date=end_date,
-                run_id=run_id,
-                base_path=str(base_path),
-                full_config=local_config_dict,
-                save_artifacts=True,
-                api_key=api_key,
-                api_secret=api_secret,
-                gcs_utils=gcs_utils_for_pipeline
-            )
-            # El jefe ejecuta con save_artifacts=True para guardar scalers y metadatos
-            _, _ = data_pipeline_chief.run()
-            logger.info("✅ FASE 1 completada - Artefactos generados y guardados por el proceso jefe")
+        # === CARGA DE DATOS DESDE DATA_RUN ===
+        logger.info("=== CARGANDO DATOS DESDE DATA_RUN ===")
         
-        # === FASE 2: SINCRONIZACIÓN CON BARRERA ===
-        # Todos los procesos esperan a que el jefe termine de guardar los artefactos
-        if is_distributed:
-            logger.info(f"[Proceso {rank}] Esperando en barrera de sincronización...")
-            dist.barrier()
-            logger.info(f"[Proceso {rank}] ✅ Sincronización completada - Artefactos disponibles para todos")
+        # Todos los procesos cargan los datos del data_run especificado usando RunManager
+        logger.info(f"📊 Cargando artefactos desde data_run: {data_run_id}")
         
-        # === FASE 3: TODOS LOS PROCESOS CARGAN LOS DATOS EN MEMORIA ===
-        logger.info(f"=== FASE 3: Cargando Datos en Memoria [Proceso {rank}] ===")
+        # Load data artifacts using the new centralized method
+        normalized_dataframe, scaler, price_scaler = run_manager.load_data_artifacts(data_run_id)
         
-        # Obtener credenciales de API desde variables de entorno (para todos los procesos)
-        api_key = os.getenv('BINANCE_API_KEY')
-        api_secret = os.getenv('BINANCE_API_SECRET')
+        # Load data run metadata using the new method
+        data_run_metadata = run_manager.load_data_run_metadata(data_run_id)
         
-        # Crear instancia local de GCSUtils si es necesario para compatibilidad
-        gcs_utils_for_pipeline = None
-        if storage_mode == "gcp":
-            from src.configuration.gcs_utils import GCSUtils
-            gcs_utils_for_pipeline = GCSUtils(gcp_config)
-        
-        data_pipeline = DataPipeline(
-            symbol=symbol,
-            interval=interval,
-            start_date=start_date,
-            end_date=end_date,
-            run_id=run_id,
-            base_path=str(base_path),
-            full_config=local_config_dict,
-            save_artifacts=False,
-            api_key=api_key,
-            api_secret=api_secret,
-            gcs_utils=gcs_utils_for_pipeline
-        )
-        # Todos los procesos (incluido el jefe) ejecutan con save_artifacts=False
-        # Esto carga los datos y los procesa en memoria, usando los scalers ya guardados
-        normalized_dataframe, price_scaler_path = data_pipeline.run()
-        
-        # Ahora todos los procesos tienen los datos cargados en su memoria
+        # Asignar el DataFrame para el resto del código
         dataframe = normalized_dataframe
-        logger.info(f"[Proceso {rank}] ✅ FASE 3 completada - Datos cargados en memoria")
         
-        # === FASE 4: CREACIÓN DEL ENTORNO Y AGENTE (TODOS LOS PROCESOS) ===
+        logger.info(f"📊 Datos cargados exitosamente:")
+        logger.info(f"  • DataFrame shape: {dataframe.shape}")
+        logger.info(f"  • Rango temporal: {dataframe.index.min()} → {dataframe.index.max()}")
+        logger.info(f"  • Columnas: {len(dataframe.columns)}")
+        logger.info(f"  • Data_run origen: {data_run_id}")
+        logger.info(f"  • Símbolo: {data_run_metadata['experiment_parameters']['symbol']}")
+        logger.info(f"  • Intervalo: {data_run_metadata['experiment_parameters']['interval']}")
+        logger.info(f"  • Período: {data_run_metadata['experiment_parameters']['start_date']} → "
+                   f"{data_run_metadata['experiment_parameters'].get('end_date', 'ahora')}")
+        
+        # === CREACIÓN DEL ENTORNO Y AGENTE (TODOS LOS PROCESOS) ===
         logger.info(f"=== FASE 4: Creación del Entorno y Agente [Proceso {rank}] ===")
         
         # Configurar device
@@ -460,25 +479,15 @@ def main():
         logger.info(f"[Proceso {rank}] Usando device: {device}")
         
         # Variables para configuración de checkpoint (se determinarán después)
-        path_price_scaler_a_cargar = None
-        blob_name_price_scaler_a_cargar = None
         start_episode = 0
-        
-        # Usar la ruta del price_scaler que devolvió el pipeline para nueva ejecución por defecto
-        if storage_mode == "gcp":
-            blob_name_price_scaler_a_cargar = f"{run_id}/price_scaler.pkl"
-        else:
-            path_price_scaler_a_cargar = price_scaler_path
         
         # Crear entorno de trading (todos los procesos)
         logger.info(f"[Proceso {rank}] Creando entorno de trading...")
         env = create_trading_environment(
             dataframe,  # Disponible en todos los procesos
             logger,
-            run_manager,  # Ahora todos los procesos tienen run_manager
-            env_config=local_config_dict['environment'], # Inyección
-            price_scaler_path=path_price_scaler_a_cargar,
-            price_scaler_blob_name=blob_name_price_scaler_a_cargar
+            price_scaler,  # Scaler ya cargado mediante RunManager
+            env_config=local_config_dict['environment'] # Inyección
         )
         
         # Crear agente (todos los procesos) - CRUCIAL: Pasar is_distributed

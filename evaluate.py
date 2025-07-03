@@ -232,7 +232,7 @@ def main():
             logger.warning("No se encontró config.yaml local. Se asumirá que no se necesita gcp_config.")
             gcp_config_local = None
 
-        run_config = RunManager.load_run_config(args.run_id, gcp_config=gcp_config_local)
+        run_config = RunManager.load_training_run_config(args.run_id, gcp_config=gcp_config_local)
         if not run_config or 'config' not in run_config:
             logger.error(f"No se pudo cargar o es inválida la configuración para el run_id: {args.run_id}. Abortando.")
             sys.exit(1)
