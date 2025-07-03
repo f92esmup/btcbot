@@ -11,33 +11,36 @@ class DecisionMaker:
     Se encarga de cargar el modelo entrenado y proporcionar decisiones.
     """
     
-    def __init__(self, run_manager: RunManager, run_config: dict, device: torch.device):
+    def __init__(self, scaler, run_manager: RunManager, run_config: dict, device: torch.device):
         """
         Inicializa el DecisionMaker.
 
         Args:
-            run_manager (RunManager): Instancia del gestor del run para cargar artefactos.
+            scaler: El scaler ya cargado para obtener información de características.
+            run_manager (RunManager): Instancia del gestor del run para cargar el modelo.
             run_config (dict): Configuración completa del run.
             device (torch.device): Dispositivo donde ejecutar el modelo (CPU/GPU).
         """
+        self.scaler = scaler
         self.run_manager = run_manager
         self.run_config = run_config
         self.device = device
         self.run_id = run_manager.run_id
+
+        # Validar que el scaler inyectado no sea None
+        if self.scaler is None:
+            raise ValueError("El scaler inyectado no puede ser None")
 
         # 1. Extraer configuraciones del entorno y agente desde la clave 'config'
         main_config = self.run_config.get('config', {})
         self.env_config = main_config.get('environment', {})
         agent_config = main_config.get('agent', {})
 
-        # 2. Cargar scaler del entrenamiento usando el run_manager inyectado
-        self.scaler = self.run_manager.load_scaler()
-
-        # 3. Inferir parámetros del scaler y run_config
+        # 2. Use the injected scaler instead of loading it
         # Asegurarse de que el scaler esté ajustado
         if not hasattr(self.scaler, 'n_features_in_'):
-             raise ValueError("El scaler cargado no parece estar ajustado (no tiene 'n_features_in_').")
-        
+             raise ValueError("El scaler inyectado no parece estar ajustado (no tiene 'n_features_in_').")
+        # 3. Inferir parámetros del scaler y run_config
         num_total_features = self.scaler.n_features_in_
         self.market_features = num_total_features
         sequence_length = self.env_config['ventana_observacion_size']

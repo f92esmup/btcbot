@@ -1,6 +1,5 @@
 import pandas as pd
 import numpy as np
-from src.training.run_manager import RunManager
 from src.data.normalization import Normalization
 from src.entorno.environment import TipoOperacion
 
@@ -9,35 +8,36 @@ class LiveObservationBuilder:
     """
     Construye el vector de observación normalizado para el modo en vivo.
     
-    Esta clase carga los scalers de un 'run_id' de entrenamiento específico
-    y los utiliza para procesar los datos de mercado en tiempo real,
-    asegurando que la entrada al agente sea consistente con el entrenamiento.
+    Esta clase utiliza los scalers ya cargados para procesar los datos de mercado
+    en tiempo real, asegurando que la entrada al agente sea consistente con el entrenamiento.
     """
-    def __init__(self, run_manager: RunManager, run_config: dict):
+    def __init__(self, scaler, price_scaler, run_config: dict):
         """
         Inicializa el constructor de observaciones.
         
         Args:
-            run_manager (RunManager): El gestor del run de entrenamiento cuyos artefactos (scalers) se deben cargar.
+            scaler: El scaler ya cargado para normalizar las características de mercado.
+            price_scaler: El price_scaler ya cargado para normalizar precios.
             run_config (dict): Configuración del run cargada previamente.
         """
-        self.run_manager = run_manager
+        self.scaler = scaler
+        self.price_scaler = price_scaler
         self.run_config = run_config
-        print(f"LiveObservationBuilder: Inicializando para run_id '{self.run_manager.run_id}'...")
+        print(f"LiveObservationBuilder: Inicializando con scalers inyectados...")
         
         # Validar que la configuración sea válida
         if not run_config or 'config' not in run_config:
-            raise ValueError(f"Configuración del run inválida para run_id '{self.run_manager.run_id}' - debe contener la clave 'config'")
+            raise ValueError(f"Configuración del run inválida - debe contener la clave 'config'")
         
-        # Cargar scalers
-        self.scaler = self.run_manager.load_scaler()
-        self.price_scaler = self.run_manager.load_price_scaler()
+        # Validar que los scalers estén correctamente cargados
+        if self.scaler is None or self.price_scaler is None:
+            raise ValueError("Los scalers inyectados no pueden ser None")
         
         # Acceder a la configuración del entorno desde la clave 'config'
         main_config = self.run_config.get('config', {})
         self.env_config = main_config.get('environment', {})
         
-        print("Scalers y configuración cargados exitosamente.")
+        print("✅ Scalers inyectados y configuración cargados exitosamente.")
     
     def build(self, live_market_dataframe: pd.DataFrame, live_portfolio_state: dict) -> np.ndarray:
         """

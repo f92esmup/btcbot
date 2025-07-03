@@ -14,14 +14,14 @@ from src.entorno.base_portfolio import TipoOperacion
 
 
 class LiveTradingManager:
-    def __init__(self, run_id: str, symbol: str, interval: str, mode: str, run_config: dict, 
-                 api_key: str, api_secret: str, telegram_bot_token: str = None, telegram_chat_id: str = None):
+    def __init__(self, run_id: str, mode: str, run_config: dict, 
+                 data_run_id: str, api_key: str, api_secret: str, telegram_bot_token: str = None, 
+                 telegram_chat_id: str = None):
         self.run_id = run_id
-        self.symbol = symbol
-        self.interval = interval
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.is_trading_halted = False
         self.run_config = run_config
+        self.data_run_id = data_run_id
         self.api_key = api_key
         self.api_secret = api_secret
         self.telegram_bot_token = telegram_bot_token
@@ -48,9 +48,31 @@ class LiveTradingManager:
         )
         print(f"RunManager inicializado en modo '{storage_mode}'.")
 
-        self.observation_builder = LiveObservationBuilder(self.run_manager, self.run_config)
+        # Load data artifacts (scaler and price_scaler) from the data_run_id
+        print(f"Cargando artifacts de datos desde data_run_id: {self.data_run_id}...")
+        try:
+            _, self.scaler, self.price_scaler = self.run_manager.load_data_artifacts(self.data_run_id)
+            print("✅ Scalers cargados exitosamente desde data artifacts.")
+        except Exception as e:
+            raise RuntimeError(f"Error cargando artifacts de datos: {e}")
+
+        # Load data_run metadata to get symbol and interval (single source of truth)
+        print(f"Cargando metadatos del data_run para obtener parámetros de datos...")
+        try:
+            data_run_metadata = self.run_manager.load_data_run_metadata(self.data_run_id)
+            experiment_params = data_run_metadata['experiment_parameters']
+            self.symbol = experiment_params['symbol']
+            self.interval = experiment_params['interval']
+            print(f"✅ Parámetros de datos cargados desde data_run:")
+            print(f"  - Símbolo: {self.symbol}")
+            print(f"  - Intervalo: {self.interval}")
+        except Exception as e:
+            raise RuntimeError(f"Error cargando metadatos del data_run: {e}")
+
+        # Initialize components with injected scalers
+        self.observation_builder = LiveObservationBuilder(self.scaler, self.price_scaler, self.run_config)
         self.data_processor = LiveDataProcessor(self.run_config)
-        self.decision_maker = DecisionMaker(self.run_manager, self.run_config, self.device)
+        self.decision_maker = DecisionMaker(self.scaler, self.run_manager, self.run_config, self.device)
 
         if self.telegram_bot_token and self.telegram_chat_id:
             try:

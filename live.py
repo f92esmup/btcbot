@@ -71,17 +71,13 @@ def main():
             sys.exit(1)
         logger.info("✅ Configuración del run cargada exitosamente.")
 
-        # Extraer símbolo e intervalo desde la configuración del run para consistencia
+        # Extraer data_run_id desde la configuración del run
         try:
-            # --- CAMBIO AQUÍ ---
-            exp_config = run_config['config']['experiment_definition']
-            symbol = exp_config['symbol']
-            interval = exp_config['interval']
-            logger.info(f"  - Símbolo: {symbol}")
-            logger.info(f"  - Intervalo: {interval}")
+            data_run_id = run_config['lineage']['data_run_id']
+            logger.info(f"  - Data Run ID: {data_run_id}")
             logger.info(f"  - Modo de operación: {args.mode}")
         except KeyError:
-            logger.error(f"El config_run.yaml para '{args.run_id}' no contiene 'experiment_definition' con 'symbol' o 'interval'.")
+            logger.error(f"El config_run.yaml para '{args.run_id}' no contiene 'lineage.data_run_id'.")
             sys.exit(1)
 
         # --- 2. Carga de Credenciales desde Google Secret Manager ---
@@ -121,10 +117,9 @@ def main():
         # --- 3. Inicialización y Ejecución del Trading Manager ---
         manager = LiveTradingManager(
             run_id=args.run_id,
-            symbol=symbol,
-            interval=interval,  # Pasar el intervalo leído
             mode=args.mode,
             run_config=run_config, # Inyectar la configuración completa del run
+            data_run_id=data_run_id,  # Pasar el data_run_id extraído
             api_key=api_key,
             api_secret=api_secret,
             telegram_bot_token=telegram_bot_token,

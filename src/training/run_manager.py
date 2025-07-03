@@ -359,7 +359,7 @@ class RunManager:
                     temp_dataframe_path = temp_file.name
                 
                 try:
-                    dataframe_blob_name = f"data_runs/{data_run_id}/normalized_dataframe.pkl"
+                    dataframe_blob_name = f"{data_run_id}/normalized_dataframe.pkl"
                     if self.gcs_utils.download_file_from_gcs(dataframe_blob_name, temp_dataframe_path):
                         with open(temp_dataframe_path, 'rb') as f:
                             normalized_dataframe = pickle.load(f)
@@ -370,12 +370,12 @@ class RunManager:
                     os.unlink(temp_dataframe_path)
                 
                 # Load scaler
-                scaler_blob_name = f"data_runs/{data_run_id}/scaler.pkl"
+                scaler_blob_name = f"{data_run_id}/scaler.pkl"
                 scaler = self.gcs_utils.load_scaler_from_gcs(scaler_blob_name)
                 self.logger.info("Scaler loaded from GCS")
                 
                 # Load price_scaler
-                price_scaler_blob_name = f"data_runs/{data_run_id}/price_scaler.pkl"
+                price_scaler_blob_name = f"{data_run_id}/price_scaler.pkl"
                 price_scaler = self.gcs_utils.load_price_scaler_from_gcs(price_scaler_blob_name)
                 self.logger.info("Price scaler loaded from GCS")
                 
@@ -383,7 +383,7 @@ class RunManager:
                 
             else:
                 # Local mode
-                data_run_path = Path(f"data_runs/{data_run_id}")
+                data_run_path = Path(f"{data_run_id}")
                 
                 if not data_run_path.exists():
                     raise FileNotFoundError(f"Data run directory not found: {data_run_path}")
@@ -434,7 +434,7 @@ class RunManager:
         try:
             if self.storage_mode == "gcp":
                 # GCP mode: load from Google Cloud Storage
-                blob_name = f"data_runs/{data_run_id}/data_run_metadata.yaml"
+                blob_name = f"{data_run_id}/data_run_metadata.yaml"
                 
                 # Download blob content directly to memory
                 bucket = self.gcs_utils.client.bucket(self.gcs_bucket_name)
@@ -451,7 +451,7 @@ class RunManager:
                 
             else:
                 # Local mode
-                metadata_path = Path(f"data_runs/{data_run_id}/data_run_metadata.yaml")
+                metadata_path = Path(f"{data_run_id}/data_run_metadata.yaml")
                 
                 if not metadata_path.exists():
                     raise FileNotFoundError(f"Data run metadata not found: {metadata_path}")
