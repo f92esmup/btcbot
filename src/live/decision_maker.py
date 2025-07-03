@@ -42,8 +42,7 @@ class DecisionMaker:
         if not hasattr(self.scaler, 'n_features_in_'):
              raise ValueError("El scaler inyectado no parece estar ajustado (no tiene 'n_features_in_').")
         # 3. Inferir parámetros del scaler y run_config
-        num_total_features = self.scaler.n_features_in_
-        self.market_features = num_total_features
+        self.market_features = self.scaler.n_features_in_
         sequence_length = self.env_config['ventana_observacion_size']
         # Leer el número de características del portfolio desde la configuración del agente
         self.portfolio_features = agent_config.get('architecture', {}).get('portfolio_features', 4)
