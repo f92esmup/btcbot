@@ -4,6 +4,7 @@ from .agent import TransformerSACAgent
 from .networks import ActorNetwork, CriticNetwork, StateTransformerEncoder
 from .abstractions import AbstractActor, AbstractCritic
 from .replay_buffer import ReplayBuffer
+from .factory import create_sac_agent
 
 __all__ = [
     'TransformerSACAgent',
@@ -12,5 +13,6 @@ __all__ = [
     'StateTransformerEncoder',
     'AbstractActor',
     'AbstractCritic',
-    'ReplayBuffer'
+    'ReplayBuffer',
+    'create_sac_agent'
 ]

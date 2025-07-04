@@ -147,7 +147,7 @@ agent:
     positional_encoding_learnable: false
 
   # --- Parámetros del Replay Buffer y Entrenamiento General ---
-  replay_buffer_size: 8000000
+  replay_buffer_size: 10000
   batch_size: 8192
   min_buffer_for_learning: 5000
 

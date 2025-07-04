@@ -17,11 +17,11 @@ from .portfolio import Portfolio
 from .base_portfolio import BasePortfolio, TipoOperacion
 from .reward_strategy import BaseRewardStrategy, EquityChangeRewardStrategy
 from .portfolio_state import get_normalized_portfolio_features
-from ..utils.observation_builder import ObservationBuilder
-
 # Importar tipo de configuración solo para type hints
 if TYPE_CHECKING:
     from ..configuration import EnvironmentConfig
+    from ..utils.observation_builder import ObservationBuilder
+
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +42,7 @@ class FuturesTradingEnv(gym.Env):
         price_scaler: MinMaxScaler,
         env_config: Union["EnvironmentConfig", Dict[str, Any]],
         portfolio: BasePortfolio, # Inyección de dependencia
-        observation_builder: ObservationBuilder, # Inyección de dependencia para construcción de observaciones
+        observation_builder: "ObservationBuilder", # Inyección de dependencia para construcción de observaciones
         reward_strategy: Optional[BaseRewardStrategy] = None
     ):
         """
