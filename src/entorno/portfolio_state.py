@@ -79,8 +79,8 @@ def get_normalized_portfolio_features(
         tipo_posicion_norm = 0.0
     
     # 2. Normalizar PNL ROE con clipping
-    min_roe = env_config.min_clip_pnl_roe
-    max_roe = env_config.max_clip_pnl_roe
+    min_roe = env_config['min_clip_pnl_roe']
+    max_roe = env_config['max_clip_pnl_roe']
     pnl_roe_clipped = np.clip(portfolio_state['pnl_no_realizado_roe'], min_roe, max_roe)
     
     if max_roe > min_roe:
@@ -89,7 +89,7 @@ def get_normalized_portfolio_features(
         pnl_roe_norm = 0.5
     
     # 3. Normalizar pasos en posición
-    pasos_norm = min(1.0, portfolio_state['pasos_en_posicion'] / env_config.max_pasos_en_posicion)
+    pasos_norm = min(1.0, portfolio_state['pasos_en_posicion'] / env_config['max_pasos_en_posicion'])
     
     # 4. Normalizar precio de entrada
     if tipo_nombre != 'NEUTRAL' and portfolio_state['precio_entrada'] > 0:

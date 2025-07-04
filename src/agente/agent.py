@@ -71,8 +71,10 @@ class TransformerSACAgent:
         
         # Inyección de dependencias: recibir las redes ya instanciadas
         self.actor = actor.to(self.device)
+        self.portfolio_features = actor.portfolio_features
         self.critic_1 = critic_1.to(self.device)
         self.critic_2 = critic_2.to(self.device)
+        self.portfolio_features = actor.portfolio_features
         
         # Configuración - ahora exclusivamente del parámetro config_override
         self.config = config_override
@@ -183,7 +185,7 @@ class TransformerSACAgent:
         
         # Crear redes objetivo - usar los mismos parámetros que se usaron para crear las originales
         self.critic_target_1 = CriticNetwork(
-            market_features=architecture_config.market_features,
+            market_features=self._get_actor_model().market_features,
             portfolio_features=architecture_config.portfolio_features,
             action_dim=self.action_dim,
             transformer_config=transformer_config,
@@ -192,7 +194,7 @@ class TransformerSACAgent:
         ).to(self.device)
         
         self.critic_target_2 = CriticNetwork(
-            market_features=architecture_config.market_features,
+            market_features=self._get_actor_model().market_features,
             portfolio_features=architecture_config.portfolio_features,
             action_dim=self.action_dim,
             transformer_config=transformer_config,
