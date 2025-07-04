@@ -38,7 +38,7 @@ workerPoolSpecs:
       # Ensure these match the arguments expected by your train.py script.
       args:
         - '--data-run-id=BTCUSDT_1m_20250101_20250630-144622'
-        - '--episodes=200'         # Example number of episodes
+        - '--episodes=2000'         # Example number of episodes
         - '--eval-frequency=100'
         - '--save-frequency=60'
         - '--eval-episodes=1'
