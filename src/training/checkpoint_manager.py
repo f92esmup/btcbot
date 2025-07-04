@@ -405,12 +405,12 @@ class CheckpointManager:
                         agent.learning_steps = metadata.get('learning_steps', 0)
                         self.logger.info(f"Loaded metadata: episode={metadata.get('episode', 'unknown')}, steps={agent.total_steps}")
                     
-                    # Load network state dictionaries
-                    agent.actor.load_state_dict(torch.load(os.path.join(temp_dir, "actor.pth"), map_location=agent.device))
-                    agent.critic_1.load_state_dict(torch.load(os.path.join(temp_dir, "critic_1.pth"), map_location=agent.device))
-                    agent.critic_2.load_state_dict(torch.load(os.path.join(temp_dir, "critic_2.pth"), map_location=agent.device))
-                    agent.critic_target_1.load_state_dict(torch.load(os.path.join(temp_dir, "critic_target_1.pth"), map_location=agent.device))
-                    agent.critic_target_2.load_state_dict(torch.load(os.path.join(temp_dir, "critic_target_2.pth"), map_location=agent.device))
+                    # Load network state dictionaries using helper methods to handle DDP-wrapped models
+                    agent._get_actor_model().load_state_dict(torch.load(os.path.join(temp_dir, "actor.pth"), map_location=agent.device))
+                    agent._get_critic_model(agent.critic_1).load_state_dict(torch.load(os.path.join(temp_dir, "critic_1.pth"), map_location=agent.device))
+                    agent._get_critic_model(agent.critic_2).load_state_dict(torch.load(os.path.join(temp_dir, "critic_2.pth"), map_location=agent.device))
+                    agent._get_critic_model(agent.critic_target_1).load_state_dict(torch.load(os.path.join(temp_dir, "critic_target_1.pth"), map_location=agent.device))
+                    agent._get_critic_model(agent.critic_target_2).load_state_dict(torch.load(os.path.join(temp_dir, "critic_target_2.pth"), map_location=agent.device))
                     
                     # Load optimizer state dictionaries and log_alpha only if not in fine-tuning mode
                     if not reset_optimizers:
@@ -435,12 +435,12 @@ class CheckpointManager:
                     agent.learning_steps = metadata.get('learning_steps', 0)
                     self.logger.info(f"Loaded metadata: episode={metadata.get('episode', 'unknown')}, steps={agent.total_steps}")
                 
-                # Load network state dictionaries
-                agent.actor.load_state_dict(torch.load(path_prefix / "actor.pth", map_location=agent.device))
-                agent.critic_1.load_state_dict(torch.load(path_prefix / "critic_1.pth", map_location=agent.device))
-                agent.critic_2.load_state_dict(torch.load(path_prefix / "critic_2.pth", map_location=agent.device))
-                agent.critic_target_1.load_state_dict(torch.load(path_prefix / "critic_target_1.pth", map_location=agent.device))
-                agent.critic_target_2.load_state_dict(torch.load(path_prefix / "critic_target_2.pth", map_location=agent.device))
+                # Load network state dictionaries using helper methods to handle DDP-wrapped models
+                agent._get_actor_model().load_state_dict(torch.load(path_prefix / "actor.pth", map_location=agent.device))
+                agent._get_critic_model(agent.critic_1).load_state_dict(torch.load(path_prefix / "critic_1.pth", map_location=agent.device))
+                agent._get_critic_model(agent.critic_2).load_state_dict(torch.load(path_prefix / "critic_2.pth", map_location=agent.device))
+                agent._get_critic_model(agent.critic_target_1).load_state_dict(torch.load(path_prefix / "critic_target_1.pth", map_location=agent.device))
+                agent._get_critic_model(agent.critic_target_2).load_state_dict(torch.load(path_prefix / "critic_target_2.pth", map_location=agent.device))
                 
                 # Load optimizer state dictionaries and log_alpha only if not in fine-tuning mode
                 if not reset_optimizers:
