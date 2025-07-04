@@ -125,8 +125,8 @@ environment:
   max_clip_pnl_roe: 1.0              # ROE máximo para clip (+100%)
 
   # Zona muerta para acciones
-  zona_muerta_mantener: 0.15          # ±0.15 para mantener posición
-  
+  zona_muerta_mantener: 0.05          # ±0.05 para mantener posición
+
   # Función de recompensa
   peso_recompensa_paso: 1.0           # Peso para recompensa por paso
   peso_recompensa_cierre: 1.0         # Peso para recompensa al cerrar operación
@@ -147,9 +147,9 @@ agent:
     positional_encoding_learnable: false
 
   # --- Parámetros del Replay Buffer y Entrenamiento General ---
-  replay_buffer_size: 100000
+  replay_buffer_size: 8000000
   batch_size: 8192
-  min_buffer_for_learning: 500000
+  min_buffer_for_learning: 5000
 
   # --- Hiperparámetros Específicos de SAC ---
   hiperparametros_sac:
@@ -177,8 +177,8 @@ agent:
     hidden_dims: [256, 256]
 
   # --- Frecuencia de Entrenamiento ---
-  learning_frequency: 16
-  update_target_frequency: 2
+  learning_frequency: 1
+  update_target_frequency: 1
 
   # --- Parámetros de Guardado y Carga ---
   model_save_frequency: 10000
