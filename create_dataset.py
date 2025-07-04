@@ -26,6 +26,7 @@ import os
 
 # Import del pipeline principal
 from src.data.pipeline import DataPipeline
+from src.data.binance_source import BinanceDataSource
 from src.configuration.gcs_utils import GCSUtils
 from src.configuration.secret_utils import SecretManagerUtils
 from src.configuration import AppConfig
@@ -35,7 +36,14 @@ from src.utils.validation import validate_date_format
 from src.configuration.constants import (
     CONFIG_PATH_DEFAULT, KEY_GCP, KEY_STORAGE_MODE, 
     DIR_DATA_RUNS, FILE_DATA_RUN_METADATA, FILE_NORMALIZED_DATAFRAME,
-    FILE_SCALER, FILE_PRICE_SCALER, STORAGE_MODE_GCP
+    FILE_SCALER, FILE_PRICE_SCALER, STORAGE_MODE_GCP,
+    KEY_DATA_RUN_INFO, KEY_EXPERIMENT_PARAMETERS, KEY_DATA_PIPELINE_VERSION,
+    KEY_CREATION_TIMESTAMP, KEY_CREATED_BY, KEY_DESCRIPTION,
+    KEY_SYMBOL, KEY_INTERVAL, KEY_START_DATE, KEY_END_DATE,
+    KEY_DATA_SOURCE, KEY_SCRIPT_VERSION, KEY_PIPELINE_MODULES,
+    KEY_DATA_RUN_ID, ATTR_GCP,
+    VALUE_BINANCE_API, VALUE_CREATE_DATASET_SCRIPT, VALUE_SCRIPT_VERSION_1_0_0,
+    ENCODING_UTF8, FILE_SUFFIX_YAML, FILE_SUFFIX_PKL, MODE_WRITE
 )
 
 
@@ -149,23 +157,23 @@ def create_data_run_metadata(symbol: str, interval: str, start_date: str,
         Dict[str, Any]: Metadatos del data_run
     """
     metadata = {
-        'data_run_info': {
-            'data_run_id': data_run_id,
-            'creation_timestamp': datetime.now().isoformat(),
-            'created_by': 'create_dataset.py',
-            'description': f'Dataset inmutable para {symbol} ({interval}) desde {start_date}'
+        KEY_DATA_RUN_INFO: {
+            KEY_DATA_RUN_ID: data_run_id,
+            KEY_CREATION_TIMESTAMP: datetime.now().isoformat(),
+            KEY_CREATED_BY: VALUE_CREATE_DATASET_SCRIPT,
+            KEY_DESCRIPTION: f'Dataset inmutable para {symbol} ({interval}) desde {start_date}'
         },
-        'experiment_parameters': {
-            'symbol': symbol,
-            'interval': interval,
-            'start_date': start_date,
-            'end_date': end_date,
-            'data_source': 'Binance API'
+        KEY_EXPERIMENT_PARAMETERS: {
+            KEY_SYMBOL: symbol,
+            KEY_INTERVAL: interval,
+            KEY_START_DATE: start_date,
+            KEY_END_DATE: end_date,
+            KEY_DATA_SOURCE: VALUE_BINANCE_API
         },
-        'data_pipeline_version': {
-            'script_version': '1.0.0',
-            'pipeline_modules': [
-                'src.data.Adquisicion',
+        KEY_DATA_PIPELINE_VERSION: {
+            KEY_SCRIPT_VERSION: VALUE_SCRIPT_VERSION_1_0_0,
+            KEY_PIPELINE_MODULES: [
+                'src.data.binance_source',
                 'src.data.indicadores', 
                 'src.data.normalization'
             ]
@@ -253,12 +261,12 @@ def main() -> None:
     logger.info("💾 GUARDANDO METADATOS DEL DATASET:")
     metadata_filename = FILE_DATA_RUN_METADATA
     
-    if storage_mode == "gcp":
+    if storage_mode == STORAGE_MODE_GCP:
         # Para GCP, guardamos temporalmente y subimos usando RunManager
         import tempfile
         import os
         
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as temp_file:
+        with tempfile.NamedTemporaryFile(mode=MODE_WRITE, suffix=FILE_SUFFIX_YAML, delete=False) as temp_file:
             yaml.dump(data_run_metadata, temp_file, default_flow_style=False, allow_unicode=True)
             temp_path = temp_file.name
         
@@ -278,7 +286,7 @@ def main() -> None:
         metadata_path = Path(data_run_prefix) / metadata_filename
         metadata_path.parent.mkdir(parents=True, exist_ok=True)
         
-        with open(metadata_path, 'w', encoding='utf-8') as f:
+        with open(metadata_path, MODE_WRITE, encoding=ENCODING_UTF8) as f:
             yaml.dump(data_run_metadata, f, default_flow_style=False, allow_unicode=True)
         
         logger.info(f"  ✅ Metadatos guardados en: {metadata_path}")
@@ -287,7 +295,7 @@ def main() -> None:
     api_key = None
     api_secret = None
     
-    if hasattr(system_config, 'gcp') and system_config.gcp:
+    if hasattr(system_config, ATTR_GCP) and system_config.gcp:
         logger.info("\n🔐 CONFIGURANDO CREDENCIALES DE API:")
         try:
             secret_manager = SecretManagerUtils(project_id=system_config.gcp.project_id)
@@ -315,12 +323,24 @@ def main() -> None:
     try:
         # Configurar GCSUtils si es necesario
         gcs_utils = None
-        if storage_mode == "gcp":
+        if storage_mode == STORAGE_MODE_GCP:
             from src.configuration.gcs_utils import GCSUtils
             gcs_utils = GCSUtils(gcp_config)
         
-        # Instanciar el pipeline de datos
+        # Crear fuente de datos de Binance (Dependency Injection)
+        binance_data_source = BinanceDataSource(
+            symbol=args.symbol,
+            interval=args.interval,
+            start_date=args.start_date,
+            end_date=args.end_date,
+            config_dict=system_config.model_dump(),
+            api_key=api_key,
+            api_secret=api_secret
+        )
+        
+        # Instanciar el pipeline de datos con la fuente de datos inyectada
         data_pipeline = DataPipeline(
+            data_source=binance_data_source,  # Inyección de dependencia
             symbol=args.symbol,
             interval=args.interval,
             start_date=args.start_date,
@@ -329,8 +349,6 @@ def main() -> None:
             base_path=data_run_path,
             full_config=system_config.model_dump(),
             save_artifacts=True,  # Siempre guardar artefactos en creación de datasets
-            api_key=api_key,
-            api_secret=api_secret,
             gcs_utils=gcs_utils
         )
         
@@ -339,12 +357,12 @@ def main() -> None:
         
         # Guardar el DataFrame normalizado
         logger.info("💾 GUARDANDO DATAFRAME NORMALIZADO:")
-        if storage_mode == "gcp":
+        if storage_mode == STORAGE_MODE_GCP:
             # Para GCP, guardamos temporalmente y subimos
             import tempfile
             import os
             
-            with tempfile.NamedTemporaryFile(suffix='.pkl', delete=False) as temp_file:
+            with tempfile.NamedTemporaryFile(suffix=FILE_SUFFIX_PKL, delete=False) as temp_file:
                 normalized_dataframe.to_pickle(temp_file.name)
                 temp_path = temp_file.name
             

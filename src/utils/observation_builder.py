@@ -5,12 +5,12 @@ from src.entorno.base_portfolio import TipoOperacion
 from src.entorno.portfolio_state import get_normalized_portfolio_features
 
 
-class LiveObservationBuilder:
+class ObservationBuilder:
     """
-    Construye el vector de observación normalizado para el modo en vivo.
+    Construye el vector de observación normalizado para el entrenamiento y modo en vivo.
     
-    Esta clase utiliza los scalers ya cargados para procesar los datos de mercado
-    en tiempo real, asegurando que la entrada al agente sea consistente con el entrenamiento.
+    Esta clase centraliza la lógica de construcción de observaciones, aplicando el principio DRY
+    y garantizando consistencia entre entrenamiento y producción.
     """
     def __init__(self, scaler, price_scaler, run_config: dict):
         """
@@ -24,7 +24,7 @@ class LiveObservationBuilder:
         self.scaler = scaler
         self.price_scaler = price_scaler
         self.run_config = run_config
-        print(f"LiveObservationBuilder: Inicializando con scalers inyectados...")
+        print(f"ObservationBuilder: Inicializando con scalers inyectados...")
         
         # Validar que la configuración sea válida
         if not run_config or 'config' not in run_config:

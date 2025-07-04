@@ -24,6 +24,8 @@ from src.configuration.constants import (
     FILE_CRITIC_TARGET_1_PTH, FILE_CRITIC_TARGET_2_PTH,
     FILE_ACTOR_OPTIMIZER_PTH, FILE_CRITIC_1_OPTIMIZER_PTH, FILE_CRITIC_2_OPTIMIZER_PTH,
     FILE_ALPHA_OPTIMIZER_PTH, FILE_LOG_ALPHA_PTH, FILE_METADATA_PTH,
+    DIR_CHECKPOINTS, DIR_BEST_MODEL, DIR_FINAL_MODEL,
+    PATTERN_CHECKPOINT_EPISODE, PATTERN_CHECKPOINT_PREFIX,
     EXT_PTH
 )
 
@@ -203,7 +205,7 @@ class CheckpointManager:
         try:
             if self.storage_mode == "gcp":
                 # GCP mode: search in GCS
-                checkpoint_prefix = f"{prefix}/checkpoints/"
+                checkpoint_prefix = f"{prefix}/{DIR_CHECKPOINTS}/"
                 self.logger.info(f"Searching for checkpoint metadata in GCS prefix: {checkpoint_prefix}")
 
                 # Search for checkpoint metadata files in the specific run

@@ -2,6 +2,7 @@
 
 from .agent import TransformerSACAgent
 from .networks import ActorNetwork, CriticNetwork, StateTransformerEncoder
+from .abstractions import AbstractActor, AbstractCritic
 from .replay_buffer import ReplayBuffer
 
 __all__ = [
@@ -9,5 +10,7 @@ __all__ = [
     'ActorNetwork', 
     'CriticNetwork',
     'StateTransformerEncoder',
+    'AbstractActor',
+    'AbstractCritic',
     'ReplayBuffer'
 ]

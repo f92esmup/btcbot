@@ -22,6 +22,8 @@ from src.data.pipeline import DataPipeline
 from src.entorno.environment import FuturesTradingEnv
 from src.entorno.portfolio import Portfolio
 from src.agente.agent import TransformerSACAgent
+from src.agente.networks import ActorNetwork, CriticNetwork
+from src.utils.observation_builder import ObservationBuilder
 from src.utils.system import setup_logging, set_seed, setup_device, setup_environment_and_distribution
 from src.utils.validation import validate_date_format
 from src.utils.cli import parse_arguments
@@ -37,11 +39,14 @@ from src.configuration.constants import (
     KEY_STORAGE_MODE, KEY_NORMALIZATION, KEY_BATCH_SIZE,
     KEY_MIN_BUFFER_FOR_LEARNING, KEY_REPLAY_BUFFER_SIZE,
     STORAGE_MODE_GCP, DEFAULT_NETWORK_INTERFACE,
-    FILE_PRICE_SCALER, DIR_TRAINING_RUNS
+    FILE_PRICE_SCALER, DIR_TRAINING_RUNS,
+    KEY_EXPERIMENT_PARAMETERS, KEY_SYMBOL, KEY_INTERVAL,
+    KEY_START_DATE, KEY_END_DATE,
+    OPERATION_MODE_NEW_TRAINING, OPERATION_MODE_FINE_TUNING, OPERATION_MODE_RESUME_TRAINING
 )
 
 
-def create_trading_environment(dataframe: Any, logger, price_scaler: Any, env_config: EnvironmentConfig) -> FuturesTradingEnv:
+def create_trading_environment(dataframe: Any, logger, price_scaler: Any, scaler: Any, env_config: EnvironmentConfig, run_config: dict) -> FuturesTradingEnv:
     """
     Crea el entorno de trading con los datos procesados.
     
@@ -49,7 +54,9 @@ def create_trading_environment(dataframe: Any, logger, price_scaler: Any, env_co
         dataframe: DataFrame con datos normalizados
         logger: Logger para mensajes
         price_scaler: Price scaler ya cargado
+        scaler: Scaler principal para normalización de características
         env_config: Configuración del entorno (objeto Pydantic)
+        run_config: Configuración completa del run
         
     Returns:
         FuturesTradingEnv: Entorno configurado
@@ -64,13 +71,22 @@ def create_trading_environment(dataframe: Any, logger, price_scaler: Any, env_co
     else:
         logger.info("Price scaler cargado exitosamente")
     
+    # Crear ObservationBuilder centralizado
+    observation_builder = ObservationBuilder(
+        scaler=scaler,
+        price_scaler=price_scaler,
+        run_config=run_config
+    )
+    logger.info("✅ ObservationBuilder creado y configurado")
+    
     sim_portfolio = Portfolio(env_config)
 
     env = FuturesTradingEnv(
         data_df=dataframe,
         price_scaler=price_scaler,
         env_config=env_config, # Inyección de configuración
-        portfolio=sim_portfolio
+        portfolio=sim_portfolio,
+        observation_builder=observation_builder  # Inyección del constructor de observaciones
     )
     
     logger.info(f"Entorno creado:")
@@ -110,14 +126,55 @@ def create_sac_agent(env: FuturesTradingEnv, device: torch.device, logger, agent
     # Leer portfolio_features desde la configuración del agente
     portfolio_features = agent_config.architecture.portfolio_features
     sequence_length = ventana_size
+    action_dim = action_space_shape[0]
     
-    agent = TransformerSACAgent(
-        observation_space_shape=observation_space_shape,
-        action_space_shape=action_space_shape,
+    # Extraer configuraciones
+    transformer_config = agent_config.transformer
+    mlp_heads_config = agent_config.mlp_heads
+    mlp_hidden_dims = mlp_heads_config.hidden_dims
+    
+    # Crear las redes neuronales (Inversión de Dependencias)
+    logger.info("Creando redes neuronales...")
+    
+    # Red del Actor
+    actor = ActorNetwork(
         market_features=market_features,
         portfolio_features=portfolio_features,
-        sequence_length=sequence_length,
-        config_override=agent_config, # Inyección de configuración
+        transformer_config=transformer_config,
+        mlp_hidden_dims=mlp_hidden_dims,
+        action_dim=action_dim,
+        agent_config=agent_config
+    )
+    logger.info("✅ ActorNetwork creado.")
+
+    # Redes de los Críticos
+    critic_1 = CriticNetwork(
+        market_features=market_features,
+        portfolio_features=portfolio_features,
+        action_dim=action_dim,
+        transformer_config=transformer_config,
+        mlp_hidden_dims=mlp_hidden_dims,
+        agent_config=agent_config
+    )
+    
+    critic_2 = CriticNetwork(
+        market_features=market_features,
+        portfolio_features=portfolio_features,
+        action_dim=action_dim,
+        transformer_config=transformer_config,
+        mlp_hidden_dims=mlp_hidden_dims,
+        agent_config=agent_config
+    )
+    logger.info("✅ CriticNetworks creados.")
+    
+    # Crear el agente con las redes inyectadas (Dependency Injection)
+    agent = TransformerSACAgent(
+        actor=actor,
+        critic_1=critic_1,
+        critic_2=critic_2,
+        observation_space_shape=observation_space_shape,
+        action_space_shape=action_space_shape,
+        config_override=agent_config,
         device=device,
         is_distributed=is_distributed
     )
@@ -184,15 +241,15 @@ def main():
     
     if args.data_run_id:
         logger.info(f"🆕 MODO: Nuevo Entrenamiento desde data_run: {args.data_run_id}")
-        operation_mode = "new_training"
+        operation_mode = OPERATION_MODE_NEW_TRAINING
         source_id = args.data_run_id
     elif args.checkpoint:
         if args.fine_tune_mode:
             logger.info(f"🔧 MODO: Fine-Tuning desde training_run: {args.checkpoint}")
-            operation_mode = "fine_tuning"
+            operation_mode = OPERATION_MODE_FINE_TUNING
         else:
             logger.info(f"▶️ MODO: Continuación desde training_run: {args.checkpoint}")
-            operation_mode = "resume_training"
+            operation_mode = OPERATION_MODE_RESUME_TRAINING
         source_id = args.checkpoint
     else:
         # Esto no debería ocurrir por el mutually_exclusive_group, pero por seguridad
@@ -203,14 +260,14 @@ def main():
     # Preparar gcp_config para operaciones de carga
     gcp_config_for_load = None
     try:
-        config = AppConfig.from_yaml_file('src/configuration/config.yaml')
-        if config.normalization.storage_mode == 'gcp':
+        config = AppConfig.from_yaml_file(CONFIG_PATH_DEFAULT)
+        if config.normalization.storage_mode == STORAGE_MODE_GCP:
             # Convertir el config de GCP a dict para compatibilidad con managers existentes
             gcp_config_for_load = config.gcp.model_dump()
     except FileNotFoundError:
         logger.warning("No se encontró config.yaml local. Se asumirá que no se necesita gcp_config para cargar.")
 
-    if operation_mode == "new_training":
+    if operation_mode == OPERATION_MODE_NEW_TRAINING:
         # === MODO: NUEVO ENTRENAMIENTO DESDE DATA_RUN ===
         logger.info(f"📊 Cargando configuración local para nuevo entrenamiento...")
         
@@ -238,13 +295,13 @@ def main():
             data_run_metadata = artifact_manager.load_data_run_metadata(args.data_run_id)
             
             # Verificar que los metadatos sean válidos
-            if 'experiment_parameters' not in data_run_metadata:
+            if KEY_EXPERIMENT_PARAMETERS not in data_run_metadata:
                 raise ValueError("Metadatos del data_run inválidos: falta 'experiment_parameters'")
                 
-            logger.info(f"📊 Dataset Info - Símbolo: {data_run_metadata['experiment_parameters']['symbol']}, "
-                       f"Intervalo: {data_run_metadata['experiment_parameters']['interval']}, "
-                       f"Período: {data_run_metadata['experiment_parameters']['start_date']} → "
-                       f"{data_run_metadata['experiment_parameters'].get('end_date', 'ahora')}")
+            logger.info(f"📊 Dataset Info - Símbolo: {data_run_metadata[KEY_EXPERIMENT_PARAMETERS][KEY_SYMBOL]}, "
+                       f"Intervalo: {data_run_metadata[KEY_EXPERIMENT_PARAMETERS][KEY_INTERVAL]}, "
+                       f"Período: {data_run_metadata[KEY_EXPERIMENT_PARAMETERS][KEY_START_DATE]} → "
+                       f"{data_run_metadata[KEY_EXPERIMENT_PARAMETERS].get(KEY_END_DATE, 'ahora')}")
             
         except Exception as e:
             logger.error(f"❌ Error cargando metadatos del data_run '{args.data_run_id}': {e}")
@@ -507,7 +564,9 @@ def main():
             dataframe,  # Disponible en todos los procesos
             logger,
             price_scaler,  # Scaler ya cargado mediante RunManager
-            env_config=local_config.environment # Inyección con objeto Pydantic
+            scaler,  # Scaler principal para características
+            env_config=local_config.environment, # Inyección con objeto Pydantic
+            run_config=full_run_config  # Configuración completa del run
         )
         
         # Crear agente (todos los procesos) - CRUCIAL: Pasar is_distributed

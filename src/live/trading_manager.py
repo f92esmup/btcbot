@@ -3,7 +3,8 @@ import torch
 import time
 from src.live.data_reader import BinanceLiveDataReader
 from src.live.live_data_processor import LiveDataProcessor
-from src.live.observation_builder import LiveObservationBuilder
+from src.configuration.constants import KEY_CONFIG, KEY_ENVIRONMENT, KEY_NORMALIZATION, KEY_STORAGE_MODE, KEY_GCP, STORAGE_MODE_GCP
+from src.utils.observation_builder import ObservationBuilder
 from src.live.decision_maker import DecisionMaker
 from src.live.live_portfolio import LivePortfolio
 from src.live.risk_manager import RiskManager
@@ -32,15 +33,15 @@ class LiveTradingManager:
         print(f"🔧 Modo de operación: {mode.upper()}")
         print(f"🎯 Conectando a: {'Testnet' if mode == 'testnet' else 'Producción'}")
 
-        main_config = self.run_config.get('config', {})
+        main_config = self.run_config.get(KEY_CONFIG, {})
         if not main_config:
             raise ValueError(f"No se encontró la configuración principal en 'config' para el run_id: {run_id}")
         
-        self.env_config = main_config['environment']
+        self.env_config = main_config[KEY_ENVIRONMENT]
         print("✅ Configuración del run cargada exitosamente.")
 
-        storage_mode = main_config.get('normalization', {}).get('storage_mode', 'local')
-        gcp_config = main_config.get('gcp') if storage_mode == 'gcp' else None
+        storage_mode = main_config.get(KEY_NORMALIZATION, {}).get(KEY_STORAGE_MODE, 'local')
+        gcp_config = main_config.get(KEY_GCP) if storage_mode == STORAGE_MODE_GCP else None
 
         self.checkpoint_manager = CheckpointManager(
             storage_mode=storage_mode,
@@ -74,7 +75,7 @@ class LiveTradingManager:
             raise RuntimeError(f"Error cargando metadatos del data_run: {e}")
 
         # Initialize components with injected scalers
-        self.observation_builder = LiveObservationBuilder(self.scaler, self.price_scaler, self.run_config)
+        self.observation_builder = ObservationBuilder(self.scaler, self.price_scaler, self.run_config)
         self.data_processor = LiveDataProcessor(self.run_config)
         self.decision_maker = DecisionMaker(self.scaler, self.checkpoint_manager, self.run_config, self.device, self.run_id)
 

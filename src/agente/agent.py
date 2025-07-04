@@ -17,6 +17,7 @@ import os
 from torch.cuda.amp import autocast, GradScaler
 
 from .networks import ActorNetwork, CriticNetwork
+from .abstractions import AbstractActor, AbstractCritic
 
 # Importar tipo de configuración solo para type hints
 if TYPE_CHECKING:
@@ -38,11 +39,11 @@ class TransformerSACAgent:
     
     def __init__(
         self,
+        actor: AbstractActor,
+        critic_1: AbstractCritic,
+        critic_2: AbstractCritic,
         observation_space_shape: Tuple[int, ...],
         action_space_shape: Tuple[int, ...],
-        market_features: int,
-        portfolio_features: int,
-        sequence_length: int,
         config_override: Union["AgentConfig", Dict[str, Any]],  # Now supports both types
         device: Optional[torch.device] = None,
         is_distributed: bool = False  # Flag para activar el modo distribuido
@@ -51,13 +52,13 @@ class TransformerSACAgent:
         Inicializa el agente SAC.
         
         Args:
+            actor: Red Actor ya instanciada
+            critic_1: Primera red Critic ya instanciada
+            critic_2: Segunda red Critic ya instanciada
             observation_space_shape: Forma del espacio de observación
             action_space_shape: Forma del espacio de acción  
-            market_features: Número de características de mercado por paso
-            portfolio_features: Número de características del portfolio
-            sequence_length: Longitud de la secuencia (ventana)
-            device: Dispositivo de cómputo
             config_override: Configuración del agente (objeto Pydantic o diccionario)
+            device: Dispositivo de cómputo
             is_distributed: Flag para activar el modo distribuido con DDP
         """
         self.device = device or torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -66,10 +67,12 @@ class TransformerSACAgent:
         # Parámetros del espacio
         self.observation_space_shape = observation_space_shape
         self.action_space_shape = action_space_shape
-        self.market_features = market_features
-        self.portfolio_features = portfolio_features
-        self.sequence_length = sequence_length
         self.action_dim = action_space_shape[0]
+        
+        # Inyección de dependencias: recibir las redes ya instanciadas
+        self.actor = actor.to(self.device)
+        self.critic_1 = critic_1.to(self.device)
+        self.critic_2 = critic_2.to(self.device)
         
         # Configuración - ahora exclusivamente del parámetro config_override
         self.config = config_override
@@ -150,8 +153,8 @@ class TransformerSACAgent:
 
     def _complete_initialization(self):
         """Completa la inicialización del agente."""
-        # Inicializar redes
-        self._init_networks()
+        # Crear redes objetivo y configurar DDP
+        self._init_target_networks_and_ddp()
         
         # Inicializar optimizadores
         self._init_optimizers()
@@ -165,69 +168,39 @@ class TransformerSACAgent:
         logger.info(f"TransformerSACAgent inicializado en {self.device}. Modo distribuido: {self.is_distributed}")
         logger.info(f"  - Observación shape: {self.observation_space_shape}")
         logger.info(f"  - Acción dim: {self.action_dim}")
-        logger.info(f"  - Market features: {self.market_features}")
-        logger.info(f"  - Portfolio features: {self.portfolio_features}")
-        logger.info(f"  - Sequence length: {self.sequence_length}")
         logger.info(f"  - Alpha aprendible: {self.learn_alpha}")
         logger.info(f"  - Target entropy: {self.target_entropy}")
         logger.info(f"  - AMP habilitado: {self.device.type == 'cuda'}")
     
-    def _init_networks(self) -> None:
-        """Inicializa las redes y las envuelve para DDP si está en modo distribuido."""
+    def _init_target_networks_and_ddp(self) -> None:
+        """Inicializa las redes objetivo y configura DDP si es necesario."""
+        # Crear redes objetivo con la misma estructura que las redes principales
+        # Para esto, necesitamos crear nuevas instancias idénticas
         transformer_config = self._get_config_value('transformer')
         mlp_heads_config = self._get_config_value('mlp_heads')
         mlp_hidden_dims = self._get_nested_config_value(mlp_heads_config, 'hidden_dims')
+        architecture_config = self.config.architecture
         
-        # Red del Actor
-        self.actor = ActorNetwork(
-            market_features=self.market_features,
-            portfolio_features=self.portfolio_features,
-            transformer_config=transformer_config,
-            mlp_hidden_dims=mlp_hidden_dims,
-            action_dim=self.action_dim,
-            agent_config=self.config  # Pasar la configuración completa
-        ).to(self.device)
-        logger.info("✅ ActorNetwork creado.")
-
-        # Redes de los Críticos
-        self.critic_1 = CriticNetwork(
-            market_features=self.market_features,
-            portfolio_features=self.portfolio_features,
-            action_dim=self.action_dim,
-            transformer_config=transformer_config,
-            mlp_hidden_dims=mlp_hidden_dims,
-            agent_config=self.config  # Pasar la configuración completa
-        ).to(self.device)
-        
-        self.critic_2 = CriticNetwork(
-            market_features=self.market_features,
-            portfolio_features=self.portfolio_features,
-            action_dim=self.action_dim,
-            transformer_config=transformer_config,
-            mlp_hidden_dims=mlp_hidden_dims,
-            agent_config=self.config  # Pasar la configuración completa
-        ).to(self.device)
-        logger.info("✅ CriticNetworks creados.")
-
-        # Redes objetivo
+        # Crear redes objetivo - usar los mismos parámetros que se usaron para crear las originales
         self.critic_target_1 = CriticNetwork(
-            market_features=self.market_features,
-            portfolio_features=self.portfolio_features,
+            market_features=architecture_config.market_features,
+            portfolio_features=architecture_config.portfolio_features,
             action_dim=self.action_dim,
             transformer_config=transformer_config,
             mlp_hidden_dims=mlp_hidden_dims,
-            agent_config=self.config  # Pasar la configuración completa
+            agent_config=self.config
         ).to(self.device)
         
         self.critic_target_2 = CriticNetwork(
-            market_features=self.market_features,
-            portfolio_features=self.portfolio_features,
+            market_features=architecture_config.market_features,
+            portfolio_features=architecture_config.portfolio_features,
             action_dim=self.action_dim,
             transformer_config=transformer_config,
             mlp_hidden_dims=mlp_hidden_dims,
-            agent_config=self.config  # Pasar la configuración completa
+            agent_config=self.config
         ).to(self.device)
-        logger.info("✅ Critic Target Networks creados (sin JIT).")
+        
+        logger.info("✅ Critic Target Networks creados.")
 
         # Envolver con DDP si está en modo distribuido
         if self.is_distributed:

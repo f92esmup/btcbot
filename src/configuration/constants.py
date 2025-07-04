@@ -19,6 +19,12 @@ DIR_CHECKPOINTS = "checkpoints"
 DIR_TENSORBOARD_LOGS = "tensorboard_logs"
 DIR_SRC = "src"
 DIR_CONFIGURATION = "configuration"
+DIR_BEST_MODEL = "best_model"
+DIR_FINAL_MODEL = "final_model"
+DIR_EVALUATION = "evaluation"
+
+# Directory path constants for frequently used literal strings
+DIR_STORAGE = "storage"
 
 # =============================================================================
 # ARTIFACT FILENAMES (Data Processing)
@@ -88,9 +94,29 @@ KEY_DATA_RUN_ID = "data_run_id"
 KEY_BATCH_SIZE = "batch_size"
 KEY_MIN_BUFFER_FOR_LEARNING = "min_buffer_for_learning"
 KEY_REPLAY_BUFFER_SIZE = "replay_buffer_size"
+KEY_REPLAY_BUFFER_CAPACITY = "replay_buffer_capacity"
 KEY_BUCKET_NAME = "bucket_name"
 KEY_SCALER_BLOB_NAME = "scaler_blob_name"
 KEY_PRICE_SCALER_BLOB_NAME = "price_scaler_blob_name"
+KEY_SEED = "seed"
+KEY_EVAL_FREQUENCY = "eval_frequency"
+KEY_SAVE_FREQUENCY = "save_frequency"
+KEY_TENSORBOARD_DIR = "tensorboard_dir"
+
+# Metadata keys for data runs
+KEY_DATA_RUN_INFO = "data_run_info"
+KEY_EXPERIMENT_PARAMETERS = "experiment_parameters"
+KEY_DATA_PIPELINE_VERSION = "data_pipeline_version"
+KEY_CREATION_TIMESTAMP = "creation_timestamp"
+KEY_CREATED_BY = "created_by"
+KEY_DESCRIPTION = "description"
+KEY_SYMBOL = "symbol"
+KEY_INTERVAL = "interval"
+KEY_START_DATE = "start_date"
+KEY_END_DATE = "end_date"
+KEY_DATA_SOURCE = "data_source"
+KEY_SCRIPT_VERSION = "script_version"
+KEY_PIPELINE_MODULES = "pipeline_modules"
 
 # =============================================================================
 # DATA COLUMNS (OHLCV)
@@ -153,6 +179,20 @@ BINANCE_TIMEFRAMES = {
 }
 
 # =============================================================================
+# CHECKPOINT AND MODEL DIRECTORY PATTERNS
+# =============================================================================
+
+PATTERN_CHECKPOINT_EPISODE = "checkpoint_episode_{}"
+PATTERN_CHECKPOINT_PREFIX = "checkpoint_episode"
+
+# =============================================================================
+# CHECKPOINT AND MODEL DIRECTORY PATTERNS
+# =============================================================================
+
+PATTERN_CHECKPOINT_EPISODE = "checkpoint_episode_{}"
+PATTERN_CHECKPOINT_PREFIX = "checkpoint_episode"
+
+# =============================================================================
 # COMMON PATTERNS AND VALIDATION
 # =============================================================================
 
@@ -163,3 +203,22 @@ PATTERN_RUN_ID = r"^[A-Z]+_\d+[mhd]_\d{8}-\d{6}$"
 DEFAULT_NETWORK_INTERFACE = "eth0"
 DEFAULT_SCALER_FILENAME = FILE_SCALER
 DEFAULT_PRICE_SCALER_FILENAME = FILE_PRICE_SCALER
+
+# Common literal strings
+VALUE_BINANCE_API = "Binance API"
+VALUE_CREATE_DATASET_SCRIPT = "create_dataset.py"
+VALUE_SCRIPT_VERSION_1_0_0 = "1.0.0"
+ENCODING_UTF8 = "utf-8"
+FILE_SUFFIX_YAML = ".yaml"
+FILE_SUFFIX_PKL = ".pkl"
+MODE_WRITE = "w"
+ATTR_GCP = "gcp"
+
+# Learning states
+STATUS_LEARNING = "LEARNING"
+STATUS_COLLECTING = "COLLECTING"
+
+# Operation modes
+OPERATION_MODE_NEW_TRAINING = "new_training"
+OPERATION_MODE_FINE_TUNING = "fine_tuning"
+OPERATION_MODE_RESUME_TRAINING = "resume_training"

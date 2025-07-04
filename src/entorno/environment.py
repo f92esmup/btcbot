@@ -17,6 +17,7 @@ from .portfolio import Portfolio
 from .base_portfolio import BasePortfolio, TipoOperacion
 from .reward_strategy import BaseRewardStrategy, EquityChangeRewardStrategy
 from .portfolio_state import get_normalized_portfolio_features
+from ..utils.observation_builder import ObservationBuilder
 
 # Importar tipo de configuración solo para type hints
 if TYPE_CHECKING:
@@ -41,6 +42,7 @@ class FuturesTradingEnv(gym.Env):
         price_scaler: MinMaxScaler,
         env_config: Union["EnvironmentConfig", Dict[str, Any]],
         portfolio: BasePortfolio, # Inyección de dependencia
+        observation_builder: ObservationBuilder, # Inyección de dependencia para construcción de observaciones
         reward_strategy: Optional[BaseRewardStrategy] = None
     ):
         """
@@ -51,6 +53,7 @@ class FuturesTradingEnv(gym.Env):
             price_scaler: Scaler ajustado para normalizar precios
             env_config: Configuración del entorno (objeto Pydantic o diccionario)
             portfolio: Una instancia que cumple con la interfaz BasePortfolio.
+            observation_builder: Constructor de observaciones centralizado.
             reward_strategy: Estrategia para el cálculo de recompensas.
         """
         super().__init__()
@@ -59,6 +62,7 @@ class FuturesTradingEnv(gym.Env):
         self.config_entorno = env_config
         self.data_array = data_df.to_numpy(dtype=np.float32)
         self.column_names = data_df.columns.tolist()
+        self.observation_builder = observation_builder  # Inyección de dependencia
         
         if 'Close' not in self.column_names:
             raise ValueError("Columna 'Close' no encontrada en los datos")
@@ -188,26 +192,26 @@ class FuturesTradingEnv(gym.Env):
         return terminated, truncated
 
     def _get_current_observation(self) -> np.ndarray:
-        """Construye la observación actual."""
+        """Construye la observación actual delegando al ObservationBuilder."""
+        # 1. Obtener la ventana de datos de mercado
         ventana_size = self._get_config_value('ventana_observacion_size')
         start_idx = max(0, self.paso_actual - ventana_size + 1)
         end_idx = self.paso_actual + 1
-        market_data = self.data_array[start_idx:end_idx]
+        market_data_window = self.data_array[start_idx:end_idx]
 
-        if market_data.shape[0] < ventana_size:
-            padding = np.repeat(self.data_array[0:1], ventana_size - market_data.shape[0], axis=0)
-            market_data = np.vstack([padding, market_data])
+        # 2. Aplicar padding si es necesario
+        if market_data_window.shape[0] < ventana_size:
+            padding = np.repeat(self.data_array[0:1], ventana_size - market_data_window.shape[0], axis=0)
+            market_data_window = np.vstack([padding, market_data_window])
 
-        portfolio_features = self._get_normalized_portfolio_features()
-        return np.concatenate([market_data.ravel(), portfolio_features]).astype(np.float32)
+        # 3. Convertir la ventana de datos a DataFrame para el ObservationBuilder
+        market_df = pd.DataFrame(market_data_window, columns=self.column_names)
 
-    def _get_normalized_portfolio_features(self) -> np.ndarray:
-        """Obtiene las características del portafolio normalizadas."""
-        return get_normalized_portfolio_features(
-            portfolio_state=self.portfolio.posicion_actual,
-            env_config=self.config_entorno,
-            price_scaler=self.price_scaler
-        )
+        # 4. Obtener el estado actual del portafolio
+        portfolio_state = self.portfolio.get_current_state()
+
+        # 5. Delegar la construcción de la observación al ObservationBuilder
+        return self.observation_builder.build(market_df, portfolio_state)
 
     def _get_current_price(self) -> float:
         """Obtiene el precio Close actual (desnormalizado)."""

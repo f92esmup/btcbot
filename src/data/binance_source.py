@@ -14,6 +14,7 @@ from functools import partial
 from binance.client import Client
 from binance.exceptions import BinanceAPIException, BinanceRequestException
 
+from .abstractions import DataSource
 from src.configuration.constants import (
     COLUMN_TIMESTAMP, COLUMN_OPEN, COLUMN_HIGH, COLUMN_LOW, 
     COLUMN_CLOSE, COLUMN_VOLUME, COLUMNS_OHLCV_WITH_TIMESTAMP,
@@ -110,8 +111,8 @@ def _download_kline_chunk(start_timestamp: int, symbol: str, interval: str,
     return []
 
 
-class Adquisicion:
-    """Clase para adquirir y procesar datos OHLCV de Binance."""
+class BinanceDataSource(DataSource):
+    """Fuente de datos para adquirir y procesar datos OHLCV de Binance."""
     
     def __init__(self, symbol: str, interval: str, start_date: str, end_date: str = None, 
                  config_dict: dict = None, api_key: Optional[str] = None, api_secret: Optional[str] = None):
@@ -185,7 +186,7 @@ class Adquisicion:
             self.logger.warning(f"No se pudo sincronizar el tiempo con Binance: {e}. Se usará el tiempo local (offset 0 ms).")
             self.time_offset_ms = 0
         
-    def main(self) -> pd.DataFrame:
+    def fetch_data(self) -> pd.DataFrame:
         """
         Orquesta todo el proceso de adquisición y procesamiento de datos.
         
@@ -203,7 +204,7 @@ class Adquisicion:
         self.logger.info(f"Proceso completado. DataFrame final: {self.dataframe.shape}")
         return self.dataframe
     
-    def main_parallel(self) -> pd.DataFrame:
+    def fetch_data_parallel(self) -> pd.DataFrame:
         """
         Orquesta todo el proceso de adquisición y procesamiento de datos usando descarga paralela.
         

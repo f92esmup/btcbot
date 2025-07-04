@@ -8,7 +8,8 @@ from typing import Tuple, Dict, Optional
 import pandas as pd
 from pathlib import Path
 
-from .Adquisicion import Adquisicion
+from .binance_source import BinanceDataSource
+from .abstractions import DataSource
 from .indicadores import Indicadores
 from .normalization import Normalization
 
@@ -16,13 +17,14 @@ from .normalization import Normalization
 class DataPipeline:
     """Clase que unifica todo el preprocesamiento de datos."""
     
-    def __init__(self, symbol: str, interval: str, start_date: str, run_id: str, base_path: str, 
+    def __init__(self, data_source: DataSource, symbol: str, interval: str, start_date: str, run_id: str, base_path: str,
                  full_config: Dict, end_date: str = None, save_artifacts: bool = True, 
-                 api_key: Optional[str] = None, api_secret: Optional[str] = None, gcs_utils=None):
+                 gcs_utils=None):
         """
         Inicializa el pipeline de datos.
         
         Args:
+            data_source (DataSource): Instancia de fuente de datos que implementa la interfaz DataSource
             symbol (str): Símbolo del par de trading (ej: 'BTCUSDT')
             interval (str): Intervalo de tiempo para las velas (ej: '1h', '4h')
             start_date (str): Fecha de inicio en formato YYYY-MM-DD
@@ -31,10 +33,11 @@ class DataPipeline:
             full_config (Dict): Configuración completa para todas las clases del pipeline
             end_date (str, optional): Fecha de fin en formato YYYY-MM-DD
             save_artifacts (bool): Si True, guarda artefactos como scalers
-            api_key (str, optional): API key de Binance para adquisición de datos
-            api_secret (str, optional): API secret de Binance para adquisición de datos
             gcs_utils: Instancia de GCSUtils para operaciones en la nube (opcional)
         """
+        # Inyección de dependencia: fuente de datos
+        self.data_source = data_source
+        
         self.symbol = symbol
         self.interval = interval
         self.start_date = start_date
@@ -45,8 +48,6 @@ class DataPipeline:
         
         # Store injected configuration and dependencies
         self.full_config = full_config
-        self.api_key = api_key
-        self.api_secret = api_secret
         self.gcs_utils = gcs_utils
         
         # Configurar logging
@@ -71,17 +72,7 @@ class DataPipeline:
         
         # Paso 1: Adquisición de datos
         self.logger.info("PASO 1: Adquisición de Datos")
-        adquisicion = Adquisicion(
-            symbol=self.symbol,
-            interval=self.interval,
-            start_date=self.start_date,
-            end_date=self.end_date,
-            config_dict=self.full_config,
-            api_key=self.api_key,
-            api_secret=self.api_secret
-        )
-        dataframe = adquisicion.main()
-        #dataframe = adquisicion.main_parallel()
+        dataframe = self.data_source.fetch_data()
 
         self.logger.info(f"Datos adquiridos exitosamente:")
         self.logger.info(f"  - Forma del DataFrame: {dataframe.shape}")

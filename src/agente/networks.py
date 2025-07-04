@@ -10,6 +10,8 @@ import math
 from typing import Tuple, Optional
 import logging
 
+from .abstractions import AbstractActor, AbstractCritic
+
 logger = logging.getLogger(__name__)
 
 
@@ -161,7 +163,7 @@ class StateTransformerEncoder(nn.Module):
         return output
 
 
-class ActorNetwork(nn.Module):
+class ActorNetwork(AbstractActor):
     """
     Red del Actor para el algoritmo SAC.
     Utiliza StateTransformerEncoder + MLP para generar parámetros de la política.
@@ -192,8 +194,8 @@ class ActorNetwork(nn.Module):
         self.action_dim = action_dim
         
         # Extraer configuraciones específicas
-        architecture_config = agent_config.get('architecture', {})
-        sac_params = agent_config.get('hiperparametros_sac', {})
+        architecture_config = agent_config.architecture
+        sac_params = agent_config.hiperparametros_sac
         
         # Encoder Transformer para datos de mercado
         self.transformer = StateTransformerEncoder(
@@ -268,7 +270,7 @@ class ActorNetwork(nn.Module):
         return mean, log_std
 
 
-class CriticNetwork(nn.Module):
+class CriticNetwork(AbstractCritic):
     """
     Red del Crítico para el algoritmo SAC.
     Estima Q(s,a) usando StateTransformerEncoder + MLP.

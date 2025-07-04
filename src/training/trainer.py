@@ -9,6 +9,13 @@ from pathlib import Path
 from typing import Dict, Any, Optional, Tuple
 from src.agente.replay_buffer import ReplayBuffer
 from src.utils.observation_parser import parse_observation
+from src.configuration.constants import (
+    KEY_SEED, KEY_BATCH_SIZE, KEY_MIN_BUFFER_FOR_LEARNING, 
+    KEY_REPLAY_BUFFER_CAPACITY, KEY_REPLAY_BUFFER_SIZE,
+    KEY_EVAL_FREQUENCY, KEY_SAVE_FREQUENCY, KEY_TENSORBOARD_DIR,
+    KEY_STORAGE_MODE, STORAGE_MODE_GCP,
+    STATUS_LEARNING, STATUS_COLLECTING
+)
 
 
 class Trainer:
@@ -50,7 +57,7 @@ class Trainer:
         
         # Initialize ReplayBuffer
         self.replay_buffer = ReplayBuffer(
-            capacity=trainer_config.get('replay_buffer_capacity', trainer_config.get('replay_buffer_size', 100000)),
+            capacity=trainer_config.get(KEY_REPLAY_BUFFER_CAPACITY, trainer_config.get(KEY_REPLAY_BUFFER_SIZE, 100000)),
             observation_shape=env.observation_space.shape,
             action_dim=env.action_space.shape[0]
         )
@@ -91,7 +98,7 @@ class Trainer:
             total_episodes: Total number of episodes to train
         """
         self.logger_console.info(f"Iniciando entrenamiento por {total_episodes} episodios (desde episodio {start_episode})...")
-        self.logger_console.info(f"Usando semilla base {self.config['seed']} para generación de seeds específicos por episodio")
+        self.logger_console.info(f"Usando semilla base {self.config[KEY_SEED]} para generación de seeds específicos por episodio")
         
         # Training metrics storage
         episode_returns = []
@@ -108,7 +115,7 @@ class Trainer:
             episode_start_time = time.time()
             
             # Calculate episode-specific seed
-            current_episode_seed = self.config['seed'] + episode
+            current_episode_seed = self.config[KEY_SEED] + episode
             
             # Reset environment with specific seed
             obs, _ = self.env.reset(seed=current_episode_seed)
@@ -149,15 +156,15 @@ class Trainer:
                 self.replay_buffer.add(obs, action, reward, next_obs, terminated, truncated)
                 
                 # Train if enough experiences accumulated
-                if self.replay_buffer.can_sample(self.config['batch_size']) and len(self.replay_buffer) >= self.config['min_buffer_for_learning']:
+                if self.replay_buffer.can_sample(self.config[KEY_BATCH_SIZE]) and len(self.replay_buffer) >= self.config[KEY_MIN_BUFFER_FOR_LEARNING]:
                     # Log when learning starts for the first time
                     if not self.learning_started:
-                        self.logger_console.info(f"🎯 INICIANDO APRENDIZAJE: Buffer alcanzó {len(self.replay_buffer)} experiencias (mínimo: {self.config['min_buffer_for_learning']})")
+                        self.logger_console.info(f"🎯 INICIANDO APRENDIZAJE: Buffer alcanzó {len(self.replay_buffer)} experiencias (mínimo: {self.config[KEY_MIN_BUFFER_FOR_LEARNING]})")
                         self.learning_started = True
                     
                     # Sample batch from replay buffer
                     batch_obs, batch_actions, batch_rewards, batch_next_obs, batch_terminated, batch_truncated = self.replay_buffer.sample(
-                        self.config['batch_size'], self.agent.device
+                        self.config[KEY_BATCH_SIZE], self.agent.device
                     )
                     
                     # Parse batch observations (vectorized)
@@ -296,7 +303,7 @@ class Trainer:
                 avg_return = np.mean(episode_returns[-10:])
                 avg_profit = np.mean(episode_profits[-10:])
                 buffer_size = len(self.replay_buffer)
-                learning_status = "LEARNING" if buffer_size >= self.config['min_buffer_for_learning'] else f"COLLECTING ({buffer_size}/{self.config['min_buffer_for_learning']})"
+                learning_status = STATUS_LEARNING if buffer_size >= self.config[KEY_MIN_BUFFER_FOR_LEARNING] else f"{STATUS_COLLECTING} ({buffer_size}/{self.config[KEY_MIN_BUFFER_FOR_LEARNING]})"
                 
                 self.logger_console.info(f"Episodio {episode + 1}/{total_episodes} | "
                            f"Return: {episode_return:.2f} | "
@@ -313,7 +320,7 @@ class Trainer:
                                f"Critic Loss: {critic_losses[-1]:.4f}")
             
             # Periodic evaluation (solo si hay evaluator)
-            if (episode + 1) % self.config['eval_frequency'] == 0 and self.evaluator:
+            if (episode + 1) % self.config[KEY_EVAL_FREQUENCY] == 0 and self.evaluator:
                 self.logger_console.info(f"\n=== Evaluación en episodio {episode + 1} ===")
                 
                 # Use AgentEvaluator for evaluation
@@ -340,7 +347,7 @@ class Trainer:
                     self.logger_console.info(f"  - Nuevo mejor modelo guardado: {self.best_model_path}")
             
             # Periodic checkpoint saving (solo si hay checkpoint_manager)
-            if (episode + 1) % self.config['save_frequency'] == 0 and self.checkpoint_manager:
+            if (episode + 1) % self.config[KEY_SAVE_FREQUENCY] == 0 and self.checkpoint_manager:
                 self.checkpoint_manager.save_agent_checkpoint(self.training_run_id, self.agent, episode + 1)
         
         # Final save (solo si hay checkpoint_manager)
@@ -429,12 +436,12 @@ class Trainer:
         # === SUBIDA DE LOGS DE TENSORBOARD A GCS ===
         # Verificar si debemos subir logs de TensorBoard a GCS
         if (self.checkpoint_manager and 
-            self.config.get('storage_mode') == 'gcp' and 
-            self.config.get('tensorboard_dir') and 
+            self.config.get(KEY_STORAGE_MODE) == STORAGE_MODE_GCP and 
+            self.config.get(KEY_TENSORBOARD_DIR) and 
             self.training_run_id):
             
             # Construir la ruta completa al directorio de logs del run actual
-            local_tensorboard_run_dir = f"{self.config['tensorboard_dir']}/{self.training_run_id}"
+            local_tensorboard_run_dir = f"{self.config[KEY_TENSORBOARD_DIR]}/{self.training_run_id}"
             
             self.logger_console.info(f"\n📤 === SUBIENDO LOGS DE TENSORBOARD A GCS ===")
             self.logger_console.info(f"Directorio local de logs: {local_tensorboard_run_dir}")

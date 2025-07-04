@@ -17,7 +17,8 @@ from pathlib import Path
 from typing import Dict, Any, Optional
 
 from src.configuration.constants import (
-    FILE_CONFIG_RUN_YAML, FILE_EVALUATION_SUMMARY_JSON
+    FILE_CONFIG_RUN_YAML, FILE_EVALUATION_SUMMARY_JSON,
+    DIR_TRAINING_RUNS, STORAGE_MODE_GCP, KEY_STORAGE, KEY_BUCKET_NAME
 )
 
 
@@ -41,19 +42,19 @@ class ConfigManager:
         
         # Extract GCS bucket name from gcp_config if provided
         if gcp_config:
-            self.gcs_bucket_name = gcp_config.get('storage', {}).get('bucket_name')
+            self.gcs_bucket_name = gcp_config.get(KEY_STORAGE, {}).get(KEY_BUCKET_NAME)
         else:
             self.gcs_bucket_name = None
         
         # Validate GCS configuration
-        if self.storage_mode == "gcp" and not self.gcs_bucket_name:
+        if self.storage_mode == STORAGE_MODE_GCP and not self.gcs_bucket_name:
             raise ValueError("gcs_bucket_name is required when storage_mode is 'gcp'. Provide it via gcp_config parameter.")
         
         # Store gcp_config for worker processes
         self.gcp_config = gcp_config
         
         # Handle GCS utils
-        if self.storage_mode == "gcp":
+        if self.storage_mode == STORAGE_MODE_GCP:
             if gcp_config is None:
                 raise ValueError("gcp_config is required when storage_mode is 'gcp'")
             
@@ -76,7 +77,7 @@ class ConfigManager:
         Returns:
             The path prefix string for the training run (e.g., "training_runs/ID_ABC")
         """
-        return f"training_runs/{training_run_id}"
+        return f"{DIR_TRAINING_RUNS}/{training_run_id}"
     
     def save_run_config(self, training_run_id: str, full_run_config: Dict[str, Any]) -> None:
         """
@@ -93,7 +94,7 @@ class ConfigManager:
         # Get training run prefix using helper
         prefix = self._get_training_run_prefix(training_run_id)
 
-        if self.storage_mode == "gcp":
+        if self.storage_mode == STORAGE_MODE_GCP:
             # For GCP, save temporarily and upload
             with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as temp_file:
                 yaml.dump(full_run_config, temp_file, default_flow_style=False, allow_unicode=True)
