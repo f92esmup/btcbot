@@ -7,9 +7,11 @@ el entorno de simulación y el modo en vivo.
 """
 
 import numpy as np
+import pandas as pd
 from typing import Dict, Any
 
 from .base_portfolio import TipoOperacion
+from src.configuration.constants import COLUMN_CLOSE
 
 
 def get_normalized_portfolio_features(
@@ -93,8 +95,10 @@ def get_normalized_portfolio_features(
     
     # 4. Normalizar precio de entrada
     if tipo_nombre != 'NEUTRAL' and portfolio_state['precio_entrada'] > 0:
-        # Usar el price_scaler para normalizar el precio de entrada
-        precio_entrada_scaled = price_scaler.transform([[portfolio_state['precio_entrada']]])[0][0]
+        # Crear un DataFrame para evitar el UserWarning de scikit-learn.
+        # El scaler espera un DataFrame con el nombre de la característica ('Close').
+        precio_df = pd.DataFrame([[portfolio_state['precio_entrada']]], columns=[COLUMN_CLOSE])
+        precio_entrada_scaled = price_scaler.transform(precio_df)[0][0]
         precio_entrada_norm = np.clip(precio_entrada_scaled, 0.0, 1.0)
     else:
         precio_entrada_norm = 0.5  # Valor neutral
