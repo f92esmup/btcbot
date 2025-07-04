@@ -8,7 +8,7 @@ import torch
 from pathlib import Path
 from typing import Dict, Any, Optional, Tuple
 from src.agente.replay_buffer import ReplayBuffer
-from src.agente.observation_parser import parse_observation
+from src.agente.observation_parser import parse_observation, parse_observation_batch
 from src.configuration.constants import (
     KEY_SEED, KEY_BATCH_SIZE, KEY_MIN_BUFFER_FOR_LEARNING, 
     KEY_REPLAY_BUFFER_CAPACITY, KEY_REPLAY_BUFFER_SIZE,
@@ -61,33 +61,6 @@ class Trainer:
             observation_shape=env.observation_space.shape,
             action_dim=env.action_space.shape[0]
         )
-        
-    def _parse_observation_batch(self, observations_batch: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        """
-        Vectorized parsing of a batch of observations.
-        
-        Args:
-            observations_batch: Tensor of shape (batch_size, total_features)
-            
-        Returns:
-            Tuple[torch.Tensor, torch.Tensor]: (market_data, portfolio_data) tensors
-            - market_data: shape (batch_size, ventana_size, num_features_mercado)
-            - portfolio_data: shape (batch_size, portfolio_features)
-        """
-        # Calculate dimensions
-        ventana_size = self.env.config_entorno['ventana_observacion_size']
-        num_features_mercado = len(self.env.column_names)
-        market_features_total = ventana_size * num_features_mercado
-        
-        # Use tensor slicing to separate market and portfolio data (vectorized)
-        market_data_flat = observations_batch[:, :market_features_total]
-        portfolio_data = observations_batch[:, market_features_total:]
-        
-        # Reshape market data to 3D tensor (vectorized)
-        batch_size = observations_batch.shape[0]
-        market_data = market_data_flat.view(batch_size, ventana_size, num_features_mercado)
-        
-        return market_data, portfolio_data
 
     def train(self, start_episode: int, total_episodes: int):
         """
@@ -145,7 +118,7 @@ class Trainer:
             done = False
             while not done:
                 # Parse observation and select action
-                market_data, portfolio_data = parse_observation(obs, self.env.config_entorno, self.agent.config.architecture.portfolio_features, self.agent.device)
+                market_data, portfolio_data = parse_observation(obs, self.env.config_entorno, self.agent.config, self.agent.device)
                 action = self.agent.select_action(market_data, portfolio_data, deterministic=False)
                 
                 # Execute action
@@ -168,8 +141,12 @@ class Trainer:
                     )
                     
                     # Parse batch observations (vectorized)
-                    batch_market_data, batch_portfolio_data = self._parse_observation_batch(batch_obs)
-                    batch_next_market_data, batch_next_portfolio_data = self._parse_observation_batch(batch_next_obs)
+                    batch_market_data, batch_portfolio_data = parse_observation_batch(
+                        batch_obs, self.env.config_entorno, self.agent.config, len(self.env.column_names)
+                    )
+                    batch_next_market_data, batch_next_portfolio_data = parse_observation_batch(
+                        batch_next_obs, self.env.config_entorno, self.agent.config, len(self.env.column_names)
+                    )
                     
                     # Learn from batch
                     losses = self.agent.learn(

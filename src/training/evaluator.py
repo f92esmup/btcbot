@@ -118,7 +118,7 @@ class AgentEvaluator:
         done = False
         while not done:
             # Parse observation and select action deterministically
-            market_data, portfolio_data = parse_observation(obs, env.config_entorno, agent.portfolio_features, agent.device)
+            market_data, portfolio_data = parse_observation(obs, env.config_entorno, agent.config, agent.device)
             action = agent.select_action(market_data, portfolio_data, deterministic=True)
             
             # Equity antes del paso para calcular retorno

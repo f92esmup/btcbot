@@ -36,18 +36,18 @@ class DecisionMaker:
         main_config = self.run_config.get('config', {})
         self.env_config = main_config.get('environment', {})
         agent_config_dict = main_config.get('agent', {})
-        agent_config = AgentConfig(**agent_config_dict)
+        self.agent_config = AgentConfig(**agent_config_dict)
 
         if not hasattr(self.scaler, 'n_features_in_'):
              raise ValueError("El scaler inyectado no parece estar ajustado (no tiene 'n_features_in_').")
 
         market_features = self.scaler.n_features_in_
         sequence_length = self.env_config['ventana_observacion_size']
-        portfolio_features = agent_config.architecture.portfolio_features
+        portfolio_features = self.agent_config.architecture.portfolio_features
         action_dim = 1
 
-        transformer_config = agent_config.transformer
-        mlp_hidden_dims = agent_config.mlp_heads.hidden_dims
+        transformer_config = self.agent_config.transformer
+        mlp_hidden_dims = self.agent_config.mlp_heads.hidden_dims
 
         actor = ActorNetwork(
             market_features=market_features,
@@ -55,7 +55,7 @@ class DecisionMaker:
             transformer_config=transformer_config,
             mlp_hidden_dims=mlp_hidden_dims,
             action_dim=action_dim,
-            agent_config=agent_config
+            agent_config=self.agent_config
         )
 
         critic_1 = CriticNetwork(
@@ -64,7 +64,7 @@ class DecisionMaker:
             action_dim=action_dim,
             transformer_config=transformer_config,
             mlp_hidden_dims=mlp_hidden_dims,
-            agent_config=agent_config
+            agent_config=self.agent_config
         )
 
         critic_2 = CriticNetwork(
@@ -73,7 +73,7 @@ class DecisionMaker:
             action_dim=action_dim,
             transformer_config=transformer_config,
             mlp_hidden_dims=mlp_hidden_dims,
-            agent_config=agent_config
+            agent_config=self.agent_config
         )
 
         observation_space_shape = (sequence_length * market_features + portfolio_features,)
@@ -85,7 +85,7 @@ class DecisionMaker:
             critic_2=critic_2,
             observation_space_shape=observation_space_shape,
             action_space_shape=action_space_shape,
-            config_override=agent_config,
+            config_override=self.agent_config,
             device=self.device,
             is_distributed=False
         )
@@ -123,7 +123,7 @@ class DecisionMaker:
         market_data, portfolio_data = parse_observation(
             observation, 
             self.env_config, 
-            self.agent.portfolio_features, 
+            self.agent_config, 
             self.device
         )
         
