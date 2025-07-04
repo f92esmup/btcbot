@@ -86,12 +86,12 @@ class Normalization:
     
     
     
-    def main(self) -> Tuple[pd.DataFrame, MinMaxScaler]:
+    def main(self) -> Tuple[pd.DataFrame, MinMaxScaler, MinMaxScaler]:
         """
         Método principal que orquesta todo el proceso de normalización.
         
         Returns:
-            Tuple[pd.DataFrame, MinMaxScaler]: DataFrame normalizado y scaler ajustado
+            Tuple[pd.DataFrame, MinMaxScaler, MinMaxScaler]: DataFrame normalizado, scaler y price_scaler ajustados
         """
         self.logger.info("Iniciando proceso de normalización...")
         
@@ -104,18 +104,13 @@ class Normalization:
         # Paso 3: Crear y ajustar el price_scaler específico
         self._fit_price_scaler()
         
-        # Paso 4: Guardar ambos scalers (solo si save_artifacts es True)
-        if self.save_artifacts:
-            self._save_scaler()
-            self._save_price_scaler()
-        
-        # Paso 5: Transformar el dataset
+        # Paso 4: Transformar el dataset
         normalized_df = self._transform_datasets()
         
         self.logger.info("Proceso de normalización completado exitosamente")
         self.logger.info(f"DataFrame normalizado: {len(normalized_df)} filas, {len(normalized_df.columns)} columnas")
         
-        return normalized_df, self.scaler
+        return normalized_df, self.scaler, self.price_scaler
     
     def _prepare_features(self):
         """Prepara las características que serán normalizadas."""
@@ -161,7 +156,7 @@ class Normalization:
             raise ValueError(f"Tipo de scaler no soportado: {self.scaler_type}")
         
         # Ajustar el scaler con los datos
-        feature_data = self.dataframe[self.feature_columns].values
+        feature_data = self.dataframe[self.feature_columns]
         
         self.logger.info(f"Ajustando {self.scaler_type} con {feature_data.shape[0]} muestras y {feature_data.shape[1]} características")
         
@@ -194,7 +189,7 @@ class Normalization:
         
         try:
             # Obtener solo los valores de la columna Close
-            close_data = self.dataframe[[COLUMN_CLOSE]].values
+            close_data = self.dataframe[[COLUMN_CLOSE]]
             
             # Ajustar el price_scaler solo con los datos de Close
             self.price_scaler.fit(close_data)
@@ -205,104 +200,6 @@ class Normalization:
         except Exception as e:
             self.logger.error(f"Error al ajustar el price_scaler: {str(e)}")
             raise
-    
-    def _save_scaler(self):
-        """Guardar el objeto scaler ajustado para uso futuro."""
-        if not self.save_artifacts:
-            self.logger.info("save_artifacts=False, omitiendo guardado del scaler")
-            return
-            
-        if self.storage_mode == "gcp":
-            self.logger.info("Guardando scaler en Google Cloud Storage...")
-            
-            try:
-                if self.base_path:
-                    # Usar la ruta base completa que ya incluye el run_id
-                    gcs_blob_name = f"{self.base_path}/{FILE_SCALER}"
-                    success = self.gcs_utils.save_scaler_to_gcs(self.scaler, gcs_blob_name) if self.gcs_utils else False
-                else:
-                    # Fallback por si base_path no estuviera definido
-                    success = self.gcs_utils.save_scaler_to_gcs(self.scaler) if self.gcs_utils else False
-                
-                if success:
-                    self.logger.info(f"Scaler guardado exitosamente en GCS: {self.scaler_path}")
-                else:
-                    raise RuntimeError("Error al guardar scaler en GCS")
-                    
-            except Exception as e:
-                self.logger.error(f"Error al guardar el scaler en GCS: {str(e)}")
-                raise
-        else:
-            # Modo local
-            self.logger.info(f"Guardando scaler en: {self.scaler_path}")
-            
-            try:
-                # Crear el directorio si no existe
-                scaler_dir = Path(self.scaler_path).parent
-                scaler_dir.mkdir(parents=True, exist_ok=True)
-                
-                # Guardar el scaler usando joblib
-                joblib.dump(self.scaler, self.scaler_path)
-                
-                # Verificar que el archivo se guardó correctamente
-                if os.path.exists(self.scaler_path):
-                    file_size = os.path.getsize(self.scaler_path)
-                    self.logger.info(f"Scaler guardado exitosamente. Tamaño del archivo: {file_size} bytes")
-                else:
-                    raise FileNotFoundError("Error: el archivo del scaler no se creó")
-                    
-            except Exception as e:
-                self.logger.error(f"Error al guardar el scaler: {str(e)}")
-                raise
-    
-    def _save_price_scaler(self):
-        """Guardar el price_scaler ajustado para uso futuro."""
-        if not self.save_artifacts:
-            self.logger.info("save_artifacts=False, omitiendo guardado del price_scaler")
-            return
-            
-        if self.storage_mode == "gcp":
-            self.logger.info("Guardando price_scaler en Google Cloud Storage...")
-            
-            try:
-                if self.base_path:
-                    # Usar la ruta base completa que ya incluye el run_id
-                    gcs_blob_name = f"{self.base_path}/price_scaler.pkl"
-                    success = self.gcs_utils.save_price_scaler_to_gcs(self.price_scaler, gcs_blob_name) if self.gcs_utils else False
-                else:
-                    # Fallback por si base_path no estuviera definido
-                    success = self.gcs_utils.save_price_scaler_to_gcs(self.price_scaler) if self.gcs_utils else False
-                
-                if success:
-                    self.logger.info(f"Price scaler guardado exitosamente en GCS: {self.price_scaler_path}")
-                else:
-                    raise RuntimeError("Error al guardar price_scaler en GCS")
-                    
-            except Exception as e:
-                self.logger.error(f"Error al guardar el price_scaler en GCS: {str(e)}")
-                raise
-        else:
-            # Modo local
-            self.logger.info(f"Guardando price_scaler en: {self.price_scaler_path}")
-            
-            try:
-                # Crear el directorio si no existe
-                scaler_dir = Path(self.price_scaler_path).parent
-                scaler_dir.mkdir(parents=True, exist_ok=True)
-                
-                # Guardar el price_scaler usando joblib
-                joblib.dump(self.price_scaler, self.price_scaler_path)
-                
-                # Verificar que el archivo se guardó correctamente
-                if os.path.exists(self.price_scaler_path):
-                    file_size = os.path.getsize(self.price_scaler_path)
-                    self.logger.info(f"Price scaler guardado exitosamente. Tamaño del archivo: {file_size} bytes")
-                else:
-                    raise FileNotFoundError("Error: el archivo del price_scaler no se creó")
-                    
-            except Exception as e:
-                self.logger.error(f"Error al guardar el price_scaler: {str(e)}")
-                raise
     
     def _transform_datasets(self) -> pd.DataFrame:
         """
@@ -318,7 +215,7 @@ class Normalization:
         
         try:
             # Obtener los datos de características
-            feature_data = self.dataframe[self.feature_columns].values
+            feature_data = self.dataframe[self.feature_columns]
             
             # Aplicar la transformación
             normalized_data = self.scaler.transform(feature_data)

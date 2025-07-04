@@ -257,39 +257,18 @@ def main() -> None:
         gcp_config=gcp_config
     )
     
-    # Guardar metadatos del data_run usando el ConfigManager
+    # Guardar metadatos del data_run usando el ArtifactManager
     logger.info("💾 GUARDANDO METADATOS DEL DATASET:")
-    metadata_filename = FILE_DATA_RUN_METADATA
+    metadata_save_success = artifact_manager.save_data_run_metadata(
+        data_run_id=data_run_id,
+        metadata=data_run_metadata
+    )
     
-    if storage_mode == STORAGE_MODE_GCP:
-        # Para GCP, guardamos temporalmente y subimos usando RunManager
-        import tempfile
-        import os
-        
-        with tempfile.NamedTemporaryFile(mode=MODE_WRITE, suffix=FILE_SUFFIX_YAML, delete=False) as temp_file:
-            yaml.dump(data_run_metadata, temp_file, default_flow_style=False, allow_unicode=True)
-            temp_path = temp_file.name
-        
-        try:
-            data_run_prefix = artifact_manager._get_data_run_prefix(data_run_id)
-            gcs_blob_name = f"{data_run_prefix}/{metadata_filename}"
-            if artifact_manager.gcs_utils.upload_file_to_gcs(temp_path, gcs_blob_name):
-                logger.info(f"  ✅ Metadatos guardados en GCS: gs://{artifact_manager.gcs_bucket_name}/{gcs_blob_name}")
-            else:
-                logger.error("  ❌ Error guardando metadatos en GCS")
-                sys.exit(1)
-        finally:
-            os.unlink(temp_path)
-    else:
-        # Para almacenamiento local usando el prefix del ArtifactManager
-        data_run_prefix = artifact_manager._get_data_run_prefix(data_run_id)
-        metadata_path = Path(data_run_prefix) / metadata_filename
-        metadata_path.parent.mkdir(parents=True, exist_ok=True)
-        
-        with open(metadata_path, MODE_WRITE, encoding=ENCODING_UTF8) as f:
-            yaml.dump(data_run_metadata, f, default_flow_style=False, allow_unicode=True)
-        
-        logger.info(f"  ✅ Metadatos guardados en: {metadata_path}")
+    if not metadata_save_success:
+        logger.error("  ❌ Error guardando metadatos del dataset")
+        sys.exit(1)
+    
+    logger.info("  ✅ Metadatos guardados exitosamente")
     
     # Configurar credenciales de API si es necesario
     api_key = None
@@ -353,32 +332,22 @@ def main() -> None:
         )
         
         # Ejecutar el pipeline
-        normalized_dataframe, price_scaler = data_pipeline.run()
+        normalized_dataframe, scaler, price_scaler = data_pipeline.run()
         
-        # Guardar el DataFrame normalizado
-        logger.info("💾 GUARDANDO DATAFRAME NORMALIZADO:")
-        if storage_mode == STORAGE_MODE_GCP:
-            # Para GCP, guardamos temporalmente y subimos
-            import tempfile
-            import os
-            
-            with tempfile.NamedTemporaryFile(suffix=FILE_SUFFIX_PKL, delete=False) as temp_file:
-                normalized_dataframe.to_pickle(temp_file.name)
-                temp_path = temp_file.name
-            
-            try:
-                gcs_blob_name = f"{data_run_path}/{FILE_NORMALIZED_DATAFRAME}"
-                if artifact_manager.gcs_utils.upload_file_to_gcs(temp_path, gcs_blob_name):
-                    logger.info(f"  ✅ DataFrame guardado en GCS: gs://{artifact_manager.gcs_bucket_name}/{gcs_blob_name}")
-                else:
-                    logger.error("  ❌ Error guardando DataFrame en GCS")
-            finally:
-                os.unlink(temp_path)
-        else:
-            # Para almacenamiento local
-            dataframe_path = Path(data_run_path) / FILE_NORMALIZED_DATAFRAME
-            normalized_dataframe.to_pickle(dataframe_path)
-            logger.info(f"  ✅ DataFrame guardado en: {dataframe_path}")
+        # Guardar todos los artefactos usando el ArtifactManager
+        logger.info("💾 GUARDANDO ARTEFACTOS DEL DATASET:")
+        artifact_save_success = artifact_manager.save_data_artifacts(
+            data_run_id=data_run_id,
+            normalized_dataframe=normalized_dataframe,
+            scaler=scaler,
+            price_scaler=price_scaler
+        )
+        
+        if not artifact_save_success:
+            logger.error("  ❌ Error guardando artefactos del dataset")
+            sys.exit(1)
+        
+        logger.info("  ✅ Todos los artefactos guardados exitosamente")
         
         logger.info("-" * 40)
         logger.info("🎉 DATASET CREADO EXITOSAMENTE")
@@ -393,7 +362,7 @@ def main() -> None:
         logger.info(f"  • Modo de almacenamiento: {storage_mode}")
         
         logger.info("\n📁 ARTEFACTOS GENERADOS:")
-        logger.info(f"  • {metadata_filename} - Metadatos del dataset")
+        logger.info(f"  • {FILE_DATA_RUN_METADATA} - Metadatos del dataset")
         logger.info(f"  • {FILE_NORMALIZED_DATAFRAME} - Datos normalizados")
         logger.info(f"  • {FILE_SCALER} - Escalador de características")
         logger.info(f"  • {FILE_PRICE_SCALER} - Escalador de precios")

@@ -2,10 +2,14 @@
 ArtifactManager: Specialized manager for data artifact operations.
 
 This module provides centralized management for data artifact operations including:
-- Loading normalized DataFrames from data runs
-- Loading scalers and price scalers
+- Loading and saving normalized DataFrames from/to data runs
+- Loading and saving scalers and price scalers
 - Data run metadata handling
 - Both local and GCS storage support
+
+This class follows the Single Responsibility Principle (SRP) by centralizing
+all artifact management operations that were previously scattered across
+multiple classes like Normalization and create_dataset.py.
 """
 
 import os
@@ -27,8 +31,23 @@ class ArtifactManager:
     """
     Specialized manager for data artifact operations.
     
-    Handles loading and management of data artifacts including DataFrames,
+    Handles loading, saving, and management of data artifacts including DataFrames,
     scalers, and metadata across both local and GCS storage modes.
+    
+    This class centralizes artifact management operations that were previously
+    scattered across multiple modules, following the Single Responsibility Principle.
+    
+    Supported operations:
+    - Save and load normalized DataFrames
+    - Save and load MinMaxScaler objects  
+    - Save and load price scaler objects
+    - Save and load data run metadata
+    - Check artifact existence
+    - Get artifact information
+    
+    Supported storage modes:
+    - 'local': Local filesystem storage
+    - 'gcp': Google Cloud Storage
     """
     
     def __init__(self, storage_mode: str = "local", gcp_config: Optional[Dict[str, Any]] = None):
@@ -217,3 +236,196 @@ class ArtifactManager:
         except Exception as e:
             self.logger.error(f"Error loading data run metadata for {data_run_id}: {str(e)}")
             raise
+
+    def save_data_artifacts(self, data_run_id: str, normalized_dataframe, scaler, price_scaler) -> bool:
+        """
+        Save all data artifacts for a specific data_run.
+        
+        Args:
+            data_run_id: The ID of the data_run to save artifacts for
+            normalized_dataframe: The normalized DataFrame to save
+            scaler: The fitted MinMaxScaler to save
+            price_scaler: The fitted price scaler to save
+            
+        Returns:
+            bool: True if all artifacts were saved successfully
+        """
+        self.logger.info(f"Saving data artifacts for data_run: {data_run_id}")
+        
+        # Get data run prefix using helper
+        prefix = self._get_data_run_prefix(data_run_id)
+        
+        try:
+            if self.storage_mode == "gcp":
+                # GCP mode: save to Google Cloud Storage
+                self.logger.info("Saving data artifacts to Google Cloud Storage...")
+                
+                # Save normalized_dataframe
+                with tempfile.NamedTemporaryFile(suffix='.pkl', delete=False) as temp_file:
+                    temp_dataframe_path = temp_file.name
+                    
+                try:
+                    with open(temp_dataframe_path, 'wb') as f:
+                        pickle.dump(normalized_dataframe, f)
+                    
+                    dataframe_blob_name = f"{prefix}/{FILE_DATAFRAME_PKL}"
+                    if not self.gcs_utils.upload_file_to_gcs(temp_dataframe_path, dataframe_blob_name):
+                        raise RuntimeError(f"Failed to upload dataframe to GCS: {dataframe_blob_name}")
+                    self.logger.info(f"DataFrame saved to GCS: {dataframe_blob_name}")
+                finally:
+                    os.unlink(temp_dataframe_path)
+                
+                # Save scaler
+                scaler_blob_name = f"{prefix}/{FILE_SCALER_PKL}"
+                if not self.gcs_utils.save_scaler_to_gcs(scaler, scaler_blob_name):
+                    raise RuntimeError(f"Failed to save scaler to GCS: {scaler_blob_name}")
+                self.logger.info(f"Scaler saved to GCS: {scaler_blob_name}")
+                
+                # Save price_scaler
+                price_scaler_blob_name = f"{prefix}/{FILE_PRICE_SCALER_PKL}"
+                if not self.gcs_utils.save_price_scaler_to_gcs(price_scaler, price_scaler_blob_name):
+                    raise RuntimeError(f"Failed to save price_scaler to GCS: {price_scaler_blob_name}")
+                self.logger.info(f"Price scaler saved to GCS: {price_scaler_blob_name}")
+                
+                return True
+                
+            else:
+                # Local mode
+                data_run_path = Path(prefix)
+                data_run_path.mkdir(parents=True, exist_ok=True)
+                
+                # Save normalized_dataframe
+                dataframe_path = data_run_path / FILE_DATAFRAME_PKL
+                with open(dataframe_path, 'wb') as f:
+                    pickle.dump(normalized_dataframe, f)
+                self.logger.info(f"DataFrame saved to: {dataframe_path}")
+                
+                # Save scaler
+                scaler_path = data_run_path / FILE_SCALER_PKL
+                joblib.dump(scaler, scaler_path)
+                self.logger.info(f"Scaler saved to: {scaler_path}")
+                
+                # Save price_scaler
+                price_scaler_path = data_run_path / FILE_PRICE_SCALER_PKL
+                joblib.dump(price_scaler, price_scaler_path)
+                self.logger.info(f"Price scaler saved to: {price_scaler_path}")
+                
+                return True
+                
+        except Exception as e:
+            self.logger.error(f"Error saving data artifacts for data_run {data_run_id}: {str(e)}")
+            return False
+
+    def save_data_run_metadata(self, data_run_id: str, metadata: Dict[str, Any]) -> bool:
+        """
+        Save metadata for a specific data_run.
+        
+        Args:
+            data_run_id: The ID of the data_run to save metadata for
+            metadata: Dictionary containing the metadata to save
+            
+        Returns:
+            bool: True if metadata was saved successfully
+        """
+        self.logger.info(f"Saving metadata for data_run: {data_run_id}")
+        
+        # Get data run prefix using helper
+        prefix = self._get_data_run_prefix(data_run_id)
+        
+        try:
+            if self.storage_mode == "gcp":
+                # GCP mode: save to Google Cloud Storage
+                blob_name = f"{prefix}/{FILE_DATA_RUN_METADATA_YAML}"
+                
+                # Convert metadata to YAML string
+                yaml_content = yaml.dump(metadata, default_flow_style=False, allow_unicode=True)
+                
+                # Upload to GCS
+                bucket = self.gcs_utils.client.bucket(self.gcs_bucket_name)
+                blob = bucket.blob(blob_name)
+                blob.upload_from_string(yaml_content, content_type='text/yaml')
+                
+                self.logger.info(f"Data run metadata saved to GCS: {blob_name}")
+                return True
+                
+            else:
+                # Local mode
+                data_run_path = Path(prefix)
+                data_run_path.mkdir(parents=True, exist_ok=True)
+                
+                metadata_path = data_run_path / FILE_DATA_RUN_METADATA_YAML
+                with open(metadata_path, 'w', encoding='utf-8') as f:
+                    yaml.dump(metadata, f, default_flow_style=False, allow_unicode=True)
+                
+                self.logger.info(f"Data run metadata saved to: {metadata_path}")
+                return True
+                
+        except Exception as e:
+            self.logger.error(f"Error saving data run metadata for {data_run_id}: {str(e)}")
+            return False
+
+    def artifact_exists(self, data_run_id: str, artifact_type: str) -> bool:
+        """
+        Check if a specific artifact exists for a data_run.
+        
+        Args:
+            data_run_id: The ID of the data_run to check
+            artifact_type: Type of artifact ('dataframe', 'scaler', 'price_scaler', 'metadata')
+            
+        Returns:
+            bool: True if the artifact exists
+        """
+        prefix = self._get_data_run_prefix(data_run_id)
+        
+        # Map artifact types to filenames
+        artifact_files = {
+            'dataframe': FILE_DATAFRAME_PKL,
+            'scaler': FILE_SCALER_PKL,
+            'price_scaler': FILE_PRICE_SCALER_PKL,
+            'metadata': FILE_DATA_RUN_METADATA_YAML
+        }
+        
+        if artifact_type not in artifact_files:
+            raise ValueError(f"Unknown artifact type: {artifact_type}")
+        
+        filename = artifact_files[artifact_type]
+        
+        try:
+            if self.storage_mode == "gcp":
+                blob_name = f"{prefix}/{filename}"
+                bucket = self.gcs_utils.client.bucket(self.gcs_bucket_name)
+                blob = bucket.blob(blob_name)
+                return blob.exists()
+            else:
+                artifact_path = Path(prefix) / filename
+                return artifact_path.exists()
+                
+        except Exception as e:
+            self.logger.error(f"Error checking if artifact exists for {data_run_id}: {str(e)}")
+            return False
+
+    def get_artifact_info(self, data_run_id: str) -> Dict[str, Any]:
+        """
+        Get information about all artifacts for a data_run.
+        
+        Args:
+            data_run_id: The ID of the data_run to get info for
+            
+        Returns:
+            Dictionary containing artifact information
+        """
+        prefix = self._get_data_run_prefix(data_run_id)
+        
+        info = {
+            'data_run_id': data_run_id,
+            'storage_mode': self.storage_mode,
+            'prefix': prefix,
+            'artifacts': {}
+        }
+        
+        # Check each artifact type
+        artifact_types = ['dataframe', 'scaler', 'price_scaler', 'metadata']
+        for artifact_type in artifact_types:
+            info['artifacts'][artifact_type] = self.artifact_exists(data_run_id, artifact_type)
+        
+        return info

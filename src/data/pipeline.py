@@ -61,12 +61,12 @@ class DataPipeline:
         self.logger.info(f"Guardar artefactos: {save_artifacts}")
         self.logger.info(f"Configuración inyectada: {len(self.full_config)} secciones")
     
-    def run(self) -> Tuple[pd.DataFrame, object]:
+    def run(self) -> Tuple[pd.DataFrame, object, object]:
         """
         Ejecuta el pipeline completo de preprocesamiento de datos.
         
         Returns:
-            Tuple[pd.DataFrame, object]: DataFrame normalizado y el objeto price_scaler utilizado.
+            Tuple[pd.DataFrame, object, object]: DataFrame normalizado, scaler y price_scaler utilizados.
         """
         self.logger.info("=== Iniciando Pipeline de Datos ===")
         
@@ -106,21 +106,18 @@ class DataPipeline:
             dataframe_with_indicators, 
             base_path=self.base_path, 
             run_id=self.run_id,
-            save_artifacts=self.save_artifacts,
+            save_artifacts=False,  # ArtifactManager se encargará del guardado
             normalization_config=self.full_config.get('normalization', {}),
             gcs_utils=self.gcs_utils
         )
-        normalized_dataframe, scaler = normalization.main()
+        normalized_dataframe, scaler, price_scaler = normalization.main()
         
         self.logger.info(f"Normalización completada exitosamente:")
         self.logger.info(f"  - Forma del DataFrame normalizado: {normalized_dataframe.shape}")
         self.logger.info(f"  - Rango de valores: [{normalized_dataframe.min().min():.6f}, {normalized_dataframe.max().max():.6f}]")
         
-        if self.save_artifacts:
-            self.logger.info(f"  - Scaler guardado en: {normalization.scaler_path}")
-            self.logger.info(f"  - Price scaler guardado en: {normalization.price_scaler_path}")
-        else:
-            self.logger.info("  - Artefactos no guardados (save_artifacts=False)")
+        # Los artefactos serán guardados por el ArtifactManager en el script principal
+        self.logger.info("  - Artefactos disponibles para guardado por ArtifactManager")
             
         self.logger.info(f"  - Memoria utilizada: {normalized_dataframe.memory_usage(deep=True).sum() / 1024**2:.2f} MB")
         
@@ -132,4 +129,4 @@ class DataPipeline:
         
         self.logger.info("=== Pipeline de Datos Completado ===")
         
-        return normalized_dataframe, normalization.price_scaler
+        return normalized_dataframe, scaler, price_scaler
