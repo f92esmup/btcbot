@@ -3,7 +3,7 @@ import numpy as np
 from src.agente.agent import TransformerSACAgent
 from src.agente.networks import ActorNetwork, CriticNetwork
 from src.training.checkpoint_manager import CheckpointManager
-from src.utils.observation_parser import parse_observation
+from src.agente.observation_parser import parse_observation
 from src.configuration import AgentConfig
 
 

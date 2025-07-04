@@ -8,7 +8,7 @@ import torch
 from pathlib import Path
 from typing import Dict, Any, Optional, Tuple
 from src.agente.replay_buffer import ReplayBuffer
-from src.utils.observation_parser import parse_observation
+from src.agente.observation_parser import parse_observation
 from src.configuration.constants import (
     KEY_SEED, KEY_BATCH_SIZE, KEY_MIN_BUFFER_FOR_LEARNING, 
     KEY_REPLAY_BUFFER_CAPACITY, KEY_REPLAY_BUFFER_SIZE,

@@ -14,7 +14,7 @@ from typing import Dict, List, Tuple
 from src.agente.agent import TransformerSACAgent
 from src.entorno.environment import FuturesTradingEnv
 from src.analysis.metrics import FinancialMetrics
-from src.utils.observation_parser import parse_observation
+from src.agente.observation_parser import parse_observation
 
 
 class AgentEvaluator:
