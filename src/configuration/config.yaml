@@ -67,13 +67,7 @@ interpolation:
 normalization:
   scaler_type: "MinMaxScaler"  # Tipo de escalador a usar
   feature_range: [0, 1]        # Rango de normalización
-  storage_mode: "gcp"        # Modo de almacenamiento: "local" o "gcp"
-
-# Configuración para Vertex AI TensorBoard
-tensorboard_vertex_ai:
-  instance_name: "3595323857990320128" # Nueva instancia de TensorBoard creada
-  experiment_name: "BTCBot Trading Experiment" # Nuevo experimento creado
-  location: "europe-west4" # La región de tu instancia de TensorBoard
+  storage_mode: "gcp"        # Modo de almacenamiento: "local" (simplificado)
 
 # Indicadores de Tendencia
 trend_indicators:

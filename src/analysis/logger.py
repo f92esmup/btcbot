@@ -4,98 +4,39 @@ TensorBoard logging utilities for btcbot project.
 This module provides the TensorboardLogger class for centralized TensorBoard logging operations.
 """
 
-from typing import Dict, Any, Optional
+from typing import Dict, Any
 from torch.utils.tensorboard import SummaryWriter
 import logging
 import numpy as np
-
-# Importar aiplatform para la integración con Vertex AI
-try:
-    from google.cloud import aiplatform
-except ImportError:
-    aiplatform = None
+import os
 
 
 class TensorboardLogger:
     """
-    Clase para manejar todas las operaciones de logging de TensorBoard.
-    Soporta logging local y en Vertex AI TensorBoard.
+    Clase para manejar todas las operaciones de logging de TensorBoard en local.
+    Escribe logs únicamente en el sistema de archivos local.
     """
     
-    def __init__(self, log_dir: Optional[str] = None, run_id: str = None, 
-                 vertex_ai_config: Optional[Dict] = None) -> None:
+    def __init__(self, log_dir: str, run_id: str) -> None:
         """
-        Inicializa el logger de TensorBoard.
+        Inicializa el logger de TensorBoard para operación local.
         
         Args:
-            log_dir: Directorio para logs locales o None si es modo GCP.
-            run_id: ID único del entrenamiento, usado como nombre del run en TensorBoard.
-            vertex_ai_config: Configuración de Vertex AI TensorBoard (opcional).
+            log_dir: Directorio base para los logs de TensorBoard.
+            run_id: ID único del entrenamiento, usado como subdirectorio.
         """
-        self.writer = None
         self.logger = logging.getLogger(__name__)
         
-        # Determinar storage_mode desde la configuración inyectada
-        if vertex_ai_config:
-            # Si se proporciona vertex_ai_config, revisar si tiene storage_mode
-            self.storage_mode = vertex_ai_config.get('storage_mode', 'gcp')
-        else:
-            # Si no se proporciona config, usar modo local por defecto
-            self.storage_mode = 'local'
-
-        if self.storage_mode == "gcp":
-            self._init_vertex_ai_writer(run_id, vertex_ai_config)
-        else:
-            self._init_local_writer(log_dir)
-
-    def _init_local_writer(self, log_dir: str):
-        """Inicializa el writer para logging local."""
-        self.logger.info(f"Configurando TensorBoard para logging local en: {log_dir}")
-        self.writer = SummaryWriter(log_dir=log_dir)
-
-    def _init_vertex_ai_writer(self, run_id: str, vertex_ai_config: Dict):
-        """Inicializa el writer para logging en Vertex AI TensorBoard."""
-        if aiplatform is None:
-            self.logger.error("Librería 'google-cloud-aiplatform' no encontrada. No se puede loggear en Vertex AI.")
-            return
-
-        # Obtener parámetros del diccionario de configuración inyectado
-        tensorboard_config = vertex_ai_config.get('tensorboard_vertex_ai', {})
-        gcp_config = vertex_ai_config.get('gcp', {})
+        # Crear la ruta completa combinando log_dir con run_id
+        self.full_log_path = os.path.join(log_dir, run_id)
         
-        project = gcp_config.get('project_id')
-        location = tensorboard_config.get('location')
-        instance_name = tensorboard_config.get('instance_name')
-        experiment_name = tensorboard_config.get('experiment_name', 'default-experiment')
-
-        if not all([project, location, instance_name]):
-            self.logger.error("Configuración incompleta para Vertex AI TensorBoard en vertex_ai_config.")
-            self.logger.error(f"Valores recibidos: project={project}, location={location}, instance_name={instance_name}")
-            return
-
-        try:
-            # Inicializar cliente de AI Platform
-            aiplatform.init(project=project, location=location)
-            
-            self.logger.info("Configurando TensorBoard para logging en Vertex AI...")
-            self.logger.info(f"  - Proyecto: {project}")
-            self.logger.info(f"  - Instancia: {instance_name}")
-            self.logger.info(f"  - Experimento: {experiment_name}")
-            self.logger.info(f"  - Run: {run_id}")
-
-            # Crear el writer para el experimento y el run específicos
-            # Usamos una estructura de directorio que Vertex AI puede interpretar correctamente
-            log_dir_vertex = (
-                f"projects/{project}/locations/{location}/tensorboards/{instance_name}"
-                f"/experiments/{experiment_name}/runs/{run_id}"
-            )
-            self.writer = SummaryWriter(log_dir=log_dir_vertex)
-            self.logger.info("✅ Conexión con Vertex AI TensorBoard establecida.")
-
-        except Exception as e:
-            self.logger.error(f"Error al inicializar Vertex AI TensorBoard Writer: {e}")
-            self.writer = None  # Asegurar que no se intente usar un writer fallido
-            raise RuntimeError(f"No se pudo inicializar TensorBoard, el entrenamiento no puede continuar: {e}")
+        # Crear el directorio si no existe
+        os.makedirs(self.full_log_path, exist_ok=True)
+        
+        # Inicializar el SummaryWriter con la ruta completa
+        self.writer = SummaryWriter(log_dir=self.full_log_path)
+        
+        self.logger.info(f"TensorBoard configurado para logging local en: {self.full_log_path}")
     
     def log_hyperparameters(self, hparams: Dict[str, Any]) -> None:
         """

@@ -817,6 +817,62 @@ class RunManager:
             self.logger.error(f"Error saving evaluation summary for training run {training_run_id}: {str(e)}")
             raise
     
+    def upload_tensorboard_logs(self, local_log_dir: str, training_run_id: str) -> None:
+        """
+        Upload TensorBoard logs directory to Google Cloud Storage.
+        
+        Args:
+            local_log_dir: Local path to the TensorBoard logs directory
+            training_run_id: The training run ID to organize logs in GCS
+        """
+        self.logger.info(f"Processing TensorBoard logs upload for training run: {training_run_id}")
+        
+        # Check if storage mode is GCP
+        if self.storage_mode != "gcp":
+            self.logger.info("Storage mode is not 'gcp'. Skipping TensorBoard logs upload.")
+            return
+        
+        # Check if local log directory exists
+        local_path = Path(local_log_dir)
+        if not local_path.exists():
+            self.logger.warning(f"Local TensorBoard log directory does not exist: {local_log_dir}")
+            return
+        
+        if not local_path.is_dir():
+            self.logger.warning(f"Local TensorBoard log path is not a directory: {local_log_dir}")
+            return
+        
+        # Check if directory has any content
+        log_files = list(local_path.glob('**/*'))
+        if not log_files:
+            self.logger.warning(f"Local TensorBoard log directory is empty: {local_log_dir}")
+            return
+        
+        self.logger.info(f"Found {len(log_files)} files to upload from: {local_log_dir}")
+        
+        try:
+            # Get training run prefix and construct TensorBoard destination
+            prefix = self._get_training_run_prefix(training_run_id)
+            gcs_destination_prefix = f"{prefix}/tensorboard"
+            
+            self.logger.info(f"Uploading TensorBoard logs to GCS prefix: {gcs_destination_prefix}")
+            
+            # Upload directory using existing GCS utils method
+            success = self.gcs_utils.upload_directory_to_gcs(
+                local_directory_path=str(local_path),
+                gcs_prefix=gcs_destination_prefix
+            )
+            
+            if success:
+                self.logger.info(f"✅ TensorBoard logs successfully uploaded to: gs://{self.gcs_bucket_name}/{gcs_destination_prefix}")
+            else:
+                self.logger.error(f"❌ Failed to upload TensorBoard logs to GCS")
+                
+        except Exception as e:
+            self.logger.error(f"Error uploading TensorBoard logs for training run {training_run_id}: {str(e)}")
+            import traceback
+            self.logger.error(f"Traceback: {traceback.format_exc()}")
+    
     @staticmethod
     def load_training_run_config(training_run_id: str, storage_mode: str = None, gcp_config: Dict[str, Any] = None) -> Optional[Dict[str, Any]]:
         """

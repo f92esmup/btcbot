@@ -396,39 +396,17 @@ def main():
     if is_chief:
         logger.info("=== INICIALIZACIÓN DE COMPONENTES ADICIONALES (PROCESO JEFE) ===")
 
-        # Lógica de TensorBoard modificada
-        if storage_mode == "local":
-            training_run_prefix = run_manager._get_training_run_prefix(run_id)
-            tensorboard_dir = Path(training_run_prefix) / "tensorboard"
-            tensorboard_dir.mkdir(parents=True, exist_ok=True)
-        else:
-            tensorboard_dir = None
+        # Lógica de TensorBoard simplificada para operación local
+        tensorboard_base_dir = "tensorboard_logs"
+        logger.info(f"Configurando TensorBoard para logging local en directorio base: {tensorboard_base_dir}")
 
-        # Generar nombre de experimento dinámico
-        experiment_name = f"{symbol.upper()}_{interval}_Trading_Experiments"
-        logger.info(f"Nombre de experimento dinámico generado: {experiment_name}")
-
-        # Inicializar TensorBoard Logger
-        vertex_ai_config = None
-        if storage_mode == "gcp":
-            # Pasar la configuración completa que incluye tanto tensorboard_vertex_ai como gcp
-            vertex_ai_config = local_config_dict
-            vertex_ai_config['storage_mode'] = storage_mode
-            # Inyectar el nombre de experimento dinámico
-            if 'tensorboard_vertex_ai' not in vertex_ai_config:
-                vertex_ai_config['tensorboard_vertex_ai'] = {}
-            vertex_ai_config['tensorboard_vertex_ai']['experiment_name'] = experiment_name
-        
+        # Inicializar TensorBoard Logger con la nueva interfaz simplificada
         tb_logger = TensorboardLogger(
-            log_dir=str(tensorboard_dir) if tensorboard_dir else None, 
-            run_id=run_id,
-            vertex_ai_config=vertex_ai_config
+            log_dir=tensorboard_base_dir,
+            run_id=run_id
         )
         
-        if storage_mode == "local":
-            logger.info(f"TensorBoard logs se guardarán localmente en: {tensorboard_dir}")
-        else:
-            logger.info(f"TensorBoard logs se enviarán directamente a Vertex AI TensorBoard")
+        logger.info(f"TensorBoard logs se guardarán en: {tensorboard_base_dir}/{run_id}")
 
         # Ensamblar la configuración completa del run
         full_run_config = {
@@ -466,7 +444,7 @@ def main():
             logger.info(f"ℹ️ Reanudando entrenamiento existente - no se actualiza la configuración")
     else:
         # Los procesos no-jefe inicializan variables de gestión que no usan a None
-        tensorboard_dir = None
+        tensorboard_base_dir = None
         tb_logger = None
         hparams = None
         logger.info(f"[Proceso {rank}] Variables de logging inicializadas como None")
@@ -647,7 +625,7 @@ def main():
             'save_frequency': args.save_frequency,
             'storage_mode': storage_mode,
             'run_id': run_id,
-            'tensorboard_dir': tensorboard_dir if is_chief else None,
+            'tensorboard_dir': tensorboard_base_dir if is_chief else None,
             'gcs_bucket_name': gcp_config.get('storage', {}).get('bucket_name') if storage_mode == 'gcp' else None
         }
         

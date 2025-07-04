@@ -10,3 +10,4 @@ Entrenamientos/
 .env
 data_runs/
 training_runs/
+tensorboard_logs/

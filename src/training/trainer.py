@@ -424,6 +424,29 @@ class Trainer:
             self.logger_console.info(f"🔄 Total trades: {final_metrics.get('total_trades', 0)}")
             self.logger_console.info(f"💎 Valor final del portfolio: ${final_metrics.get('final_portfolio_value', 0):,.2f}")
         
+        # === SUBIDA DE LOGS DE TENSORBOARD A GCS ===
+        # Verificar si debemos subir logs de TensorBoard a GCS
+        if (self.run_manager and 
+            self.config.get('storage_mode') == 'gcp' and 
+            self.config.get('tensorboard_dir') and 
+            self.training_run_id):
+            
+            # Construir la ruta completa al directorio de logs del run actual
+            local_tensorboard_run_dir = f"{self.config['tensorboard_dir']}/{self.training_run_id}"
+            
+            self.logger_console.info(f"\n📤 === SUBIENDO LOGS DE TENSORBOARD A GCS ===")
+            self.logger_console.info(f"Directorio local de logs: {local_tensorboard_run_dir}")
+            
+            try:
+                # Llamar al método de subida del RunManager
+                self.run_manager.upload_tensorboard_logs(
+                    local_log_dir=local_tensorboard_run_dir,
+                    training_run_id=self.training_run_id
+                )
+                self.logger_console.info("✅ Subida de logs de TensorBoard completada")
+            except Exception as e:
+                self.logger_console.error(f"❌ Error durante la subida de logs de TensorBoard: {e}")
+        
         # Close TensorBoard writer (solo si hay logger)
         if self.logger:
             self.logger.close()
