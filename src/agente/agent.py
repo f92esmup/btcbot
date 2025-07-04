@@ -8,7 +8,7 @@ import torch.optim as optim
 import torch.nn.functional as F
 from torch.nn.parallel import DistributedDataParallel as DDP
 import numpy as np
-from typing import Dict, Any, Tuple, Optional, Union
+from typing import Dict, Any, Tuple, Optional, Union, TYPE_CHECKING
 from pathlib import Path
 import pickle
 import logging
@@ -17,6 +17,10 @@ import os
 from torch.cuda.amp import autocast, GradScaler
 
 from .networks import ActorNetwork, CriticNetwork
+
+# Importar tipo de configuración solo para type hints
+if TYPE_CHECKING:
+    from ..configuration import AgentConfig
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +43,7 @@ class TransformerSACAgent:
         market_features: int,
         portfolio_features: int,
         sequence_length: int,
-        config_override: Dict[str, Any],  # Now mandatory
+        config_override: Union["AgentConfig", Dict[str, Any]],  # Now supports both types
         device: Optional[torch.device] = None,
         is_distributed: bool = False  # Flag para activar el modo distribuido
     ):
@@ -53,7 +57,7 @@ class TransformerSACAgent:
             portfolio_features: Número de características del portfolio
             sequence_length: Longitud de la secuencia (ventana)
             device: Dispositivo de cómputo
-            config_override: Configuración requerida para el agente
+            config_override: Configuración del agente (objeto Pydantic o diccionario)
             is_distributed: Flag para activar el modo distribuido con DDP
         """
         self.device = device or torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -70,31 +74,50 @@ class TransformerSACAgent:
         # Configuración - ahora exclusivamente del parámetro config_override
         self.config = config_override
         
-        # Extraer sub-configuraciones para claridad
-        sac_params = self.config.get('hiperparametros_sac', {})
+        # Extraer sub-configuraciones para claridad (compatible con ambos tipos)
+        sac_params = self._get_config_value('hiperparametros_sac', {})
         
         # Hiperparámetros
-        self.gamma = sac_params['gamma']
-        self.tau = sac_params['tau']
-        self.batch_size = self.config['batch_size']
-        self.learning_frequency = self.config['learning_frequency']
-        self.update_target_frequency = self.config['update_target_frequency']
+        self.gamma = self._get_nested_config_value(sac_params, 'gamma')
+        self.tau = self._get_nested_config_value(sac_params, 'tau')
+        self.batch_size = self._get_config_value('batch_size')
+        self.learning_frequency = self._get_config_value('learning_frequency')
+        self.update_target_frequency = self._get_config_value('update_target_frequency')
         
         # Contadores de pasos
         self.total_steps = 0
         self.learning_steps = 0
         
-        # Inicializar redes
-        self._init_networks()
+        # Inicializar componentes
+        logger.info(f"Inicializando agente SAC en device: {self.device}")
         
-        # Inicializar optimizadores
-        self._init_optimizers()
-        
-        # Parámetro de temperatura alpha (entropía)
-        self.learn_alpha = sac_params['learn_alpha']
+        # Completar inicialización
+        self._complete_initialization()
+
+    def _get_config_value(self, key: str, default: Any = None) -> Any:
+        """Helper para acceder a valores de configuración independientemente del tipo."""
+        if hasattr(self.config, key):
+            return getattr(self.config, key)
+        elif isinstance(self.config, dict):
+            return self.config.get(key, default)
+        else:
+            return default
+
+    def _get_nested_config_value(self, nested_config: Any, key: str, default: Any = None) -> Any:
+        """Helper para acceder a valores de configuración anidada."""
+        if hasattr(nested_config, key):
+            return getattr(nested_config, key)
+        elif isinstance(nested_config, dict):
+            return nested_config.get(key, default)
+        else:
+            return default
+
+    def _setup_alpha_parameter(self):
+        """Configura el parámetro de temperatura alpha."""
+        sac_params = self._get_config_value('hiperparametros_sac', {})
         
         # Manejar target_entropy: puede ser 'auto' o un valor numérico
-        target_entropy_config = sac_params['target_entropy']
+        target_entropy_config = self._get_nested_config_value(sac_params, 'target_entropy')
         if target_entropy_config == 'auto':
             # Calcular automáticamente como -dim_action
             self.target_entropy = -float(self.action_dim)
@@ -105,37 +128,54 @@ class TransformerSACAgent:
             logger.info(f"Target entropy configurado manualmente: {self.target_entropy}")
         
         if self.learn_alpha:
+            initial_log_alpha = self._get_nested_config_value(sac_params, 'initial_log_alpha')
             self.log_alpha = torch.tensor(
-                sac_params['initial_log_alpha'], 
+                initial_log_alpha, 
                 dtype=torch.float32, 
                 requires_grad=True, 
                 device=self.device
             )
-            self.alpha_optimizer = optim.Adam([self.log_alpha], lr=sac_params['alpha_learning_rate'])
+            alpha_lr = self._get_nested_config_value(sac_params, 'alpha_learning_rate')
+            self.alpha_optimizer = optim.Adam([self.log_alpha], lr=alpha_lr)
         else:
+            initial_log_alpha = self._get_nested_config_value(sac_params, 'initial_log_alpha')
             self.log_alpha = torch.tensor(
-                sac_params['initial_log_alpha'], 
+                initial_log_alpha, 
                 dtype=torch.float32, 
                 device=self.device
             )
+        
+        logger.info(f"Alpha configurado: aprendible={self.learn_alpha}, valor_inicial={self.log_alpha.item():.4f}")
+
+    def _complete_initialization(self):
+        """Completa la inicialización del agente."""
+        # Inicializar redes
+        self._init_networks()
+        
+        # Inicializar optimizadores
+        self._init_optimizers()
+        
+        # Configurar parámetro alpha
+        self._setup_alpha_parameter()
         
         # Inicializar GradScaler para Automatic Mixed Precision (AMP)
         self.scaler = GradScaler(enabled=(self.device.type == 'cuda'))
         
         logger.info(f"TransformerSACAgent inicializado en {self.device}. Modo distribuido: {self.is_distributed}")
-        logger.info(f"  - Observación shape: {observation_space_shape}")
+        logger.info(f"  - Observación shape: {self.observation_space_shape}")
         logger.info(f"  - Acción dim: {self.action_dim}")
-        logger.info(f"  - Market features: {market_features}")
-        logger.info(f"  - Portfolio features: {portfolio_features}")
-        logger.info(f"  - Sequence length: {sequence_length}")
+        logger.info(f"  - Market features: {self.market_features}")
+        logger.info(f"  - Portfolio features: {self.portfolio_features}")
+        logger.info(f"  - Sequence length: {self.sequence_length}")
         logger.info(f"  - Alpha aprendible: {self.learn_alpha}")
         logger.info(f"  - Target entropy: {self.target_entropy}")
         logger.info(f"  - AMP habilitado: {self.device.type == 'cuda'}")
     
     def _init_networks(self) -> None:
         """Inicializa las redes y las envuelve para DDP si está en modo distribuido."""
-        transformer_config = self.config['transformer']
-        mlp_hidden_dims = self.config['mlp_heads']['hidden_dims']
+        transformer_config = self._get_config_value('transformer')
+        mlp_heads_config = self._get_config_value('mlp_heads')
+        mlp_hidden_dims = self._get_nested_config_value(mlp_heads_config, 'hidden_dims')
         
         # Red del Actor
         self.actor = ActorNetwork(
@@ -218,20 +258,24 @@ class TransformerSACAgent:
     
     def _init_optimizers(self) -> None:
         """Inicializa los optimizadores."""
-        sac_params = self.config.get('hiperparametros_sac', {})
+        sac_params = self._get_config_value('hiperparametros_sac', {})
+        
+        actor_lr = self._get_nested_config_value(sac_params, 'actor_learning_rate')
+        critic_lr = self._get_nested_config_value(sac_params, 'critic_learning_rate')
+        
         self.actor_optimizer = optim.Adam(
             self.actor.parameters(), 
-            lr=sac_params['actor_learning_rate']
+            lr=actor_lr
         )
         
         self.critic_1_optimizer = optim.Adam(
             self.critic_1.parameters(), 
-            lr=sac_params['critic_learning_rate']
+            lr=critic_lr
         )
         
         self.critic_2_optimizer = optim.Adam(
             self.critic_2.parameters(), 
-            lr=sac_params['critic_learning_rate']
+            lr=critic_lr
         )
     
     @property

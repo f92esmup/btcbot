@@ -1,7 +1,8 @@
 import pandas as pd
 import numpy as np
 from src.data.normalization import Normalization
-from src.entorno.environment import TipoOperacion
+from src.entorno.base_portfolio import TipoOperacion
+from src.entorno.portfolio_state import get_normalized_portfolio_features
 
 
 class LiveObservationBuilder:
@@ -108,40 +109,8 @@ class LiveObservationBuilder:
         Returns:
             np.ndarray: Vector de características del portafolio normalizado
         """
-        # 1. Tipo de posición normalizado
-        tipo_posicion_enum = portfolio_state['tipo']
-        if tipo_posicion_enum.name == 'LARGO':
-            tipo_posicion_norm = 1.0
-        elif tipo_posicion_enum.name == 'NEUTRAL':
-            tipo_posicion_norm = 0.5
-        else:  # 'CORTO'
-            tipo_posicion_norm = 0.0
-        
-        # 2. PNL ROE normalizado y clipeado
-        pnl_roe = portfolio_state['pnl_no_realizado_roe']
-        pnl_roe_clipped = np.clip(
-            pnl_roe,
-            self.env_config['min_clip_pnl_roe'],
-            self.env_config['max_clip_pnl_roe']
+        return get_normalized_portfolio_features(
+            portfolio_state=portfolio_state,
+            env_config=self.env_config,
+            price_scaler=self.price_scaler
         )
-        
-        # Normalizar a [0, 1]
-        min_roe = self.env_config['min_clip_pnl_roe']
-        max_roe = self.env_config['max_clip_pnl_roe']
-        if max_roe != min_roe:
-            pnl_roe_norm = (pnl_roe_clipped - min_roe) / (max_roe - min_roe)
-        else:
-            pnl_roe_norm = 0.5
-        
-        # 3. Pasos en posición normalizado
-        pasos_norm = min(1.0, portfolio_state['pasos_en_posicion'] / self.env_config['max_pasos_en_posicion'])
-        
-        # 4. Precio de entrada normalizado
-        if tipo_posicion_enum.name != 'NEUTRAL' and portfolio_state['precio_entrada'] > 0:
-            # Usar el price_scaler para normalizar el precio de entrada
-            precio_entrada_scaled = self.price_scaler.transform([[portfolio_state['precio_entrada']]])[0][0]
-            precio_entrada_norm = np.clip(precio_entrada_scaled, 0.0, 1.0)
-        else:
-            precio_entrada_norm = 0.5  # Valor neutral
-        
-        return np.array([tipo_posicion_norm, pnl_roe_norm, pasos_norm, precio_entrada_norm], dtype=np.float32)

@@ -14,6 +14,12 @@ from functools import partial
 from binance.client import Client
 from binance.exceptions import BinanceAPIException, BinanceRequestException
 
+from src.configuration.constants import (
+    COLUMN_TIMESTAMP, COLUMN_OPEN, COLUMN_HIGH, COLUMN_LOW, 
+    COLUMN_CLOSE, COLUMN_VOLUME, COLUMNS_OHLCV_WITH_TIMESTAMP,
+    COLUMNS_OHLCV
+)
+
 
 def _download_kline_chunk(start_timestamp: int, symbol: str, interval: str, 
                          api_key: Optional[str] = None, api_secret: Optional[str] = None,
@@ -191,23 +197,8 @@ class Adquisicion:
         # 1. Descargar datos de la API (secuencial por defecto, paralelo opcional)
         self._download_klines_from_api()
         
-        # 2. Crear y estructurar DataFrame
-        self._create_and_structure_dataframe()
-        
-        # 3. Eliminar duplicados
-        self._remove_duplicates()
-        
-        # 4. Interpolar NaNs parciales
-        self._interpolate_partial_nans()
-        
-        # 5. Reconstruir secuencia completa
-        self._reconstruct_full_sequence()
-        
-        # 6. Interpolar velas faltantes
-        self._reconstruct_missing_candles()
-        
-        # 7. Limpieza final de NaNs
-        self._final_nan_cleanup()
+        # 2. Procesar datos descargados
+        self._post_process_data()
         
         self.logger.info(f"Proceso completado. DataFrame final: {self.dataframe.shape}")
         return self.dataframe
@@ -224,6 +215,19 @@ class Adquisicion:
         # 1. Descargar datos de la API en paralelo
         self._download_klines_parallel()
         
+        # 2. Procesar datos descargados
+        self._post_process_data()
+        
+        self.logger.info(f"Proceso PARALELO completado. DataFrame final: {self.dataframe.shape}")
+        return self.dataframe
+    
+    def _post_process_data(self) -> None:
+        """
+        Procesa los datos crudos descargados aplicando todas las transformaciones necesarias.
+        
+        Este método centraliza todo el procesamiento posterior a la descarga de datos,
+        asegurando consistencia entre los flujos secuencial y paralelo.
+        """
         # 2. Crear y estructurar DataFrame
         self._create_and_structure_dataframe()
         
@@ -241,9 +245,6 @@ class Adquisicion:
         
         # 7. Limpieza final de NaNs
         self._final_nan_cleanup()
-        
-        self.logger.info(f"Proceso PARALELO completado. DataFrame final: {self.dataframe.shape}")
-        return self.dataframe
     
     def _download_klines_from_api(self) -> None:
         """Descarga datos de velas de la API de Binance usando múltiples llamadas secuenciales."""
@@ -503,23 +504,23 @@ class Adquisicion:
         self.logger.info("Creando y estructurando DataFrame...")
         
         # Crear DataFrame con las columnas de Binance
-        columns = ['timestamp', 'Open', 'High', 'Low', 'Close', 'Volume', 
+        columns = [COLUMN_TIMESTAMP, COLUMN_OPEN, COLUMN_HIGH, COLUMN_LOW, COLUMN_CLOSE, COLUMN_VOLUME, 
                   'close_time', 'quote_asset_volume', 'number_of_trades',
                   'taker_buy_base_asset_volume', 'taker_buy_quote_asset_volume', 'ignore']
         
         df = pd.DataFrame(self.raw_data, columns=columns)
         
         # Seleccionar solo las columnas OHLCV necesarias
-        ohlcv_columns = self.config.get('data', {}).get('ohlcv_columns', ['Open', 'High', 'Low', 'Close', 'Volume'])
-        df = df[['timestamp'] + ohlcv_columns]
+        ohlcv_columns = self.config.get('data', {}).get('ohlcv_columns', COLUMNS_OHLCV)
+        df = df[[COLUMN_TIMESTAMP] + ohlcv_columns]
         
         # Convertir timestamp a datetime con zona horaria
         target_timezone = self.config.get('data', {}).get('target_timezone', 'Europe/Madrid')
-        df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms', utc=True)
-        df['timestamp'] = df['timestamp'].dt.tz_convert(target_timezone)
+        df[COLUMN_TIMESTAMP] = pd.to_datetime(df[COLUMN_TIMESTAMP], unit='ms', utc=True)
+        df[COLUMN_TIMESTAMP] = df[COLUMN_TIMESTAMP].dt.tz_convert(target_timezone)
         
         # Establecer timestamp como índice
-        df.set_index('timestamp', inplace=True)
+        df.set_index(COLUMN_TIMESTAMP, inplace=True)
         
         # Convertir columnas a tipos eficientes para RAM
         data_dtypes = self.config.get('data', {}).get('data_dtypes', {})
@@ -647,4 +648,3 @@ class Adquisicion:
             self.logger.warning(f"Aún quedan {nan_count_after} NaNs después de la limpieza")
         else:
             self.logger.info("DataFrame completamente limpio, sin NaNs")
-    

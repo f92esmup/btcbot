@@ -5,13 +5,16 @@ Maneja la subida y descarga de archivos del scaler a/desde un bucket de GCS.
 
 import os
 import logging
-from pathlib import Path
-from typing import Optional, Tuple, Dict, Any
-import re
-from google.cloud import storage
-from google.cloud.exceptions import NotFound
-import joblib
 import tempfile
+import joblib
+from typing import Optional, Dict, Any
+from pathlib import Path
+from google.cloud import storage
+
+from src.configuration.constants import (
+    FILE_SCALER, FILE_PRICE_SCALER, DEFAULT_SCALER_FILENAME, 
+    DEFAULT_PRICE_SCALER_FILENAME
+)
 
 
 class GCSUtils:
@@ -39,8 +42,8 @@ class GCSUtils:
         
         storage_config = gcp_config.get('storage', {})
         self.bucket_name = storage_config.get('bucket_name', 'btcbot-models')
-        self.scaler_blob_name = storage_config.get('scaler_blob_name', 'scaler.pkl')
-        self.price_scaler_blob_name = storage_config.get('price_scaler_blob_name', 'price_scaler.pkl')
+        self.scaler_blob_name = storage_config.get('scaler_blob_name', DEFAULT_SCALER_FILENAME)
+        self.price_scaler_blob_name = storage_config.get('price_scaler_blob_name', DEFAULT_PRICE_SCALER_FILENAME)
         
         # Cliente de GCS
         self._client = None
@@ -509,7 +512,7 @@ class GCSUtils:
         except Exception as e:
             self.logger.error(f"Error durante la sincronización de directorio a GCS: {e}")
             return False
-    
+
 
 
 

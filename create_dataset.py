@@ -11,18 +11,32 @@ Uso:
     python create_dataset.py --symbol BTCUSDT --interval 1m --start-date 2025-01-01 --end-date 2025-06-30
 """
 
+import sys
+sys.path.append('.')
+
 import argparse
 import logging
-import sys
-import yaml
-from datetime import datetime
+import traceback
 from pathlib import Path
-from typing import Dict, Any, Optional
+from datetime import datetime
+from typing import Optional, Dict, Any
+import yaml
+import tempfile
+import os
 
+# Import del pipeline principal
 from src.data.pipeline import DataPipeline
-from src.training.run_manager import RunManager
-from src.utils.validation import validate_date_format
+from src.configuration.gcs_utils import GCSUtils
 from src.configuration.secret_utils import SecretManagerUtils
+from src.configuration import AppConfig
+from src.data.artifact_manager import ArtifactManager
+from src.configuration.config_manager import ConfigManager
+from src.utils.validation import validate_date_format
+from src.configuration.constants import (
+    CONFIG_PATH_DEFAULT, KEY_GCP, KEY_STORAGE_MODE, 
+    DIR_DATA_RUNS, FILE_DATA_RUN_METADATA, FILE_NORMALIZED_DATAFRAME,
+    FILE_SCALER, FILE_PRICE_SCALER, STORAGE_MODE_GCP
+)
 
 
 def parse_arguments() -> argparse.Namespace:
@@ -95,28 +109,27 @@ def generate_data_run_id(symbol: str, interval: str, start_date: str, end_date: 
         return f"{symbol}_{interval}_{date_str}_{today_str}-{timestamp}"
 
 
-def load_system_config() -> Dict[str, Any]:
+def load_system_config() -> AppConfig:
     """
-    Carga la configuración principal del sistema desde config.yaml.
+    Carga la configuración principal del sistema desde config.yaml usando Pydantic.
     
     Returns:
-        Dict[str, Any]: Configuración completa del sistema
+        AppConfig: Configuración completa del sistema validada
         
     Raises:
         SystemExit: Si no se puede cargar la configuración
     """
-    config_path = Path('src/configuration/config.yaml')
+    config_path = Path(CONFIG_PATH_DEFAULT)
     
     try:
-        with open(config_path, 'r', encoding='utf-8') as f:
-            config = yaml.safe_load(f)
+        config = AppConfig.from_yaml_file(config_path)
         logging.info(f"Configuración del sistema cargada desde: {config_path}")
         return config
     except FileNotFoundError:
         logging.error(f"No se encontró el archivo de configuración: {config_path}")
         sys.exit(1)
-    except yaml.YAMLError as e:
-        logging.error(f"Error al parsear el archivo YAML: {e}")
+    except Exception as e:
+        logging.error(f"Error al cargar la configuración: {e}")
         sys.exit(1)
 
 
@@ -207,7 +220,7 @@ def main() -> None:
     logger.info(f"  • Data Run ID: {data_run_id}")
     
     # Definir ruta base para el data_run
-    data_run_path = f"data_runs/{data_run_id}"
+    data_run_path = f"{DIR_DATA_RUNS}/{data_run_id}"
     logger.info(f"  • Ruta de salida: {data_run_path}")
     
     # Cargar configuración del sistema
@@ -220,21 +233,25 @@ def main() -> None:
         args.symbol, args.interval, args.start_date, args.end_date, data_run_id
     )
     
-    # Configurar RunManager para el data_run
-    logger.info("\n🗂️  CONFIGURANDO GESTOR DE ARCHIVOS:")
+    # Configurar gestores especializados para el data_run
+    logger.info("\n🗂️  CONFIGURANDO GESTORES DE ARCHIVOS:")
     
     # Determinar modo de almacenamiento basado en la configuración
-    storage_mode = system_config.get('normalization', {}).get('storage_mode', 'local')
-    gcp_config = system_config.get('gcp', {}) if storage_mode == 'gcp' else None
+    storage_mode = system_config.normalization.storage_mode
+    gcp_config = system_config.gcp.model_dump() if storage_mode == STORAGE_MODE_GCP else None
     
-    run_manager = RunManager(
+    config_manager = ConfigManager(
+        storage_mode=storage_mode,
+        gcp_config=gcp_config
+    )
+    artifact_manager = ArtifactManager(
         storage_mode=storage_mode,
         gcp_config=gcp_config
     )
     
-    # Guardar metadatos del data_run usando el RunManager
+    # Guardar metadatos del data_run usando el ConfigManager
     logger.info("💾 GUARDANDO METADATOS DEL DATASET:")
-    metadata_filename = "data_run_metadata.yaml"
+    metadata_filename = FILE_DATA_RUN_METADATA
     
     if storage_mode == "gcp":
         # Para GCP, guardamos temporalmente y subimos usando RunManager
@@ -246,18 +263,18 @@ def main() -> None:
             temp_path = temp_file.name
         
         try:
-            data_run_prefix = run_manager._get_data_run_prefix(data_run_id)
+            data_run_prefix = artifact_manager._get_data_run_prefix(data_run_id)
             gcs_blob_name = f"{data_run_prefix}/{metadata_filename}"
-            if run_manager.gcs_utils.upload_file_to_gcs(temp_path, gcs_blob_name):
-                logger.info(f"  ✅ Metadatos guardados en GCS: gs://{run_manager.gcs_bucket_name}/{gcs_blob_name}")
+            if artifact_manager.gcs_utils.upload_file_to_gcs(temp_path, gcs_blob_name):
+                logger.info(f"  ✅ Metadatos guardados en GCS: gs://{artifact_manager.gcs_bucket_name}/{gcs_blob_name}")
             else:
                 logger.error("  ❌ Error guardando metadatos en GCS")
                 sys.exit(1)
         finally:
             os.unlink(temp_path)
     else:
-        # Para almacenamiento local usando el prefix del RunManager
-        data_run_prefix = run_manager._get_data_run_prefix(data_run_id)
+        # Para almacenamiento local usando el prefix del ArtifactManager
+        data_run_prefix = artifact_manager._get_data_run_prefix(data_run_id)
         metadata_path = Path(data_run_prefix) / metadata_filename
         metadata_path.parent.mkdir(parents=True, exist_ok=True)
         
@@ -270,22 +287,21 @@ def main() -> None:
     api_key = None
     api_secret = None
     
-    if system_config.get('gcp'):
+    if hasattr(system_config, 'gcp') and system_config.gcp:
         logger.info("\n🔐 CONFIGURANDO CREDENCIALES DE API:")
         try:
-            secret_manager = SecretManagerUtils(system_config['gcp'])
+            secret_manager = SecretManagerUtils(system_config.gcp.model_dump())
             
             # Determinar qué credenciales usar basado en el modo de trading
-            trading_config = system_config.get('trading', {})
-            is_testnet = trading_config.get('testnet', True)
+            is_testnet = system_config.trading.testnet
             
             if is_testnet:
-                api_key = secret_manager.get_secret(system_config['gcp']['secrets']['testnet_binance_api_key_futures'])
-                api_secret = secret_manager.get_secret(system_config['gcp']['secrets']['testnet_binance_api_secret_futures'])
+                api_key = secret_manager.get_secret(system_config.gcp.secrets.testnet_binance_api_key_futures)
+                api_secret = secret_manager.get_secret(system_config.gcp.secrets.testnet_binance_api_secret_futures)
                 logger.info("  ✅ Credenciales de testnet cargadas")
             else:
-                api_key = secret_manager.get_secret(system_config['gcp']['secrets']['binance_api_key_futures'])
-                api_secret = secret_manager.get_secret(system_config['gcp']['secrets']['binance_api_secret_futures'])
+                api_key = secret_manager.get_secret(system_config.gcp.secrets.binance_api_key_futures)
+                api_secret = secret_manager.get_secret(system_config.gcp.secrets.binance_api_secret_futures)
                 logger.info("  ✅ Credenciales de producción cargadas")
                 
         except Exception as e:
@@ -333,16 +349,16 @@ def main() -> None:
                 temp_path = temp_file.name
             
             try:
-                gcs_blob_name = f"{data_run_path}/normalized_dataframe.pkl"
-                if run_manager.gcs_utils.upload_file_to_gcs(temp_path, gcs_blob_name):
-                    logger.info(f"  ✅ DataFrame guardado en GCS: gs://{run_manager.gcs_bucket_name}/{gcs_blob_name}")
+                gcs_blob_name = f"{data_run_path}/{FILE_NORMALIZED_DATAFRAME}"
+                if artifact_manager.gcs_utils.upload_file_to_gcs(temp_path, gcs_blob_name):
+                    logger.info(f"  ✅ DataFrame guardado en GCS: gs://{artifact_manager.gcs_bucket_name}/{gcs_blob_name}")
                 else:
                     logger.error("  ❌ Error guardando DataFrame en GCS")
             finally:
                 os.unlink(temp_path)
         else:
             # Para almacenamiento local
-            dataframe_path = Path(data_run_path) / "normalized_dataframe.pkl"
+            dataframe_path = Path(data_run_path) / FILE_NORMALIZED_DATAFRAME
             normalized_dataframe.to_pickle(dataframe_path)
             logger.info(f"  ✅ DataFrame guardado en: {dataframe_path}")
         
@@ -353,16 +369,16 @@ def main() -> None:
         # Mostrar resumen final
         logger.info("📊 RESUMEN DEL DATASET CREADO:")
         logger.info(f"  • Data Run ID: {data_run_id}")
-        logger.info(f"  • Ubicación: {run_manager._get_data_run_prefix(data_run_id)}")
+        logger.info(f"  • Ubicación: {artifact_manager._get_data_run_prefix(data_run_id)}")
         logger.info(f"  • Forma del DataFrame: {normalized_dataframe.shape}")
         logger.info(f"  • Rango temporal: {normalized_dataframe.index.min()} → {normalized_dataframe.index.max()}")
         logger.info(f"  • Modo de almacenamiento: {storage_mode}")
         
         logger.info("\n📁 ARTEFACTOS GENERADOS:")
         logger.info(f"  • {metadata_filename} - Metadatos del dataset")
-        logger.info("  • normalized_dataframe.pkl - Datos normalizados")
-        logger.info("  • scaler.pkl - Escalador de características")
-        logger.info("  • price_scaler.pkl - Escalador de precios")
+        logger.info(f"  • {FILE_NORMALIZED_DATAFRAME} - Datos normalizados")
+        logger.info(f"  • {FILE_SCALER} - Escalador de características")
+        logger.info(f"  • {FILE_PRICE_SCALER} - Escalador de precios")
         
         logger.info(f"\n✨ El dataset '{data_run_id}' está listo para ser utilizado en entrenamientos!")
         logger.info("=" * 60)

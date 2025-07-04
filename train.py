@@ -26,11 +26,22 @@ from src.utils.system import setup_logging, set_seed, setup_device, setup_enviro
 from src.utils.validation import validate_date_format
 from src.utils.cli import parse_arguments
 from src.analysis.logger import TensorboardLogger
-from src.training import RunManager, AgentEvaluator, Trainer
+from src.training import AgentEvaluator, Trainer
+from src.training.checkpoint_manager import CheckpointManager
+from src.data.artifact_manager import ArtifactManager
+from src.configuration.config_manager import ConfigManager
 from src.configuration.secret_utils import SecretManagerUtils
+from src.configuration import AppConfig, EnvironmentConfig, AgentConfig
+from src.configuration.constants import (
+    CONFIG_PATH_DEFAULT, KEY_ENVIRONMENT, KEY_AGENT, KEY_GCP, 
+    KEY_STORAGE_MODE, KEY_NORMALIZATION, KEY_BATCH_SIZE,
+    KEY_MIN_BUFFER_FOR_LEARNING, KEY_REPLAY_BUFFER_SIZE,
+    STORAGE_MODE_GCP, DEFAULT_NETWORK_INTERFACE,
+    FILE_PRICE_SCALER, DIR_TRAINING_RUNS
+)
 
 
-def create_trading_environment(dataframe: Any, logger, price_scaler: Any, env_config: dict) -> FuturesTradingEnv:
+def create_trading_environment(dataframe: Any, logger, price_scaler: Any, env_config: EnvironmentConfig) -> FuturesTradingEnv:
     """
     Crea el entorno de trading con los datos procesados.
     
@@ -38,7 +49,7 @@ def create_trading_environment(dataframe: Any, logger, price_scaler: Any, env_co
         dataframe: DataFrame con datos normalizados
         logger: Logger para mensajes
         price_scaler: Price scaler ya cargado
-        env_config: Diccionario con la configuración del entorno
+        env_config: Configuración del entorno (objeto Pydantic)
         
     Returns:
         FuturesTradingEnv: Entorno configurado
@@ -63,16 +74,16 @@ def create_trading_environment(dataframe: Any, logger, price_scaler: Any, env_co
     )
     
     logger.info(f"Entorno creado:")
-    logger.info(f"  - Balance inicial: ${env_config['capital_inicial']:,.2f}")
-    logger.info(f"  - Apalancamiento: {env_config['apalancamiento']}x")
-    logger.info(f"  - Ventana observación: {env_config['ventana_observacion_size']}")
+    logger.info(f"  - Balance inicial: ${env_config.capital_inicial:,.2f}")
+    logger.info(f"  - Apalancamiento: {env_config.apalancamiento}x")
+    logger.info(f"  - Ventana observación: {env_config.ventana_observacion_size}")
     logger.info(f"  - Espacio de observación: {env.observation_space}")
     logger.info(f"  - Espacio de acción: {env.action_space}")
     
     return env
 
 
-def create_sac_agent(env: FuturesTradingEnv, device: torch.device, logger, agent_config: dict, is_distributed: bool = False) -> TransformerSACAgent:
+def create_sac_agent(env: FuturesTradingEnv, device: torch.device, logger, agent_config: AgentConfig, is_distributed: bool = False) -> TransformerSACAgent:
     """
     Crea el agente SAC con arquitectura Transformer.
     
@@ -80,7 +91,7 @@ def create_sac_agent(env: FuturesTradingEnv, device: torch.device, logger, agent
         env: Entorno de trading
         device: Device para el entrenamiento
         logger: Logger para mensajes
-        agent_config: Diccionario con la configuración del agente
+        agent_config: Configuración del agente (objeto Pydantic)
         is_distributed: Si el entrenamiento es distribuido
         
     Returns:
@@ -93,11 +104,11 @@ def create_sac_agent(env: FuturesTradingEnv, device: torch.device, logger, agent
     action_space_shape = env.action_space.shape
     
     # Calcular características de mercado y portfolio
-    ventana_size = env.config_entorno['ventana_observacion_size']
+    ventana_size = env.config_entorno.ventana_observacion_size
     num_features_mercado = len(env.column_names)
     market_features = num_features_mercado
     # Leer portfolio_features desde la configuración del agente
-    portfolio_features = agent_config.get('architecture', {}).get('portfolio_features', 4)
+    portfolio_features = agent_config.architecture.portfolio_features
     sequence_length = ventana_size
     
     agent = TransformerSACAgent(
@@ -121,10 +132,10 @@ def create_sac_agent(env: FuturesTradingEnv, device: torch.device, logger, agent
     logger.info(f"  - Market features: {market_features}")
     logger.info(f"  - Portfolio features: {portfolio_features}")
     logger.info(f"  - Sequence length: {sequence_length}")
-    logger.info(f"  - Gamma: {agent_config['hiperparametros_sac']['gamma']}")
-    logger.info(f"  - Tau: {agent_config['hiperparametros_sac']['tau']}")
-    logger.info(f"  - Alpha inicial: {agent_config['hiperparametros_sac']['initial_log_alpha']}")
-    logger.info(f"  - Learning rates: Actor={agent_config['hiperparametros_sac']['actor_learning_rate']}, Critic={agent_config['hiperparametros_sac']['critic_learning_rate']}")
+    logger.info(f"  - Gamma: {agent_config.hiperparametros_sac.gamma}")
+    logger.info(f"  - Tau: {agent_config.hiperparametros_sac.tau}")
+    logger.info(f"  - Alpha inicial: {agent_config.hiperparametros_sac.initial_log_alpha}")
+    logger.info(f"  - Learning rates: Actor={agent_config.hiperparametros_sac.actor_learning_rate}, Critic={agent_config.hiperparametros_sac.critic_learning_rate}")
     logger.info(f"  - Entrenamiento distribuido: {'Sí' if is_distributed else 'No'}")
     
     return agent
@@ -192,11 +203,10 @@ def main():
     # Preparar gcp_config para operaciones de carga
     gcp_config_for_load = None
     try:
-        with open('src/configuration/config.yaml', 'r') as f:
-            # Cargar gcp_config de la configuración local para poder usar RunManager
-            temp_config = yaml.safe_load(f)
-            if temp_config.get('normalization', {}).get('storage_mode') == 'gcp':
-                gcp_config_for_load = temp_config.get('gcp', {})
+        config = AppConfig.from_yaml_file('src/configuration/config.yaml')
+        if config.normalization.storage_mode == 'gcp':
+            # Convertir el config de GCP a dict para compatibilidad con managers existentes
+            gcp_config_for_load = config.gcp.model_dump()
     except FileNotFoundError:
         logger.warning("No se encontró config.yaml local. Se asumirá que no se necesita gcp_config para cargar.")
 
@@ -206,8 +216,7 @@ def main():
         
         # Cargar configuración local como base
         try:
-            with open('src/configuration/config.yaml', 'r') as f:
-                local_config_dict = yaml.safe_load(f)
+            local_config = AppConfig.from_yaml_file('src/configuration/config.yaml')
             logger.info("✅ Configuración local 'config.yaml' cargada exitosamente.")
         except FileNotFoundError:
             logger.error("❌ No se encontró el archivo 'src/configuration/config.yaml'. Abortando.")
@@ -217,16 +226,16 @@ def main():
         logger.info(f"📋 Cargando metadatos del data_run: {args.data_run_id}")
         try:
             # Construir ruta de metadatos
-            storage_mode = local_config_dict.get('normalization', {}).get('storage_mode', 'local')
+            storage_mode = local_config.normalization.storage_mode
             
-            # Crear instancia única de RunManager
-            run_manager = RunManager(
+            # Crear instancia única de ArtifactManager
+            artifact_manager = ArtifactManager(
                 storage_mode=storage_mode,
                 gcp_config=gcp_config_for_load
             )
             
             # Usar la instancia única para cargar metadatos
-            data_run_metadata = run_manager.load_data_run_metadata(args.data_run_id)
+            data_run_metadata = artifact_manager.load_data_run_metadata(args.data_run_id)
             
             # Verificar que los metadatos sean válidos
             if 'experiment_parameters' not in data_run_metadata:
@@ -255,7 +264,7 @@ def main():
         logger.info(f"🔄 Cargando configuración desde training_run: {args.checkpoint}")
         
         # Cargar la configuración del training_run anterior
-        config_dict = RunManager.load_training_run_config(args.checkpoint, gcp_config=gcp_config_for_load)
+        config_dict = ConfigManager.load_training_run_config(args.checkpoint, gcp_config=gcp_config_for_load)
         if not config_dict:
             logger.error(f"❌ No se pudo cargar la configuración para el training_run: {args.checkpoint}. Abortando.")
             sys.exit(1)
@@ -264,15 +273,14 @@ def main():
             # Fine-tuning: usar configuración local pero mantener el linaje
             logger.info("🔧 Modo Fine-Tuning: usando configuración local con linaje del training_run original")
             try:
-                with open('src/configuration/config.yaml', 'r') as f:
-                    local_config_dict = yaml.safe_load(f)
+                local_config = AppConfig.from_yaml_file('src/configuration/config.yaml')
                 logger.info("✅ Configuración local cargada para fine-tuning.")
             except FileNotFoundError:
                 logger.error("❌ No se encontró el archivo 'src/configuration/config.yaml'. Abortando.")
                 sys.exit(1)
         else:
             # Continuación: usar configuración del checkpoint
-            local_config_dict = config_dict.get('config', {})
+            local_config = AppConfig(**config_dict.get('config', {}))
             logger.info(f"✅ Configuración del training_run '{args.checkpoint}' cargada como fuente de verdad.")
         
         # Extraer el data_run_id del linaje
@@ -287,22 +295,22 @@ def main():
         # Variables para el entrenamiento existente
         is_new_training = False
 
-    # --- EXTRACCIÓN DE PARÁMETROS DEL EXPERIMENTO Y ENTRENAMIENTO ---
-    # Crear instancia de RunManager para TODOS los procesos
-    storage_mode = local_config_dict.get('normalization', {}).get('storage_mode', 'local')
-    gcp_config = local_config_dict.get('gcp', {}) if storage_mode == 'gcp' else None
-    run_manager = RunManager(
+    # === EXTRACCIÓN DE PARÁMETROS DEL EXPERIMENTO Y ENTRENAMIENTO ===
+    # Crear instancia de ArtifactManager para TODOS los procesos
+    storage_mode = local_config.normalization.storage_mode
+    gcp_config = local_config.gcp.model_dump() if storage_mode == STORAGE_MODE_GCP else None
+    artifact_manager = ArtifactManager(
         storage_mode=storage_mode,
         gcp_config=gcp_config
     )
-    logger.info(f"[Proceso {rank}] RunManager creado para modo: {storage_mode}")
+    logger.info(f"[Proceso {rank}] ArtifactManager creado para modo: {storage_mode}")
 
     try:
         # El 'symbol' y el 'interval' se cargarán ahora desde los metadatos del data_run.
         # El 'seed' se carga desde la configuración principal del sistema.
         
         # Cargar metadatos del data_run para obtener la definición del experimento
-        data_run_metadata = run_manager.load_data_run_metadata(data_run_id)
+        data_run_metadata = artifact_manager.load_data_run_metadata(data_run_id)
         exp_params = data_run_metadata['experiment_parameters']
         symbol = exp_params['symbol']
         interval = exp_params['interval']
@@ -310,7 +318,7 @@ def main():
         end_date = exp_params.get('end_date')
 
         # Cargar el seed desde la nueva sección en config.yaml
-        seed = local_config_dict['training_setup']['seed']
+        seed = local_config.training_setup.seed
         
         logger.info(f"Configuración del experimento cargada desde '{data_run_id}': {symbol}/{interval}")
         logger.info(f"Rango de fechas: {start_date} - {end_date if end_date else 'presente'}")
@@ -377,20 +385,28 @@ def main():
         logger.info(f"[Proceso {rank}] run_id sincronizado: {run_id}")
     
     # === INICIALIZACIÓN DE COMPONENTES DE GESTIÓN ===
-    # Crear instancia única de RunManager para TODOS los procesos (lectura)
+    # Crear instancias especializadas para TODOS los procesos (lectura)
     # pero solo el jefe realizará operaciones de escritura
-    storage_mode = local_config_dict.get('normalization', {}).get('storage_mode', 'local')
+    storage_mode = local_config.normalization.storage_mode
     gcp_config = None
     if storage_mode == "gcp":
-        gcp_config = local_config_dict.get('gcp', {})
-        logger.info(f"[Proceso {rank}] Configuración GCP cargada para RunManager")
+        gcp_config = local_config.gcp.model_dump()
+        logger.info(f"[Proceso {rank}] Configuración GCP cargada para los managers")
 
-    # Crear instancia de RunManager para TODOS los procesos
-    run_manager = RunManager(
+    # Crear instancias especializadas para TODOS los procesos
+    checkpoint_manager = CheckpointManager(
         storage_mode=storage_mode,
         gcp_config=gcp_config
     )
-    logger.info(f"[Proceso {rank}] RunManager creado para modo: {storage_mode}")
+    artifact_manager = ArtifactManager(
+        storage_mode=storage_mode,
+        gcp_config=gcp_config
+    )
+    config_manager = ConfigManager(
+        storage_mode=storage_mode,
+        gcp_config=gcp_config
+    )
+    logger.info(f"[Proceso {rank}] Managers especializados creados para modo: {storage_mode}")
     
     # Solo el proceso jefe inicializa los componentes de logging y configuración
     if is_chief:
@@ -414,11 +430,11 @@ def main():
                 'run_id': run_id,
                 'timestamp': datetime.now().isoformat(),
                 'storage_mode': storage_mode,
-                'base_path': run_manager._get_training_run_prefix(run_id),
+                'base_path': config_manager._get_training_run_prefix(run_id),
                 'operation_mode': operation_mode
             },
             'command_line_args': vars(args),
-            'config': local_config_dict,
+            'config': local_config.model_dump(),  # Usar model_dump para Pydantic v2
             'lineage': training_run_lineage,  # Información del data_run origen
             'metadata': {
                 'experiment_parameters': {
@@ -435,7 +451,7 @@ def main():
         if is_new_training or operation_mode == "fine_tuning":
             # Guardar configuración del run usando RunManager (SOLO EL JEFE ESCRIBE)
             try:
-                run_manager.save_run_config(run_id, full_run_config)
+                config_manager.save_run_config(run_id, full_run_config)
                 logger.info(f"✅ Configuración del training_run guardada con linaje a data_run: {data_run_id}")
             except Exception as e:
                 logger.error(f"❌ Error al guardar config_training_run.yaml: {e}")
@@ -453,14 +469,14 @@ def main():
         # === CARGA DE DATOS DESDE DATA_RUN ===
         logger.info("=== CARGANDO DATOS DESDE DATA_RUN ===")
         
-        # Todos los procesos cargan los datos del data_run especificado usando RunManager
+        # Todos los procesos cargan los datos del data_run especificado usando ArtifactManager
         logger.info(f"📊 Cargando artefactos desde data_run: {data_run_id}")
         
         # Load data artifacts using the new centralized method
-        normalized_dataframe, scaler, price_scaler = run_manager.load_data_artifacts(data_run_id)
+        normalized_dataframe, scaler, price_scaler = artifact_manager.load_data_artifacts(data_run_id)
         
         # Load data run metadata using the new method
-        data_run_metadata = run_manager.load_data_run_metadata(data_run_id)
+        data_run_metadata = artifact_manager.load_data_run_metadata(data_run_id)
         
         # Asignar el DataFrame para el resto del código
         dataframe = normalized_dataframe
@@ -491,12 +507,12 @@ def main():
             dataframe,  # Disponible en todos los procesos
             logger,
             price_scaler,  # Scaler ya cargado mediante RunManager
-            env_config=local_config_dict['environment'] # Inyección
+            env_config=local_config.environment # Inyección con objeto Pydantic
         )
         
         # Crear agente (todos los procesos) - CRUCIAL: Pasar is_distributed
         logger.info(f"[Proceso {rank}] Creando agente SAC...")
-        agent = create_sac_agent(env, device, logger, agent_config=local_config_dict['agent'], is_distributed=is_distributed)
+        agent = create_sac_agent(env, device, logger, agent_config=local_config.agent, is_distributed=is_distributed)
         
         # === FASE 5: GESTIÓN DE CHECKPOINTS Y SINCRONIZACIÓN (CENTRALIZADA EN EL JEFE) ===
         logger.info(f"=== FASE 5: Gestión de Checkpoints [Proceso {rank}] ===")
@@ -513,8 +529,8 @@ def main():
                 # Se especificó un run_id para cargar checkpoint
                 logger.info(f"[Proceso Jefe] Intentando reanudar desde checkpoint del run_id: {args.checkpoint}")
                 
-                # Buscar checkpoint en el run_id específico usando RunManager (SOLO LECTURA)
-                checkpoint_info = run_manager.find_latest_checkpoint(args.checkpoint)
+                # Buscar checkpoint en el run_id específico usando CheckpointManager (SOLO LECTURA)
+                checkpoint_info = checkpoint_manager.find_latest_checkpoint(args.checkpoint)
                 
                 if checkpoint_info:
                     checkpoint_prefix, latest_episode = checkpoint_info
@@ -525,7 +541,7 @@ def main():
                     try:
                         logger.info(f"[Proceso Jefe] Cargando checkpoint desde: {checkpoint_prefix}")
                         # CARGA DE CHECKPOINT - Solo el jefe carga el estado del agente
-                        run_manager.load_agent_from_checkpoint(agent, checkpoint_prefix, reset_optimizers=args.fine_tune_mode)
+                        checkpoint_manager.load_agent_from_checkpoint(agent, checkpoint_prefix, reset_optimizers=args.fine_tune_mode)
                         
                         start_episode = latest_episode
                         
@@ -538,10 +554,10 @@ def main():
                         
                         # Actualizar configuración de price_scaler para cargar desde checkpoint
                         if storage_mode == "gcp":
-                            blob_name_price_scaler_a_cargar = f"{args.checkpoint}/price_scaler.pkl"
+                            blob_name_price_scaler_a_cargar = f"{args.checkpoint}/{FILE_PRICE_SCALER}"
                             logger.info(f"[Proceso Jefe] Actualizando price_scaler desde GCS (checkpoint): {blob_name_price_scaler_a_cargar}")
                         else:
-                            path_price_scaler_a_cargar = f"Entrenamientos/{args.checkpoint}/price_scaler.pkl"
+                            path_price_scaler_a_cargar = f"Entrenamientos/{args.checkpoint}/{FILE_PRICE_SCALER}"
                             logger.info(f"[Proceso Jefe] Actualizando price_scaler desde local (checkpoint): {path_price_scaler_a_cargar}")
                         
                     except Exception as e:
@@ -617,16 +633,16 @@ def main():
         # Configuración para el trainer (todos los procesos)
         trainer_config = {
             'seed': seed,
-            'batch_size': local_config_dict['agent']['batch_size'],
-            'min_buffer_for_learning': local_config_dict['agent']['min_buffer_for_learning'],
-            'replay_buffer_size': local_config_dict['agent']['replay_buffer_size'],
+            KEY_BATCH_SIZE: local_config.agent.batch_size,
+            KEY_MIN_BUFFER_FOR_LEARNING: local_config.agent.min_buffer_for_learning,
+            KEY_REPLAY_BUFFER_SIZE: local_config.agent.replay_buffer_size,
             'eval_frequency': args.eval_frequency,
             'eval_episodes': args.eval_episodes,
             'save_frequency': args.save_frequency,
             'storage_mode': storage_mode,
             'run_id': run_id,
             'tensorboard_dir': tensorboard_base_dir if is_chief else None,
-            'gcs_bucket_name': gcp_config.get('storage', {}).get('bucket_name') if storage_mode == 'gcp' else None
+            'gcs_bucket_name': gcp_config.get('storage', {}).get('bucket_name') if storage_mode == STORAGE_MODE_GCP else None
         }
         
         # Crear trainer (todos los procesos) con instanciación condicional
@@ -635,7 +651,8 @@ def main():
             env=env,
             evaluator=evaluator,  # Solo el jefe tiene evaluador
             logger=tb_logger if is_chief else None,  # Solo el jefe tiene tb_logger
-            run_manager=run_manager if is_chief else None,  # Solo el jefe usa run_manager para escritura
+            checkpoint_manager=checkpoint_manager if is_chief else None,  # Solo el jefe usa checkpoint_manager para escritura
+            config_manager=config_manager if is_chief else None,  # Solo el jefe usa config_manager para escritura
             training_run_id=run_id if is_chief else None,  # Solo el jefe necesita el training_run_id
             trainer_config=trainer_config,
             logger_console=logger
@@ -684,9 +701,8 @@ if __name__ == "__main__":
     # Forzar a NCCL a usar una interfaz de red común en entornos cloud para evitar timeouts.
     # Leer desde la configuración para mayor flexibilidad.
     try:
-        with open('src/configuration/config.yaml', 'r') as f:
-            config = yaml.safe_load(f)
-        nccl_socket_ifname = config.get('system', {}).get('nccl_socket_ifname', 'eth0')
+        config = AppConfig.from_yaml_file('src/configuration/config.yaml')
+        nccl_socket_ifname = config.system.nccl_socket_ifname
         os.environ['NCCL_SOCKET_IFNAME'] = nccl_socket_ifname
         print(f"Establecida variable de entorno NCCL_SOCKET_IFNAME='{nccl_socket_ifname}'")
     except Exception as e:

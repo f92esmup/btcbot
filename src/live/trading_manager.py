@@ -9,7 +9,8 @@ from src.live.live_portfolio import LivePortfolio
 from src.live.risk_manager import RiskManager
 from src.live.telegram_notifier import TelegramNotifier
 from src.live.bigquery_logger import BigQueryLogger
-from src.training.run_manager import RunManager
+from src.training.checkpoint_manager import CheckpointManager
+from src.data.artifact_manager import ArtifactManager
 from src.entorno.base_portfolio import TipoOperacion
 
 
@@ -41,16 +42,20 @@ class LiveTradingManager:
         storage_mode = main_config.get('normalization', {}).get('storage_mode', 'local')
         gcp_config = main_config.get('gcp') if storage_mode == 'gcp' else None
 
-        self.run_manager = RunManager(
+        self.checkpoint_manager = CheckpointManager(
             storage_mode=storage_mode,
             gcp_config=gcp_config
         )
-        print(f"RunManager inicializado en modo '{storage_mode}'.")
+        self.artifact_manager = ArtifactManager(
+            storage_mode=storage_mode,
+            gcp_config=gcp_config
+        )
+        print(f"Managers especializados inicializados en modo '{storage_mode}'.")
 
         # Load data artifacts (scaler and price_scaler) from the data_run_id
         print(f"Cargando artifacts de datos desde data_run_id: {self.data_run_id}...")
         try:
-            _, self.scaler, self.price_scaler = self.run_manager.load_data_artifacts(self.data_run_id)
+            _, self.scaler, self.price_scaler = self.artifact_manager.load_data_artifacts(self.data_run_id)
             print("✅ Scalers cargados exitosamente desde data artifacts.")
         except Exception as e:
             raise RuntimeError(f"Error cargando artifacts de datos: {e}")
@@ -58,7 +63,7 @@ class LiveTradingManager:
         # Load data_run metadata to get symbol and interval (single source of truth)
         print(f"Cargando metadatos del data_run para obtener parámetros de datos...")
         try:
-            data_run_metadata = self.run_manager.load_data_run_metadata(self.data_run_id)
+            data_run_metadata = self.artifact_manager.load_data_run_metadata(self.data_run_id)
             experiment_params = data_run_metadata['experiment_parameters']
             self.symbol = experiment_params['symbol']
             self.interval = experiment_params['interval']
@@ -71,7 +76,7 @@ class LiveTradingManager:
         # Initialize components with injected scalers
         self.observation_builder = LiveObservationBuilder(self.scaler, self.price_scaler, self.run_config)
         self.data_processor = LiveDataProcessor(self.run_config)
-        self.decision_maker = DecisionMaker(self.scaler, self.run_manager, self.run_config, self.device, self.run_id)
+        self.decision_maker = DecisionMaker(self.scaler, self.checkpoint_manager, self.run_config, self.device, self.run_id)
 
         if self.telegram_bot_token and self.telegram_chat_id:
             try:

@@ -17,7 +17,7 @@ class Trainer:
     Uses dependency injection for all components.
     """
     
-    def __init__(self, agent, env, evaluator, logger, run_manager, training_run_id, trainer_config, logger_console):
+    def __init__(self, agent, env, evaluator, logger, checkpoint_manager, config_manager, training_run_id, trainer_config, logger_console):
         """
         Initialize trainer with all dependencies.
         
@@ -26,7 +26,8 @@ class Trainer:
             env: The trading environment
             evaluator: AgentEvaluator instance for periodic evaluation
             logger: TensorboardLogger instance for metrics logging
-            run_manager: RunManager instance for file operations
+            checkpoint_manager: CheckpointManager instance for model operations
+            config_manager: ConfigManager instance for configuration operations
             training_run_id: The ID of the training run (used for saving models/checkpoints)
             trainer_config: Configuration dict with training parameters
             logger_console: Console logger for status messages
@@ -35,7 +36,8 @@ class Trainer:
         self.env = env
         self.evaluator = evaluator
         self.logger = logger
-        self.run_manager = run_manager
+        self.checkpoint_manager = checkpoint_manager
+        self.config_manager = config_manager
         self.training_run_id = training_run_id
         self.config = trainer_config
         self.logger_console = logger_console
@@ -331,20 +333,20 @@ class Trainer:
                 if self.logger:
                     self.logger.log_evaluation_metrics(episode + 1, eval_metrics)
                 
-                # Save best model using RunManager (solo si hay run_manager)
-                if self.run_manager and eval_metrics['mean_return'] > self.best_eval_return:
+                # Save best model using CheckpointManager (solo si hay checkpoint_manager)
+                if self.checkpoint_manager and eval_metrics['mean_return'] > self.best_eval_return:
                     self.best_eval_return = eval_metrics['mean_return']
-                    self.best_model_path = self.run_manager.save_best_model(self.training_run_id, self.agent)
+                    self.best_model_path = self.checkpoint_manager.save_best_model(self.training_run_id, self.agent)
                     self.logger_console.info(f"  - Nuevo mejor modelo guardado: {self.best_model_path}")
             
-            # Periodic checkpoint saving (solo si hay run_manager)
-            if (episode + 1) % self.config['save_frequency'] == 0 and self.run_manager:
-                self.run_manager.save_agent_checkpoint(self.training_run_id, self.agent, episode + 1)
+            # Periodic checkpoint saving (solo si hay checkpoint_manager)
+            if (episode + 1) % self.config['save_frequency'] == 0 and self.checkpoint_manager:
+                self.checkpoint_manager.save_agent_checkpoint(self.training_run_id, self.agent, episode + 1)
         
-        # Final save (solo si hay run_manager)
+        # Final save (solo si hay checkpoint_manager)
         final_model_path = None
-        if self.run_manager:
-            final_model_path = self.run_manager.save_final_model(self.training_run_id, self.agent)
+        if self.checkpoint_manager:
+            final_model_path = self.checkpoint_manager.save_final_model(self.training_run_id, self.agent)
         
         total_time = time.time() - start_time
         self.logger_console.info(f"\n=== Entrenamiento Completado ===")
@@ -360,7 +362,7 @@ class Trainer:
             self.logger_console.info(f"\n🎯 === INICIANDO EVALUACIÓN FINAL ===")
             
             # Cargar el mejor modelo si existe, sino usar el modelo actual
-            if self.best_model_path and self.run_manager:
+            if self.best_model_path and self.checkpoint_manager:
                 self.logger_console.info(f"📦 Cargando el mejor modelo desde: {self.best_model_path}")
                 try:
                     # Extraer el checkpoint prefix correcto según el modo de almacenamiento
@@ -371,7 +373,7 @@ class Trainer:
                         # Para local, usar la ruta tal como está
                         checkpoint_prefix = self.best_model_path
                     
-                    self.run_manager.load_agent_from_checkpoint(self.agent, checkpoint_prefix)
+                    self.checkpoint_manager.load_agent_from_checkpoint(self.agent, checkpoint_prefix)
                     self.logger_console.info("✅ Mejor modelo cargado exitosamente")
                 except Exception as e:
                     self.logger_console.warning(f"⚠️  Error cargando mejor modelo: {e}. Usando modelo final.")
@@ -383,9 +385,9 @@ class Trainer:
             final_metrics, equity_curve, trade_pnl_list = self.evaluator.evaluate(self.agent, self.env)
             
             # Guardar resumen de evaluación
-            if self.run_manager:
+            if self.config_manager:
                 try:
-                    evaluation_path = self.run_manager.save_evaluation_summary(self.training_run_id, final_metrics)
+                    evaluation_path = self.config_manager.save_evaluation_summary(self.training_run_id, final_metrics)
                     self.logger_console.info(f"💾 Resumen de evaluación guardado en: {evaluation_path}")
                 except Exception as e:
                     self.logger_console.error(f"❌ Error guardando resumen de evaluación: {e}")
@@ -426,7 +428,7 @@ class Trainer:
         
         # === SUBIDA DE LOGS DE TENSORBOARD A GCS ===
         # Verificar si debemos subir logs de TensorBoard a GCS
-        if (self.run_manager and 
+        if (self.checkpoint_manager and 
             self.config.get('storage_mode') == 'gcp' and 
             self.config.get('tensorboard_dir') and 
             self.training_run_id):
@@ -438,8 +440,8 @@ class Trainer:
             self.logger_console.info(f"Directorio local de logs: {local_tensorboard_run_dir}")
             
             try:
-                # Llamar al método de subida del RunManager
-                self.run_manager.upload_tensorboard_logs(
+                # Llamar al método de subida del CheckpointManager
+                self.checkpoint_manager.upload_tensorboard_logs(
                     local_log_dir=local_tensorboard_run_dir,
                     training_run_id=self.training_run_id
                 )

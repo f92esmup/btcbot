@@ -1,29 +1,31 @@
 """
-RunManager: Centralizes all file management operations for training runs.
+CheckpointManager: Specialized manager for agent checkpoint operations.
 
-This module provides a centralized manager for handling all file operations including:
-- Run configuration saving
-- Checkpoint management
-- Agent model persistence
-- Scaler loading
-- Path management for both local and GCS storage
+This module provides centralized management for agent checkpoint operations including:
+- Agent checkpoint saving and loading
+- Best model persistence
+- Final model saving
+- Checkpoint discovery and metadata handling
 """
 
 import os
 import re
 import tempfile
 import logging
-import pickle
-import json
+import torch
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Any, Optional, Tuple, Union
 from multiprocessing import Process
-import yaml
-import joblib
-import torch
 
 from src.agente.agent import TransformerSACAgent
+from src.configuration.constants import (
+    FILE_ACTOR_PTH, FILE_CRITIC_1_PTH, FILE_CRITIC_2_PTH,
+    FILE_CRITIC_TARGET_1_PTH, FILE_CRITIC_TARGET_2_PTH,
+    FILE_ACTOR_OPTIMIZER_PTH, FILE_CRITIC_1_OPTIMIZER_PTH, FILE_CRITIC_2_OPTIMIZER_PTH,
+    FILE_ALPHA_OPTIMIZER_PTH, FILE_LOG_ALPHA_PTH, FILE_METADATA_PTH,
+    EXT_PTH
+)
 
 
 def _save_worker_local(agent_state_dicts: Dict[str, Any], path_prefix: str) -> None:
@@ -36,24 +38,24 @@ def _save_worker_local(agent_state_dicts: Dict[str, Any], path_prefix: str) -> N
     """
     try:
         # Save networks
-        torch.save(agent_state_dicts['actor'], f"{path_prefix}/actor.pth")
-        torch.save(agent_state_dicts['critic_1'], f"{path_prefix}/critic_1.pth")
-        torch.save(agent_state_dicts['critic_2'], f"{path_prefix}/critic_2.pth")
-        torch.save(agent_state_dicts['critic_target_1'], f"{path_prefix}/critic_target_1.pth")
-        torch.save(agent_state_dicts['critic_target_2'], f"{path_prefix}/critic_target_2.pth")
+        torch.save(agent_state_dicts['actor'], f"{path_prefix}/{FILE_ACTOR_PTH}")
+        torch.save(agent_state_dicts['critic_1'], f"{path_prefix}/{FILE_CRITIC_1_PTH}")
+        torch.save(agent_state_dicts['critic_2'], f"{path_prefix}/{FILE_CRITIC_2_PTH}")
+        torch.save(agent_state_dicts['critic_target_1'], f"{path_prefix}/{FILE_CRITIC_TARGET_1_PTH}")
+        torch.save(agent_state_dicts['critic_target_2'], f"{path_prefix}/{FILE_CRITIC_TARGET_2_PTH}")
         
         # Save optimizers
-        torch.save(agent_state_dicts['actor_optimizer'], f"{path_prefix}/actor_optimizer.pth")
-        torch.save(agent_state_dicts['critic_1_optimizer'], f"{path_prefix}/critic_1_optimizer.pth")
-        torch.save(agent_state_dicts['critic_2_optimizer'], f"{path_prefix}/critic_2_optimizer.pth")
+        torch.save(agent_state_dicts['actor_optimizer'], f"{path_prefix}/{FILE_ACTOR_OPTIMIZER_PTH}")
+        torch.save(agent_state_dicts['critic_1_optimizer'], f"{path_prefix}/{FILE_CRITIC_1_OPTIMIZER_PTH}")
+        torch.save(agent_state_dicts['critic_2_optimizer'], f"{path_prefix}/{FILE_CRITIC_2_OPTIMIZER_PTH}")
         
         # Save alpha and its optimizer if present
-        torch.save(agent_state_dicts['log_alpha'], f"{path_prefix}/log_alpha.pth")
+        torch.save(agent_state_dicts['log_alpha'], f"{path_prefix}/{FILE_LOG_ALPHA_PTH}")
         if 'alpha_optimizer' in agent_state_dicts:
-            torch.save(agent_state_dicts['alpha_optimizer'], f"{path_prefix}/alpha_optimizer.pth")
+            torch.save(agent_state_dicts['alpha_optimizer'], f"{path_prefix}/{FILE_ALPHA_OPTIMIZER_PTH}")
         
         # Save metadata
-        torch.save(agent_state_dicts['metadata'], f"{path_prefix}/metadata.pth")
+        torch.save(agent_state_dicts['metadata'], f"{path_prefix}/{FILE_METADATA_PTH}")
         
         print(f"✅ Guardado local completado: {path_prefix}")
         
@@ -79,25 +81,24 @@ def _save_worker_gcs(agent_state_dicts: Dict[str, Any], gcs_prefix: str, gcp_con
         
         with tempfile.TemporaryDirectory() as temp_dir:
             # Save all state dictionaries to temporary directory
-            # Note: path_prefix is now the directory to save into
             path_prefix = Path(temp_dir)
-            torch.save(agent_state_dicts['actor'], path_prefix / "actor.pth")
-            torch.save(agent_state_dicts['critic_1'], path_prefix / "critic_1.pth")
-            torch.save(agent_state_dicts['critic_2'], path_prefix / "critic_2.pth")
-            torch.save(agent_state_dicts['critic_target_1'], path_prefix / "critic_target_1.pth")
-            torch.save(agent_state_dicts['critic_target_2'], path_prefix / "critic_target_2.pth")
-            torch.save(agent_state_dicts['actor_optimizer'], path_prefix / "actor_optimizer.pth")
-            torch.save(agent_state_dicts['critic_1_optimizer'], path_prefix / "critic_1_optimizer.pth")
-            torch.save(agent_state_dicts['critic_2_optimizer'], path_prefix / "critic_2_optimizer.pth")
-            torch.save(agent_state_dicts['log_alpha'], path_prefix / "log_alpha.pth")
+            torch.save(agent_state_dicts['actor'], path_prefix / FILE_ACTOR_PTH)
+            torch.save(agent_state_dicts['critic_1'], path_prefix / FILE_CRITIC_1_PTH)
+            torch.save(agent_state_dicts['critic_2'], path_prefix / FILE_CRITIC_2_PTH)
+            torch.save(agent_state_dicts['critic_target_1'], path_prefix / FILE_CRITIC_TARGET_1_PTH)
+            torch.save(agent_state_dicts['critic_target_2'], path_prefix / FILE_CRITIC_TARGET_2_PTH)
+            torch.save(agent_state_dicts['actor_optimizer'], path_prefix / FILE_ACTOR_OPTIMIZER_PTH)
+            torch.save(agent_state_dicts['critic_1_optimizer'], path_prefix / FILE_CRITIC_1_OPTIMIZER_PTH)
+            torch.save(agent_state_dicts['critic_2_optimizer'], path_prefix / FILE_CRITIC_2_OPTIMIZER_PTH)
+            torch.save(agent_state_dicts['log_alpha'], path_prefix / FILE_LOG_ALPHA_PTH)
             if 'alpha_optimizer' in agent_state_dicts:
-                torch.save(agent_state_dicts['alpha_optimizer'], path_prefix / "alpha_optimizer.pth")
-            torch.save(agent_state_dicts['metadata'], path_prefix / "metadata.pth")
+                torch.save(agent_state_dicts['alpha_optimizer'], path_prefix / FILE_ALPHA_OPTIMIZER_PTH)
+            torch.save(agent_state_dicts['metadata'], path_prefix / FILE_METADATA_PTH)
 
             # Upload each file from the temporary directory to the GCS prefix
             success_count = 0
             total_files = 0
-            for local_file_path in path_prefix.glob('*.pth'):
+            for local_file_path in path_prefix.glob(f'*{EXT_PTH}'):
                 total_files += 1
                 gcs_blob_name = f"{gcs_prefix}/{local_file_path.name}"
                 if gcs_utils.upload_file_to_gcs(str(local_file_path), gcs_blob_name):
@@ -114,12 +115,12 @@ def _save_worker_gcs(agent_state_dicts: Dict[str, Any], gcs_prefix: str, gcp_con
         print(f"❌ Error en guardado GCS: {str(e)}")
 
 
-class RunManager:
+class CheckpointManager:
     """
-    Centralized manager for all file operations in training runs.
+    Specialized manager for agent checkpoint operations.
     
-    Handles persistence operations for models, configurations, and scalers
-    across both local and GCS storage modes.
+    Handles all checkpoint-related operations including saving, loading,
+    and discovery across both local and GCS storage modes.
     """
     
     @staticmethod
@@ -137,7 +138,7 @@ class RunManager:
     
     def __init__(self, storage_mode: str = "local", gcp_config: Optional[Dict[str, Any]] = None):
         """
-        Initialize the RunManager.
+        Initialize the CheckpointManager.
         
         Args:
             storage_mode: Storage mode ('local' or 'gcp', defaults to 'local')
@@ -172,18 +173,6 @@ class RunManager:
         # Setup logging
         self.logger = logging.getLogger(__name__)
     
-    def _get_data_run_prefix(self, data_run_id: str) -> str:
-        """
-        Get the path prefix for a specific data run.
-        
-        Args:
-            data_run_id: The unique identifier for the data run
-            
-        Returns:
-            The path prefix string for the data run (e.g., "data_runs/ID_123")
-        """
-        return f"data_runs/{data_run_id}"
-    
     def _get_training_run_prefix(self, training_run_id: str) -> str:
         """
         Get the path prefix for a specific training run.
@@ -195,44 +184,6 @@ class RunManager:
             The path prefix string for the training run (e.g., "training_runs/ID_ABC")
         """
         return f"training_runs/{training_run_id}"
-    
-    def save_run_config(self, training_run_id: str, full_run_config: Dict[str, Any]) -> None:
-        """
-        Saves the complete, pre-assembled run configuration to config_run.yaml.
-
-        Args:
-            training_run_id: The ID of the training run to save configuration for
-            full_run_config (Dict[str, Any]): The complete configuration dictionary to save.
-                                          This dictionary should already contain all necessary
-                                          sections (run_info, command_line_args, config).
-        """
-        self.logger.info(f"Saving run configuration for training run: {training_run_id}")
-        
-        # Get training run prefix using helper
-        prefix = self._get_training_run_prefix(training_run_id)
-
-        if self.storage_mode == "gcp":
-            # For GCP, save temporarily and upload
-            with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as temp_file:
-                yaml.dump(full_run_config, temp_file, default_flow_style=False, allow_unicode=True)
-                temp_path = temp_file.name
-            
-            try:
-                # Upload to GCS using the prefix
-                gcs_blob_name = f"{prefix}/config_run.yaml"
-                if self.gcs_utils.upload_file_to_gcs(temp_path, gcs_blob_name):
-                    self.logger.info(f"Run configuration saved to GCS: gs://{self.gcs_bucket_name}/{gcs_blob_name}")
-                else:
-                    self.logger.error("Error saving run configuration to GCS")
-            finally:
-                os.unlink(temp_path)
-        else:
-            # For local, save using the prefix
-            config_path = Path(prefix) / "config_run.yaml"
-            config_path.parent.mkdir(parents=True, exist_ok=True)
-            with open(config_path, 'w', encoding='utf-8') as f:
-                yaml.dump(full_run_config, f, default_flow_style=False, allow_unicode=True)
-            self.logger.info(f"Run configuration saved to: {config_path}")
     
     def find_latest_checkpoint(self, training_run_id: str) -> Optional[Tuple[str, int]]:
         """
@@ -338,144 +289,6 @@ class RunManager:
         except Exception as e:
             self.logger.error(f"Error searching for checkpoints in training run {training_run_id}: {e}")
             return None
-    
-    def load_data_artifacts(self, data_run_id: str) -> Tuple[Any, Any, Any]:
-        """
-        Load all data artifacts from a specific data_run.
-        
-        Args:
-            data_run_id: The ID of the data_run to load artifacts from
-            
-        Returns:
-            Tuple of (normalized_dataframe, scaler, price_scaler)
-        """
-        self.logger.info(f"Loading data artifacts from data_run: {data_run_id}")
-        
-        # Get data run prefix using helper
-        prefix = self._get_data_run_prefix(data_run_id)
-        
-        try:
-            if self.storage_mode == "gcp":
-                # GCP mode: load from Google Cloud Storage
-                self.logger.info("Loading data artifacts from Google Cloud Storage...")
-                
-                # Use temporary files for downloading
-                import tempfile
-                
-                # Load normalized_dataframe
-                with tempfile.NamedTemporaryFile(suffix='.pkl', delete=False) as temp_file:
-                    temp_dataframe_path = temp_file.name
-                
-                try:
-                    dataframe_blob_name = f"{prefix}/normalized_dataframe.pkl"
-                    if self.gcs_utils.download_file_from_gcs(dataframe_blob_name, temp_dataframe_path):
-                        with open(temp_dataframe_path, 'rb') as f:
-                            normalized_dataframe = pickle.load(f)
-                        self.logger.info(f"DataFrame loaded from GCS - Shape: {normalized_dataframe.shape}")
-                    else:
-                        raise FileNotFoundError(f"Failed to download dataframe from GCS: {dataframe_blob_name}")
-                finally:
-                    os.unlink(temp_dataframe_path)
-                
-                # Load scaler
-                scaler_blob_name = f"{prefix}/scaler.pkl"
-                scaler = self.gcs_utils.load_scaler_from_gcs(scaler_blob_name)
-                self.logger.info("Scaler loaded from GCS")
-                
-                # Load price_scaler
-                price_scaler_blob_name = f"{prefix}/price_scaler.pkl"
-                price_scaler = self.gcs_utils.load_price_scaler_from_gcs(price_scaler_blob_name)
-                self.logger.info("Price scaler loaded from GCS")
-                
-                return normalized_dataframe, scaler, price_scaler
-                
-            else:
-                # Local mode using prefix
-                data_run_path = Path(prefix)
-                
-                if not data_run_path.exists():
-                    raise FileNotFoundError(f"Data run directory not found: {data_run_path}")
-                
-                # Load normalized_dataframe
-                dataframe_path = data_run_path / "normalized_dataframe.pkl"
-                if not dataframe_path.exists():
-                    raise FileNotFoundError(f"Normalized dataframe not found: {dataframe_path}")
-                
-                with open(dataframe_path, 'rb') as f:
-                    normalized_dataframe = pickle.load(f)
-                self.logger.info(f"DataFrame loaded from: {dataframe_path} - Shape: {normalized_dataframe.shape}")
-                
-                # Load scaler
-                scaler_path = data_run_path / "scaler.pkl"
-                if not scaler_path.exists():
-                    raise FileNotFoundError(f"Scaler not found: {scaler_path}")
-                
-                scaler = joblib.load(scaler_path)
-                self.logger.info(f"Scaler loaded from: {scaler_path}")
-                
-                # Load price_scaler
-                price_scaler_path = data_run_path / "price_scaler.pkl"
-                if not price_scaler_path.exists():
-                    raise FileNotFoundError(f"Price scaler not found: {price_scaler_path}")
-                
-                price_scaler = joblib.load(price_scaler_path)
-                self.logger.info(f"Price scaler loaded from: {price_scaler_path}")
-                
-                return normalized_dataframe, scaler, price_scaler
-                
-        except Exception as e:
-            self.logger.error(f"Error loading data artifacts from data_run {data_run_id}: {str(e)}")
-            raise
-
-    def load_data_run_metadata(self, data_run_id: str) -> Dict[str, Any]:
-        """
-        Load metadata from a specific data_run.
-        
-        Args:
-            data_run_id: The ID of the data_run to load metadata from
-            
-        Returns:
-            Dictionary containing the data_run metadata
-        """
-        self.logger.info(f"Loading metadata from data_run: {data_run_id}")
-        
-        # Get data run prefix using helper
-        prefix = self._get_data_run_prefix(data_run_id)
-        
-        try:
-            if self.storage_mode == "gcp":
-                # GCP mode: load from Google Cloud Storage
-                blob_name = f"{prefix}/data_run_metadata.yaml"
-                
-                # Download blob content directly to memory
-                bucket = self.gcs_utils.client.bucket(self.gcs_bucket_name)
-                blob = bucket.blob(blob_name)
-                
-                if not blob.exists():
-                    raise FileNotFoundError(f"Data run metadata not found in GCS: {blob_name}")
-                
-                yaml_content = blob.download_as_string().decode('utf-8')
-                metadata = yaml.safe_load(yaml_content)
-                self.logger.info(f"Data run metadata loaded from GCS: {blob_name}")
-                
-                return metadata
-                
-            else:
-                # Local mode using prefix
-                metadata_path = Path(f"{prefix}/data_run_metadata.yaml")
-                
-                if not metadata_path.exists():
-                    raise FileNotFoundError(f"Data run metadata not found: {metadata_path}")
-                
-                with open(metadata_path, 'r', encoding='utf-8') as f:
-                    metadata = yaml.safe_load(f)
-                
-                self.logger.info(f"Data run metadata loaded from: {metadata_path}")
-                return metadata
-                
-        except Exception as e:
-            self.logger.error(f"Error loading data run metadata for {data_run_id}: {str(e)}")
-            raise
     
     def save_agent_checkpoint(self, training_run_id: str, agent: TransformerSACAgent, episode: int) -> str:
         """
@@ -766,57 +579,6 @@ class RunManager:
         
         return str(final_model_path)
     
-    def save_evaluation_summary(self, training_run_id: str, metrics: dict) -> str:
-        """
-        Save evaluation metrics summary to evaluation_summary.json file.
-        
-        Args:
-            training_run_id: The ID of the training run to save evaluation summary for
-            metrics: Dictionary containing evaluation metrics to save
-            
-        Returns:
-            Path to the saved evaluation summary file (local path or GCS URI)
-        """
-        self.logger.info(f"Saving evaluation summary for training run: {training_run_id}")
-        
-        # Get training run prefix using helper
-        prefix = self._get_training_run_prefix(training_run_id)
-        
-        try:
-            if self.storage_mode == "gcp":
-                # For GCP, save temporarily and upload
-                with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as temp_file:
-                    json.dump(metrics, temp_file, indent=2, ensure_ascii=False)
-                    temp_path = temp_file.name
-                
-                try:
-                    # Upload to GCS using the prefix with evaluation subdirectory
-                    gcs_blob_name = f"{prefix}/evaluation/evaluation_summary.json"
-                    if self.gcs_utils.upload_file_to_gcs(temp_path, gcs_blob_name):
-                        final_path = f"gs://{self.gcs_bucket_name}/{gcs_blob_name}"
-                        self.logger.info(f"Evaluation summary saved to GCS: {final_path}")
-                        return final_path
-                    else:
-                        self.logger.error("Error saving evaluation summary to GCS")
-                        raise RuntimeError("Failed to upload evaluation summary to GCS")
-                finally:
-                    os.unlink(temp_path)
-            else:
-                # For local storage, create evaluation subdirectory and save
-                evaluation_dir = Path(prefix) / "evaluation"
-                evaluation_dir.mkdir(parents=True, exist_ok=True)
-                
-                summary_path = evaluation_dir / "evaluation_summary.json"
-                with open(summary_path, 'w', encoding='utf-8') as f:
-                    json.dump(metrics, f, indent=2, ensure_ascii=False)
-                
-                self.logger.info(f"Evaluation summary saved to: {summary_path}")
-                return str(summary_path)
-                
-        except Exception as e:
-            self.logger.error(f"Error saving evaluation summary for training run {training_run_id}: {str(e)}")
-            raise
-    
     def upload_tensorboard_logs(self, local_log_dir: str, training_run_id: str) -> None:
         """
         Upload TensorBoard logs directory to Google Cloud Storage.
@@ -872,93 +634,3 @@ class RunManager:
             self.logger.error(f"Error uploading TensorBoard logs for training run {training_run_id}: {str(e)}")
             import traceback
             self.logger.error(f"Traceback: {traceback.format_exc()}")
-    
-    @staticmethod
-    def load_training_run_config(training_run_id: str, storage_mode: str = None, gcp_config: Dict[str, Any] = None) -> Optional[Dict[str, Any]]:
-        """
-        Load training run configuration without requiring a full RunManager instance.
-        This method is useful when you need to load configuration to determine how to create a RunManager.
-        
-        Args:
-            training_run_id: The training run ID for which to load the configuration
-            storage_mode: Storage mode ('local' or 'gcp'). If None, tries to determine automatically
-            gcp_config: GCP configuration dictionary (required if storage_mode is 'gcp')
-            
-        Returns:
-            Dict containing the configuration, or None if file doesn't exist or error occurs
-        """
-        logger = logging.getLogger(__name__)
-        logger.info(f"Loading configuration for training run: {training_run_id}")
-        
-        # Get training run prefix using the same logic as the helper
-        prefix = f"training_runs/{training_run_id}"
-        
-        # If storage_mode not provided, try to determine it
-        if storage_mode is None:
-            # Try local first
-            local_config_path = Path(f"{prefix}/config_run.yaml")
-            if local_config_path.exists():
-                storage_mode = "local"
-            else:
-                # If not found locally, assume GCP as a fallback strategy.
-                # This avoids a hard dependency on a global config file.
-                storage_mode = "gcp"
-                logger.info(f"Configuracion no encontrada localmente para el training_run_id {training_run_id}, asumiendo storage_mode='gcp'.")
-                # Note: gcp_config must be provided by the caller in this case.
-        
-        try:
-            if storage_mode == "gcp":
-                # Validate GCP requirements
-                if gcp_config is None:
-                    raise ValueError("gcp_config is required for GCP storage mode")
-                
-                # Create GCSUtils instance
-                from src.configuration.gcs_utils import GCSUtils
-                gcs_utils = GCSUtils(gcp_config)
-                
-                # Extract bucket name from config
-                gcs_bucket_name = gcp_config.get('storage', {}).get('bucket_name')
-                if not gcs_bucket_name:
-                    raise ValueError("bucket_name is required in gcp_config")
-                
-                # Construct GCS blob name using prefix
-                blob_name = f"{prefix}/config_run.yaml"
-                logger.info(f"Downloading config from GCS: {blob_name}")
-                
-                # Download blob content directly to memory
-                bucket = gcs_utils.client.bucket(gcs_bucket_name)
-                blob = bucket.blob(blob_name)
-                
-                if not blob.exists():
-                    logger.warning(f"Training run configuration file not found in GCS: {blob_name}")
-                    return None
-                
-                # Download as string and parse YAML
-                yaml_content = blob.download_as_string().decode('utf-8')
-                logger.info("Training run configuration downloaded successfully from GCS")
-                
-                # Load YAML content
-                config_data = yaml.safe_load(yaml_content)
-                logger.info("Training run configuration loaded successfully from GCS")
-                return config_data
-                            
-            else:
-                # Local storage mode using prefix
-                config_path = Path(f"{prefix}/config_run.yaml")
-                logger.info(f"Loading config from local path: {config_path}")
-                
-                if not config_path.exists():
-                    logger.warning(f"Training run configuration file not found locally: {config_path}")
-                    return None
-                
-                with open(config_path, 'r', encoding='utf-8') as f:
-                    config_data = yaml.safe_load(f)
-                
-                logger.info("Training run configuration loaded successfully from local storage")
-                return config_data
-                
-        except Exception as e:
-            logger.error(f"Error loading configuration for training run {training_run_id}: {str(e)}")
-            import traceback
-            logger.error(f"Traceback: {traceback.format_exc()}")
-            return None

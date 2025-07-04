@@ -9,6 +9,11 @@ import pandas_ta as ta
 from typing import Optional, Dict
 import logging
 
+from src.configuration.constants import (
+    COLUMN_OPEN, COLUMN_HIGH, COLUMN_LOW, COLUMN_CLOSE, COLUMN_VOLUME,
+    COLUMNS_OHLCV
+)
+
 
 class Indicadores:
     """Clase para calcular y añadir indicadores técnicos al dataframe."""
@@ -32,7 +37,7 @@ class Indicadores:
         self.logger = logging.getLogger(__name__)
         
         # Validar que el dataframe tenga las columnas necesarias
-        required_columns = ['Open', 'High', 'Low', 'Close', 'Volume']
+        required_columns = COLUMNS_OHLCV
         missing_columns = [col for col in required_columns if col not in self.dataframe.columns]
         if missing_columns:
             raise ValueError(f"Faltan columnas requeridas en el dataframe: {missing_columns}")
@@ -78,20 +83,20 @@ class Indicadores:
         # 1. Indicadores de Tendencia
         if trend_config.get('ema_20', {}).get('enabled', False):
             period = trend_config['ema_20']['period']
-            new_indicators[f'EMA_{period}'] = ta.ema(self.dataframe['Close'], length=period)
+            new_indicators[f'EMA_{period}'] = ta.ema(self.dataframe[COLUMN_CLOSE], length=period)
             self.logger.info(f"EMA {period} calculado")
         
         if trend_config.get('ema_50', {}).get('enabled', False):
             period = trend_config['ema_50']['period']
-            new_indicators[f'EMA_{period}'] = ta.ema(self.dataframe['Close'], length=period)
+            new_indicators[f'EMA_{period}'] = ta.ema(self.dataframe[COLUMN_CLOSE], length=period)
             self.logger.info(f"EMA {period} calculado")
         
         if trend_config.get('adx', {}).get('enabled', False):
             period = trend_config['adx']['period']
             adx_result = ta.adx(
-                high=self.dataframe['High'],
-                low=self.dataframe['Low'], 
-                close=self.dataframe['Close'],
+                high=self.dataframe[COLUMN_HIGH],
+                low=self.dataframe[COLUMN_LOW], 
+                close=self.dataframe[COLUMN_CLOSE],
                 length=period
             )
             if adx_result is not None:
@@ -114,7 +119,7 @@ class Indicadores:
         # 2. Indicadores de Momento
         if momentum_config.get('rsi', {}).get('enabled', False):
             period = momentum_config['rsi']['period']
-            new_indicators[f'RSI_{period}'] = ta.rsi(self.dataframe['Close'], length=period)
+            new_indicators[f'RSI_{period}'] = ta.rsi(self.dataframe[COLUMN_CLOSE], length=period)
             self.logger.info(f"RSI {period} calculado")
         
         if momentum_config.get('stoch', {}).get('enabled', False):
@@ -123,9 +128,9 @@ class Indicadores:
             smooth_k = momentum_config['stoch']['smooth_k']
             
             stoch_result = ta.stoch(
-                high=self.dataframe['High'],
-                low=self.dataframe['Low'],
-                close=self.dataframe['Close'],
+                high=self.dataframe[COLUMN_HIGH],
+                low=self.dataframe[COLUMN_LOW],
+                close=self.dataframe[COLUMN_CLOSE],
                 k=k_period,
                 d=d_period,
                 smooth_k=smooth_k
@@ -149,9 +154,9 @@ class Indicadores:
         if volatility_config.get('atr', {}).get('enabled', False):
             period = volatility_config['atr']['period']
             new_indicators[f'ATR_{period}'] = ta.atr(
-                high=self.dataframe['High'],
-                low=self.dataframe['Low'],
-                close=self.dataframe['Close'],
+                high=self.dataframe[COLUMN_HIGH],
+                low=self.dataframe[COLUMN_LOW],
+                close=self.dataframe[COLUMN_CLOSE],
                 length=period
             )
             self.logger.info(f"ATR {period} calculado")
@@ -159,8 +164,8 @@ class Indicadores:
         # 4. Indicadores de Volumen
         if volume_config.get('obv', {}).get('enabled', False):
             new_indicators['OBV'] = ta.obv(
-                close=self.dataframe['Close'],
-                volume=self.dataframe['Volume']
+                close=self.dataframe[COLUMN_CLOSE],
+                volume=self.dataframe[COLUMN_VOLUME]
             )
             self.logger.info("OBV calculado")
         

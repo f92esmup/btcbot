@@ -12,6 +12,11 @@ from sklearn.preprocessing import MinMaxScaler
 from typing import Optional, Tuple, Dict, Any
 import logging
 
+from src.configuration.constants import (
+    FILE_SCALER, FILE_PRICE_SCALER, COLUMN_OPEN, COLUMN_HIGH, 
+    COLUMN_LOW, COLUMN_CLOSE, COLUMN_VOLUME, COLUMNS_OHLCV
+)
+
 
 class Normalization:
     """Clase para normalizar datos de trading usando MinMaxScaler."""
@@ -59,11 +64,11 @@ class Normalization:
 
         # Construir rutas dinámicamente
         if self.storage_mode == "gcp":
-            self.scaler_path = f"{self.base_path}/scaler.pkl"
-            self.price_scaler_path = f"{self.base_path}/price_scaler.pkl"
+            self.scaler_path = f"{self.base_path}/{FILE_SCALER}"
+            self.price_scaler_path = f"{self.base_path}/{FILE_PRICE_SCALER}"
         else:
-            self.scaler_path = str(Path(self.base_path) / "scaler.pkl")
-            self.price_scaler_path = str(Path(self.base_path) / "price_scaler.pkl")
+            self.scaler_path = str(Path(self.base_path) / FILE_SCALER)
+            self.price_scaler_path = str(Path(self.base_path) / FILE_PRICE_SCALER)
         
         # Crear directorio para el scaler si no existe (solo en modo local)
         if self.storage_mode == "local":
@@ -175,11 +180,11 @@ class Normalization:
     
     def _fit_price_scaler(self):
         """Crear y ajustar el price_scaler específico para la columna Close."""
-        self.logger.info("Creando y ajustando el price_scaler para la columna Close...")
+        self.logger.info(f"Creando y ajustando el price_scaler para la columna {COLUMN_CLOSE}...")
         
         # Verificar que la columna Close existe
-        if 'Close' not in self.feature_columns:
-            raise ValueError("La columna 'Close' no se encuentra en las características a normalizar")
+        if COLUMN_CLOSE not in self.feature_columns:
+            raise ValueError(f"La columna '{COLUMN_CLOSE}' no se encuentra en las características a normalizar")
         
         # Crear el price_scaler
         if self.scaler_type == "MinMaxScaler":
@@ -189,13 +194,13 @@ class Normalization:
         
         try:
             # Obtener solo los valores de la columna Close
-            close_data = self.dataframe[['Close']].values
+            close_data = self.dataframe[[COLUMN_CLOSE]].values
             
             # Ajustar el price_scaler solo con los datos de Close
             self.price_scaler.fit(close_data)
             
             self.logger.info("Price scaler ajustado exitosamente")
-            self.logger.info(f"Rango original del precio Close: {self.price_scaler.data_min_[0]:.2f} - {self.price_scaler.data_max_[0]:.2f}")
+            self.logger.info(f"Rango original del precio {COLUMN_CLOSE}: {self.price_scaler.data_min_[0]:.2f} - {self.price_scaler.data_max_[0]:.2f}")
             
         except Exception as e:
             self.logger.error(f"Error al ajustar el price_scaler: {str(e)}")
@@ -213,7 +218,7 @@ class Normalization:
             try:
                 if self.base_path:
                     # Usar la ruta base completa que ya incluye el run_id
-                    gcs_blob_name = f"{self.base_path}/scaler.pkl"
+                    gcs_blob_name = f"{self.base_path}/{FILE_SCALER}"
                     success = self.gcs_utils.save_scaler_to_gcs(self.scaler, gcs_blob_name) if self.gcs_utils else False
                 else:
                     # Fallback por si base_path no estuviera definido
