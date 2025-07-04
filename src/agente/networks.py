@@ -198,18 +198,18 @@ class ActorNetwork(nn.Module):
         # Encoder Transformer para datos de mercado
         self.transformer = StateTransformerEncoder(
             input_features=market_features,
-            d_model=transformer_config['d_model'],
-            n_head=transformer_config['n_head'],
-            num_encoder_layers=transformer_config['num_encoder_layers'],
-            dim_feedforward=transformer_config['dim_feedforward'],
-            dropout_rate=transformer_config['dropout_rate'],
-            max_seq_len=architecture_config['transformer_max_seq_len'],
-            positional_encoding_learnable=architecture_config['positional_encoding_learnable']
+            d_model=transformer_config.d_model,
+            n_head=transformer_config.n_head,
+            num_encoder_layers=transformer_config.num_encoder_layers,
+            dim_feedforward=transformer_config.dim_feedforward,
+            dropout_rate=transformer_config.dropout_rate,
+            max_seq_len=architecture_config.transformer_max_seq_len,
+            positional_encoding_learnable=architecture_config.positional_encoding_learnable
         )
         
         # MLP head
         # Entrada: transformer output + portfolio features
-        mlp_input_dim = transformer_config['d_model'] + portfolio_features
+        mlp_input_dim = transformer_config.d_model + portfolio_features
         
         # Capas ocultas
         layers = []
@@ -219,7 +219,7 @@ class ActorNetwork(nn.Module):
             layers.extend([
                 nn.Linear(prev_dim, hidden_dim),
                 nn.ReLU(),
-                nn.Dropout(transformer_config['dropout_rate'])
+                nn.Dropout(transformer_config.dropout_rate)
             ])
             prev_dim = hidden_dim
         
@@ -230,8 +230,8 @@ class ActorNetwork(nn.Module):
         self.log_std_layer = nn.Linear(prev_dim, action_dim)
         
         # Límites para log_std para estabilidad numérica (desde config)
-        self.log_std_min = sac_params['log_std_min']
-        self.log_std_max = sac_params['log_std_max']
+        self.log_std_min = sac_params.log_std_min
+        self.log_std_max = sac_params.log_std_max
         
         logger.info(f"ActorNetwork inicializado:")
         logger.info(f"  - Market features: {market_features}")
@@ -299,23 +299,23 @@ class CriticNetwork(nn.Module):
         self.action_dim = action_dim
         
         # Extraer configuraciones específicas
-        architecture_config = agent_config.get('architecture', {})
+        architecture_config = agent_config.architecture
         
         # Encoder Transformer para datos de mercado
         self.transformer = StateTransformerEncoder(
             input_features=market_features,
-            d_model=transformer_config['d_model'],
-            n_head=transformer_config['n_head'],
-            num_encoder_layers=transformer_config['num_encoder_layers'],
-            dim_feedforward=transformer_config['dim_feedforward'],
-            dropout_rate=transformer_config['dropout_rate'],
-            max_seq_len=architecture_config['transformer_max_seq_len'],
-            positional_encoding_learnable=architecture_config['positional_encoding_learnable']
+            d_model=transformer_config.d_model,
+            n_head=transformer_config.n_head,
+            num_encoder_layers=transformer_config.num_encoder_layers,
+            dim_feedforward=transformer_config.dim_feedforward,
+            dropout_rate=transformer_config.dropout_rate,
+            max_seq_len=architecture_config.transformer_max_seq_len,
+            positional_encoding_learnable=architecture_config.positional_encoding_learnable
         )
         
         # MLP head
         # Entrada: transformer output + portfolio features + action
-        mlp_input_dim = transformer_config['d_model'] + portfolio_features + action_dim
+        mlp_input_dim = transformer_config.d_model + portfolio_features + action_dim
         
         # Capas ocultas
         layers = []
@@ -325,7 +325,7 @@ class CriticNetwork(nn.Module):
             layers.extend([
                 nn.Linear(prev_dim, hidden_dim),
                 nn.ReLU(),
-                nn.Dropout(transformer_config['dropout_rate'])
+                nn.Dropout(transformer_config.dropout_rate)
             ])
             prev_dim = hidden_dim
         

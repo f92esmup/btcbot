@@ -80,6 +80,7 @@ class TransformerSACAgent:
         # Hiperparámetros
         self.gamma = self._get_nested_config_value(sac_params, 'gamma')
         self.tau = self._get_nested_config_value(sac_params, 'tau')
+        self.learn_alpha = self._get_nested_config_value(sac_params, 'learn_alpha')
         self.batch_size = self._get_config_value('batch_size')
         self.learning_frequency = self._get_config_value('learning_frequency')
         self.update_target_frequency = self._get_config_value('update_target_frequency')

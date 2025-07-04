@@ -104,12 +104,7 @@ class FuturesTradingEnv(gym.Env):
         num_features_mercado = len(self.column_names)
         
         # Para portfolio_features, usar valor por defecto si no está configurado
-        if hasattr(self.config_entorno, 'architecture'):
-            # Objeto Pydantic no tiene 'architecture', usar valor por defecto
-            num_features_portfolio = 4
-        else:
-            # Diccionario legacy
-            num_features_portfolio = self.config_entorno.get('architecture', {}).get('portfolio_features', 4)
+        num_features_portfolio = 4
             
         total_features = ventana_size * num_features_mercado + num_features_portfolio
         

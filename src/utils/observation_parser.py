@@ -6,7 +6,7 @@ import numpy as np
 from typing import Tuple, Dict
 
 
-def parse_observation(observation: np.ndarray, env_config: Dict, device: torch.device) -> Tuple[torch.Tensor, torch.Tensor]:
+def parse_observation(observation: np.ndarray, env_config: Dict, portfolio_features: int, device: torch.device) -> Tuple[torch.Tensor, torch.Tensor]:
     """
     Parsea la observación del entorno en tensores de mercado y de portfolio.
 
@@ -22,11 +22,9 @@ def parse_observation(observation: np.ndarray, env_config: Dict, device: torch.d
             - portfolio_data: Tensor de forma (1, portfolio_features)
     """
     # Extraer dimensiones desde la configuración
-    ventana_size = env_config['ventana_observacion_size']
+    ventana_size = env_config.ventana_observacion_size
     
-    # La configuración del agente ahora está anidada
-    agent_arch_config = env_config.get('architecture', {})
-    portfolio_features = agent_arch_config.get('portfolio_features', 4)
+    
 
     # El número total de features en la observación es (ventana * features_mercado) + features_portfolio
     # Podemos deducir el número de features de mercado

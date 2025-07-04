@@ -290,7 +290,7 @@ def main() -> None:
     if hasattr(system_config, 'gcp') and system_config.gcp:
         logger.info("\n🔐 CONFIGURANDO CREDENCIALES DE API:")
         try:
-            secret_manager = SecretManagerUtils(system_config.gcp.model_dump())
+            secret_manager = SecretManagerUtils(project_id=system_config.gcp.project_id)
             
             # Determinar qué credenciales usar basado en el modo de trading
             is_testnet = system_config.trading.testnet
@@ -327,7 +327,7 @@ def main() -> None:
             end_date=args.end_date,
             run_id=data_run_id,
             base_path=data_run_path,
-            full_config=system_config,
+            full_config=system_config.model_dump(),
             save_artifacts=True,  # Siempre guardar artefactos en creación de datasets
             api_key=api_key,
             api_secret=api_secret,

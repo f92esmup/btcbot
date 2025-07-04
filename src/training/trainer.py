@@ -138,7 +138,7 @@ class Trainer:
             done = False
             while not done:
                 # Parse observation and select action
-                market_data, portfolio_data = parse_observation(obs, self.env.config_entorno, self.agent.device)
+                market_data, portfolio_data = parse_observation(obs, self.env.config_entorno, self.agent.portfolio_features, self.agent.device)
                 action = self.agent.select_action(market_data, portfolio_data, deterministic=False)
                 
                 # Execute action

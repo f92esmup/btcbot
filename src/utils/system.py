@@ -18,7 +18,7 @@ def setup_logging():
         level=logging.INFO,
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
         handlers=[
-            #logging.FileHandler('trading_bot.log'),
+            logging.FileHandler('trading_bot.log'),
             logging.StreamHandler(sys.stdout)
         ]
     )

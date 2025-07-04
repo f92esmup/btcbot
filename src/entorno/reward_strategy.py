@@ -39,7 +39,7 @@ class EquityChangeRewardStrategy(BaseRewardStrategy):
         """
         # Componente por paso: cambio en equity
         recompensa_paso = (portfolio.equity - equity_anterior) / equity_anterior if equity_anterior > 0 else 0.0
-        recompensa_paso *= self.config.get('peso_recompensa_paso', 1.0)
+        recompensa_paso *= self.config.peso_recompensa_paso
 
         # Componente por cierre de operación
         recompensa_cierre = 0.0
@@ -50,6 +50,6 @@ class EquityChangeRewardStrategy(BaseRewardStrategy):
             # La lógica de log1p ha sido eliminada. La normalización de recompensas se maneja en el agente.
             recompensa_cierre = roe_operacion
             
-            recompensa_cierre *= self.config.get('peso_recompensa_cierre', 1.0)
+            recompensa_cierre *= self.config.peso_recompensa_cierre
 
         return float(recompensa_paso + recompensa_cierre)

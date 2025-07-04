@@ -38,8 +38,8 @@ def get_normalized_portfolio_features(
     if not isinstance(portfolio_state, dict):
         raise ValueError("portfolio_state debe ser un diccionario")
     
-    if not isinstance(env_config, dict):
-        raise ValueError("env_config debe ser un diccionario")
+    if not isinstance(env_config, (dict, object)):
+        raise ValueError("env_config debe ser un diccionario o un objeto Pydantic")
     
     if price_scaler is None:
         raise ValueError("price_scaler no puede ser None")
@@ -50,11 +50,7 @@ def get_normalized_portfolio_features(
         if key not in portfolio_state:
             raise ValueError(f"Clave requerida '{key}' no encontrada en portfolio_state")
     
-    # Validar que las configuraciones necesarias estén presentes
-    required_config_keys = ['min_clip_pnl_roe', 'max_clip_pnl_roe', 'max_pasos_en_posicion']
-    for key in required_config_keys:
-        if key not in env_config:
-            raise ValueError(f"Clave requerida '{key}' no encontrada en env_config")
+    
     
     # 1. Normalizar tipo de posición
     tipo_posicion = portfolio_state['tipo']
@@ -83,8 +79,8 @@ def get_normalized_portfolio_features(
         tipo_posicion_norm = 0.0
     
     # 2. Normalizar PNL ROE con clipping
-    min_roe = env_config['min_clip_pnl_roe']
-    max_roe = env_config['max_clip_pnl_roe']
+    min_roe = env_config.min_clip_pnl_roe
+    max_roe = env_config.max_clip_pnl_roe
     pnl_roe_clipped = np.clip(portfolio_state['pnl_no_realizado_roe'], min_roe, max_roe)
     
     if max_roe > min_roe:
@@ -93,7 +89,7 @@ def get_normalized_portfolio_features(
         pnl_roe_norm = 0.5
     
     # 3. Normalizar pasos en posición
-    pasos_norm = min(1.0, portfolio_state['pasos_en_posicion'] / env_config['max_pasos_en_posicion'])
+    pasos_norm = min(1.0, portfolio_state['pasos_en_posicion'] / env_config.max_pasos_en_posicion)
     
     # 4. Normalizar precio de entrada
     if tipo_nombre != 'NEUTRAL' and portfolio_state['precio_entrada'] > 0:
