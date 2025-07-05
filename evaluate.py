@@ -172,52 +172,55 @@ def main():
         sys.exit(1)
     
     try:
-        # 1. Cargar configuración del training run
+        # 1. Centralized configuration loading using ConfigManager
         logger.info("Cargando configuración del training run...")
         
-        # Cargar primero la configuración local para obtener los detalles de GCP
+        # First, try to load local configuration to get GCP details if needed
+        gcp_config_for_load = None
         try:
             from src.configuration import AppConfig
             local_config_obj = AppConfig.from_yaml_file('src/configuration/config.yaml')
             gcp_config_for_load = local_config_obj.gcp.model_dump() if hasattr(local_config_obj, 'gcp') else None
         except FileNotFoundError:
             logger.warning("No se encontró config.yaml local. Se asumirá que no se necesita gcp_config para cargar.")
-            gcp_config_for_load = None
-
+        
+        # Load the complete training run configuration using ConfigManager
         config_dict = ConfigManager.load_training_run_config(run_id, gcp_config=gcp_config_for_load)
         if config_dict is None:
             raise ValueError(f"No se pudo cargar la configuración para el run: {run_id}")
         
-        # Crear modelo de configuración
-        config = AppConfig(**config_dict.get('config', {}))
-        
-        # 2. Configurar dispositivo y logging
-        device = setup_device(no_cuda=False)  # Por defecto usar CUDA si está disponible
-        logger.info(f"Usando dispositivo: {device}")
-        
-        # 3. Inicializar managers con la configuración cargada
-        storage_mode = config_dict.get('storage', {}).get('mode', 'local')
-        gcp_config = config_dict if storage_mode == 'gcp' else None
-        
-        config_manager = ConfigManager(storage_mode=storage_mode, gcp_config=gcp_config)
-        artifact_manager = ArtifactManager(storage_mode=storage_mode, gcp_config=gcp_config)
-        checkpoint_manager = CheckpointManager(storage_mode=storage_mode, gcp_config=gcp_config)
-        
-        # 4. Extraer data_run_id del linaje y cargar artefactos
+        # Extract data_run_id from lineage section
         lineage = config_dict.get('lineage', {})
         data_run_id = lineage.get('data_run_id')
         if not data_run_id:
             raise ValueError(f"No se encontró data_run_id en el linaje del run: {run_id}")
         
-        logger.info(f"Cargando artefactos del data_run: {data_run_id}")
+        logger.info(f"Data run ID extraído del linaje: {data_run_id}")
         
-        # Cargar dataset y scalers
+        # Create configuration object from loaded data
+        config = AppConfig(**config_dict.get('config', {}))
+        
+        # 2. Setup device and logging
+        device = setup_device(no_cuda=False)
+        logger.info(f"Usando dispositivo: {device}")
+        
+        # 3. Initialize managers with the loaded configuration
+        main_config = config_dict.get('config', {})
+        storage_mode = main_config.get('normalization', {}).get('storage_mode', 'local')
+        gcp_config = main_config.get('gcp') if storage_mode == 'gcp' else None
+        
+        config_manager = ConfigManager(storage_mode=storage_mode, gcp_config=gcp_config)
+        artifact_manager = ArtifactManager(storage_mode=storage_mode, gcp_config=gcp_config)
+        checkpoint_manager = CheckpointManager(storage_mode=storage_mode, gcp_config=gcp_config)
+        
+        # 4. Load data artifacts using ArtifactManager
+        logger.info(f"Cargando artefactos del data_run: {data_run_id}")
         normalized_dataframe, scaler, price_scaler = artifact_manager.load_data_artifacts(data_run_id)
         
         if normalized_dataframe is None or scaler is None or price_scaler is None:
             raise ValueError(f"No se pudieron cargar los artefactos del data_run: {data_run_id}")
         
-        logger.info("Artefactos de datos cargados exitosamente")
+        logger.info("✅ Artefactos de datos cargados exitosamente mediante ArtifactManager")
         
         # 5. Reconstruir el entorno
         logger.info("Reconstruyendo entorno de trading...")
@@ -240,11 +243,16 @@ def main():
             is_distributed=False
         )
         
-        # 7. Cargar pesos del modelo
+        # 7. Cargar pesos del modelo usando CheckpointManager
         logger.info(f"Cargando pesos del {model_type}...")
+        
+        # Construct the correct checkpoint prefix path
+        checkpoint_prefix = f"training_runs/{run_id}/{model_type}"
+        logger.info(f"Ruta del checkpoint: {checkpoint_prefix}")
+        
         checkpoint_manager.load_agent_from_checkpoint(
             agent=agent,
-            checkpoint_prefix=model_type,
+            checkpoint_prefix=checkpoint_prefix,
             reset_optimizers=False
         )
         
@@ -293,10 +301,10 @@ def main():
             "model_type": model_type,
             "evaluation_id": evaluation_id,
             # Añadir algunos hiperparámetros clave del entrenamiento
-            "learning_rate": config.agent.sac_hyperparameters.actor_learning_rate,
+            "learning_rate": config.agent.hiperparametros_sac.actor_learning_rate,
             "batch_size": config.agent.batch_size,
             "ventana_observacion_size": config.environment.ventana_observacion_size,
-            "initial_balance": config.environment.initial_balance,
+            "initial_balance": config.environment.capital_inicial,
         }
         
         # Guardar en TensorBoard

@@ -17,18 +17,23 @@ class TensorboardLogger:
     Escribe logs únicamente en el sistema de archivos local.
     """
     
-    def __init__(self, log_dir: str, run_id: str) -> None:
+    def __init__(self, log_dir: str, run_id: str = None) -> None:
         """
         Inicializa el logger de TensorBoard para operación local.
         
         Args:
             log_dir: Directorio base para los logs de TensorBoard.
-            run_id: ID único del entrenamiento, usado como subdirectorio.
+            run_id: ID único del entrenamiento, usado como subdirectorio. 
+                   Si es None, se usa log_dir directamente.
         """
         self.logger = logging.getLogger(__name__)
         
-        # Crear la ruta completa combinando log_dir con run_id
-        self.full_log_path = os.path.join(log_dir, run_id)
+        if run_id is not None:
+            # Crear la ruta completa combinando log_dir con run_id
+            self.full_log_path = os.path.join(log_dir, run_id)
+        else:
+            # Usar log_dir directamente (útil para evaluaciones)
+            self.full_log_path = log_dir
         
         # Crear el directorio si no existe
         os.makedirs(self.full_log_path, exist_ok=True)
