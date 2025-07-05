@@ -1,7 +1,7 @@
 import pandas as pd
 import threading
 import time
-from src.data.Adquisicion import Adquisicion
+from src.data.binance_source import BinanceDataSource
 from binance.client import Client
 from binance import ThreadedWebsocketManager
 

@@ -3,6 +3,7 @@ Módulo que encapsula la lógica y el estado del portfolio de trading para simul
 """
 
 import logging
+import pandas as pd
 from typing import Dict, Any, Tuple, List
 from .base_portfolio import BasePortfolio, TipoOperacion
 
@@ -32,17 +33,19 @@ class Portfolio(BasePortfolio):
         self._equity_actual = 0.0
         self._posicion_actual = {}
         self._historial_trades = []
+        self.historial_equity = []
         self.max_equity_alcanzado_episodio = 0.0
         self.retornos_realizados_episodio = []
-        self.max_consecutive_losses = self.config.get('max_consecutive_losses', 10)
+        self.max_consecutive_losses = self.config.max_consecutive_losses
         self._consecutive_losses = 0
         self.reset()
 
     def reset(self):
         """Reinicia el estado del portfolio a sus valores iniciales."""
-        self._balance_actual = self.config['capital_inicial']
-        self._equity_actual = self.config['capital_inicial']
-        self.max_equity_alcanzado_episodio = self.config['capital_inicial']
+        self._balance_actual = self.config.capital_inicial
+        self._equity_actual = self.config.capital_inicial
+        self.historial_equity = [self._equity_actual]
+        self.max_equity_alcanzado_episodio = self.config.capital_inicial
         self._consecutive_losses = 0
         self._posicion_actual = {
             'tipo': TipoOperacion.NEUTRAL,
@@ -80,8 +83,8 @@ class Portfolio(BasePortfolio):
         return False, 0.0
 
     def _open_position(self, tipo_operacion: TipoOperacion, precio_mercado: float, magnitud: float):
-        margen_a_usar = self._balance_actual * self.config['porcentaje_max_inversion_por_trade'] * magnitud
-        valor_nocional = margen_a_usar * self.config['apalancamiento']
+        margen_a_usar = self._balance_actual * self.config.porcentaje_max_inversion_por_trade * magnitud
+        valor_nocional = margen_a_usar * self.config.apalancamiento
         tamaño_activo = valor_nocional / precio_mercado
 
         precio_ejecucion, coste_total = self._apply_costs(valor_nocional, precio_mercado, tipo_operacion)
@@ -153,8 +156,8 @@ class Portfolio(BasePortfolio):
         return pnl_neto
 
     def _apply_costs(self, valor_nocional: float, precio_mercado: float, tipo_operacion: TipoOperacion) -> Tuple[float, float]:
-        comision_abs = valor_nocional * self.config['comision_taker_porcentaje']
-        slippage_factor = self.config['slippage_porcentaje']
+        comision_abs = valor_nocional * self.config.comision_taker_porcentaje
+        slippage_factor = self.config.slippage_porcentaje
 
         if tipo_operacion == TipoOperacion.LARGO:
             precio_ejecucion = precio_mercado * (1 + slippage_factor)
@@ -208,3 +211,12 @@ class Portfolio(BasePortfolio):
     def is_max_consecutive_losses_reached(self) -> bool:
         """Verifica si se ha alcanzado el umbral de pérdidas consecutivas."""
         return self._consecutive_losses >= self.max_consecutive_losses
+
+    def get_equity_series(self) -> pd.Series:
+        """
+        Devuelve la serie temporal del equity como pandas Series.
+        
+        Returns:
+            pd.Series: Serie temporal del historial de equity
+        """
+        return pd.Series(self.historial_equity)

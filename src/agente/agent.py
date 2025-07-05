@@ -8,7 +8,7 @@ import torch.optim as optim
 import torch.nn.functional as F
 from torch.nn.parallel import DistributedDataParallel as DDP
 import numpy as np
-from typing import Dict, Any, Tuple, Optional, Union
+from typing import Dict, Any, Tuple, Optional, Union, TYPE_CHECKING
 from pathlib import Path
 import pickle
 import logging
@@ -17,6 +17,11 @@ import os
 from torch.cuda.amp import autocast, GradScaler
 
 from .networks import ActorNetwork, CriticNetwork
+from .abstractions import AbstractActor, AbstractCritic
+
+# Importar tipo de configuración solo para type hints
+if TYPE_CHECKING:
+    from ..configuration import AgentConfig
 
 logger = logging.getLogger(__name__)
 
@@ -34,12 +39,12 @@ class TransformerSACAgent:
     
     def __init__(
         self,
+        actor: AbstractActor,
+        critic_1: AbstractCritic,
+        critic_2: AbstractCritic,
         observation_space_shape: Tuple[int, ...],
         action_space_shape: Tuple[int, ...],
-        market_features: int,
-        portfolio_features: int,
-        sequence_length: int,
-        config_override: Dict[str, Any],  # Now mandatory
+        config_override: Union["AgentConfig", Dict[str, Any]],  # Now supports both types
         device: Optional[torch.device] = None,
         is_distributed: bool = False  # Flag para activar el modo distribuido
     ):
@@ -47,13 +52,13 @@ class TransformerSACAgent:
         Inicializa el agente SAC.
         
         Args:
+            actor: Red Actor ya instanciada
+            critic_1: Primera red Critic ya instanciada
+            critic_2: Segunda red Critic ya instanciada
             observation_space_shape: Forma del espacio de observación
             action_space_shape: Forma del espacio de acción  
-            market_features: Número de características de mercado por paso
-            portfolio_features: Número de características del portfolio
-            sequence_length: Longitud de la secuencia (ventana)
+            config_override: Configuración del agente (objeto Pydantic o diccionario)
             device: Dispositivo de cómputo
-            config_override: Configuración requerida para el agente
             is_distributed: Flag para activar el modo distribuido con DDP
         """
         self.device = device or torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -62,39 +67,63 @@ class TransformerSACAgent:
         # Parámetros del espacio
         self.observation_space_shape = observation_space_shape
         self.action_space_shape = action_space_shape
-        self.market_features = market_features
-        self.portfolio_features = portfolio_features
-        self.sequence_length = sequence_length
         self.action_dim = action_space_shape[0]
+        
+        # Inyección de dependencias: recibir las redes ya instanciadas
+        self.actor = actor.to(self.device)
+        self.portfolio_features = actor.portfolio_features
+        self.critic_1 = critic_1.to(self.device)
+        self.critic_2 = critic_2.to(self.device)
+        self.portfolio_features = actor.portfolio_features
         
         # Configuración - ahora exclusivamente del parámetro config_override
         self.config = config_override
         
-        # Extraer sub-configuraciones para claridad
-        sac_params = self.config.get('hiperparametros_sac', {})
+        # Extraer sub-configuraciones para claridad (compatible con ambos tipos)
+        sac_params = self._get_config_value('hiperparametros_sac', {})
         
         # Hiperparámetros
-        self.gamma = sac_params['gamma']
-        self.tau = sac_params['tau']
-        self.batch_size = self.config['batch_size']
-        self.learning_frequency = self.config['learning_frequency']
-        self.update_target_frequency = self.config['update_target_frequency']
+        self.gamma = self._get_nested_config_value(sac_params, 'gamma')
+        self.tau = self._get_nested_config_value(sac_params, 'tau')
+        self.learn_alpha = self._get_nested_config_value(sac_params, 'learn_alpha')
+        self.batch_size = self._get_config_value('batch_size')
+        self.learning_frequency = self._get_config_value('learning_frequency')
+        self.update_target_frequency = self._get_config_value('update_target_frequency')
         
         # Contadores de pasos
         self.total_steps = 0
         self.learning_steps = 0
         
-        # Inicializar redes
-        self._init_networks()
+        # Inicializar componentes
+        logger.info(f"Inicializando agente SAC en device: {self.device}")
         
-        # Inicializar optimizadores
-        self._init_optimizers()
-        
-        # Parámetro de temperatura alpha (entropía)
-        self.learn_alpha = sac_params['learn_alpha']
+        # Completar inicialización
+        self._complete_initialization()
+
+    def _get_config_value(self, key: str, default: Any = None) -> Any:
+        """Helper para acceder a valores de configuración independientemente del tipo."""
+        if hasattr(self.config, key):
+            return getattr(self.config, key)
+        elif isinstance(self.config, dict):
+            return self.config.get(key, default)
+        else:
+            return default
+
+    def _get_nested_config_value(self, nested_config: Any, key: str, default: Any = None) -> Any:
+        """Helper para acceder a valores de configuración anidada."""
+        if hasattr(nested_config, key):
+            return getattr(nested_config, key)
+        elif isinstance(nested_config, dict):
+            return nested_config.get(key, default)
+        else:
+            return default
+
+    def _setup_alpha_parameter(self):
+        """Configura el parámetro de temperatura alpha."""
+        sac_params = self._get_config_value('hiperparametros_sac', {})
         
         # Manejar target_entropy: puede ser 'auto' o un valor numérico
-        target_entropy_config = sac_params['target_entropy']
+        target_entropy_config = self._get_nested_config_value(sac_params, 'target_entropy')
         if target_entropy_config == 'auto':
             # Calcular automáticamente como -dim_action
             self.target_entropy = -float(self.action_dim)
@@ -105,88 +134,75 @@ class TransformerSACAgent:
             logger.info(f"Target entropy configurado manualmente: {self.target_entropy}")
         
         if self.learn_alpha:
+            initial_log_alpha = self._get_nested_config_value(sac_params, 'initial_log_alpha')
             self.log_alpha = torch.tensor(
-                sac_params['initial_log_alpha'], 
+                initial_log_alpha, 
                 dtype=torch.float32, 
                 requires_grad=True, 
                 device=self.device
             )
-            self.alpha_optimizer = optim.Adam([self.log_alpha], lr=sac_params['alpha_learning_rate'])
+            alpha_lr = self._get_nested_config_value(sac_params, 'alpha_learning_rate')
+            self.alpha_optimizer = optim.Adam([self.log_alpha], lr=alpha_lr)
         else:
+            initial_log_alpha = self._get_nested_config_value(sac_params, 'initial_log_alpha')
             self.log_alpha = torch.tensor(
-                sac_params['initial_log_alpha'], 
+                initial_log_alpha, 
                 dtype=torch.float32, 
                 device=self.device
             )
+        
+        logger.info(f"Alpha configurado: aprendible={self.learn_alpha}, valor_inicial={self.log_alpha.item():.4f}")
+
+    def _complete_initialization(self):
+        """Completa la inicialización del agente."""
+        # Crear redes objetivo y configurar DDP
+        self._init_target_networks_and_ddp()
+        
+        # Inicializar optimizadores
+        self._init_optimizers()
+        
+        # Configurar parámetro alpha
+        self._setup_alpha_parameter()
         
         # Inicializar GradScaler para Automatic Mixed Precision (AMP)
         self.scaler = GradScaler(enabled=(self.device.type == 'cuda'))
         
         logger.info(f"TransformerSACAgent inicializado en {self.device}. Modo distribuido: {self.is_distributed}")
-        logger.info(f"  - Observación shape: {observation_space_shape}")
+        logger.info(f"  - Observación shape: {self.observation_space_shape}")
         logger.info(f"  - Acción dim: {self.action_dim}")
-        logger.info(f"  - Market features: {market_features}")
-        logger.info(f"  - Portfolio features: {portfolio_features}")
-        logger.info(f"  - Sequence length: {sequence_length}")
         logger.info(f"  - Alpha aprendible: {self.learn_alpha}")
         logger.info(f"  - Target entropy: {self.target_entropy}")
         logger.info(f"  - AMP habilitado: {self.device.type == 'cuda'}")
     
-    def _init_networks(self) -> None:
-        """Inicializa las redes y las envuelve para DDP si está en modo distribuido."""
-        transformer_config = self.config['transformer']
-        mlp_hidden_dims = self.config['mlp_heads']['hidden_dims']
+    def _init_target_networks_and_ddp(self) -> None:
+        """Inicializa las redes objetivo y configura DDP si es necesario."""
+        # Crear redes objetivo con la misma estructura que las redes principales
+        # Para esto, necesitamos crear nuevas instancias idénticas
+        transformer_config = self._get_config_value('transformer')
+        mlp_heads_config = self._get_config_value('mlp_heads')
+        mlp_hidden_dims = self._get_nested_config_value(mlp_heads_config, 'hidden_dims')
+        architecture_config = self.config.architecture
         
-        # Red del Actor
-        self.actor = ActorNetwork(
-            market_features=self.market_features,
-            portfolio_features=self.portfolio_features,
-            transformer_config=transformer_config,
-            mlp_hidden_dims=mlp_hidden_dims,
-            action_dim=self.action_dim,
-            agent_config=self.config  # Pasar la configuración completa
-        ).to(self.device)
-        logger.info("✅ ActorNetwork creado.")
-
-        # Redes de los Críticos
-        self.critic_1 = CriticNetwork(
-            market_features=self.market_features,
-            portfolio_features=self.portfolio_features,
-            action_dim=self.action_dim,
-            transformer_config=transformer_config,
-            mlp_hidden_dims=mlp_hidden_dims,
-            agent_config=self.config  # Pasar la configuración completa
-        ).to(self.device)
-        
-        self.critic_2 = CriticNetwork(
-            market_features=self.market_features,
-            portfolio_features=self.portfolio_features,
-            action_dim=self.action_dim,
-            transformer_config=transformer_config,
-            mlp_hidden_dims=mlp_hidden_dims,
-            agent_config=self.config  # Pasar la configuración completa
-        ).to(self.device)
-        logger.info("✅ CriticNetworks creados.")
-
-        # Redes objetivo
+        # Crear redes objetivo - usar los mismos parámetros que se usaron para crear las originales
         self.critic_target_1 = CriticNetwork(
-            market_features=self.market_features,
-            portfolio_features=self.portfolio_features,
+            market_features=self._get_actor_model().market_features,
+            portfolio_features=architecture_config.portfolio_features,
             action_dim=self.action_dim,
             transformer_config=transformer_config,
             mlp_hidden_dims=mlp_hidden_dims,
-            agent_config=self.config  # Pasar la configuración completa
+            agent_config=self.config
         ).to(self.device)
         
         self.critic_target_2 = CriticNetwork(
-            market_features=self.market_features,
-            portfolio_features=self.portfolio_features,
+            market_features=self._get_actor_model().market_features,
+            portfolio_features=architecture_config.portfolio_features,
             action_dim=self.action_dim,
             transformer_config=transformer_config,
             mlp_hidden_dims=mlp_hidden_dims,
-            agent_config=self.config  # Pasar la configuración completa
+            agent_config=self.config
         ).to(self.device)
-        logger.info("✅ Critic Target Networks creados (sin JIT).")
+        
+        logger.info("✅ Critic Target Networks creados.")
 
         # Envolver con DDP si está en modo distribuido
         if self.is_distributed:
@@ -218,20 +234,24 @@ class TransformerSACAgent:
     
     def _init_optimizers(self) -> None:
         """Inicializa los optimizadores."""
-        sac_params = self.config.get('hiperparametros_sac', {})
+        sac_params = self._get_config_value('hiperparametros_sac', {})
+        
+        actor_lr = self._get_nested_config_value(sac_params, 'actor_learning_rate')
+        critic_lr = self._get_nested_config_value(sac_params, 'critic_learning_rate')
+        
         self.actor_optimizer = optim.Adam(
             self.actor.parameters(), 
-            lr=sac_params['actor_learning_rate']
+            lr=actor_lr
         )
         
         self.critic_1_optimizer = optim.Adam(
             self.critic_1.parameters(), 
-            lr=sac_params['critic_learning_rate']
+            lr=critic_lr
         )
         
         self.critic_2_optimizer = optim.Adam(
             self.critic_2.parameters(), 
-            lr=sac_params['critic_learning_rate']
+            lr=critic_lr
         )
     
     @property
@@ -311,8 +331,9 @@ class TransformerSACAgent:
         next_market_data: torch.Tensor,
         next_portfolio_data: torch.Tensor,
         terminated: torch.Tensor,
-        truncated: torch.Tensor
-    ) -> Optional[Dict[str, float]]:
+        truncated: torch.Tensor,
+        is_weights: Optional[torch.Tensor] = None
+    ) -> Optional[Tuple[Dict[str, float], torch.Tensor]]:
         """
         Realiza un paso de aprendizaje SAC.
         
@@ -325,9 +346,12 @@ class TransformerSACAgent:
             next_portfolio_data: Tensor con siguientes datos de portfolio del batch
             terminated: Tensor con flags de terminación del batch
             truncated: Tensor con flags de truncamiento del batch
+            is_weights: Tensor opcional con pesos de importancia para Prioritized Experience Replay
             
         Returns:
-            Diccionario con métricas de entrenamiento
+            Tuple containing:
+            - Diccionario con métricas de entrenamiento, incluyendo TD errors si is_weights es proporcionado
+            - Tensor con Q-values del batch para análisis de distribución
         """
         self.total_steps += 1
         
@@ -367,8 +391,21 @@ class TransformerSACAgent:
             current_q1 = critic_1_model(market_data, portfolio_data, actions)
             current_q2 = critic_2_model(market_data, portfolio_data, actions)
             
-            critic_1_loss = F.mse_loss(current_q1, q_targets)
-            critic_2_loss = F.mse_loss(current_q2, q_targets)
+            # Calculate raw losses without reduction for priority updates
+            critic_1_loss_raw = F.mse_loss(current_q1, q_targets, reduction='none')
+            critic_2_loss_raw = F.mse_loss(current_q2, q_targets, reduction='none')
+            
+            # Apply importance sampling weights if provided (for Prioritized Experience Replay)
+            if is_weights is not None:
+                critic_1_loss = (is_weights.unsqueeze(1) * critic_1_loss_raw).mean()
+                critic_2_loss = (is_weights.unsqueeze(1) * critic_2_loss_raw).mean()
+                
+                # Calculate TD errors for priority updates (use critic 1 for consistency)
+                td_errors = critic_1_loss_raw.squeeze().detach()
+            else:
+                critic_1_loss = critic_1_loss_raw.mean()
+                critic_2_loss = critic_2_loss_raw.mean()
+                td_errors = None
         
         # Optimizar crítico 1
         self.critic_1_optimizer.zero_grad()
@@ -431,7 +468,11 @@ class TransformerSACAgent:
             'learning_steps': self.learning_steps
         }
         
-        return metrics
+        # Add TD errors for prioritized replay buffer updates if applicable
+        if td_errors is not None:
+            metrics['td_errors'] = td_errors.cpu().numpy()
+        
+        return metrics, current_q1.detach()
     
     def _soft_update_target_networks(self) -> None:
         """Actualización suave de las redes objetivo."""

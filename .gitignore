@@ -8,3 +8,8 @@ runs/
 .conda/
 Entrenamientos/
 .env
+data_runs/
+training_runs/
+tensorboard_logs/
+tensorboard_logs_evaluations/
+evaluations/

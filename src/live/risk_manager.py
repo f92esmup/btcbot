@@ -72,7 +72,8 @@ class RiskManager:
         if not self.is_initialized:
             return False
 
-        current_equity = self.portfolio_manager.balance # Asumimos que balance es el equity actual
+        # Usar self.portfolio_manager.equity en lugar de .balance
+        current_equity = self.portfolio_manager.equity
         
         # Evitar división por cero
         if self.max_equity_so_far == 0:

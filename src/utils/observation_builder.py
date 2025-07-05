@@ -1,43 +1,44 @@
 import pandas as pd
 import numpy as np
-from src.training.run_manager import RunManager
 from src.data.normalization import Normalization
-from src.entorno.environment import TipoOperacion
+from src.entorno.base_portfolio import TipoOperacion
+from src.entorno.portfolio_state import get_normalized_portfolio_features
 
 
-class LiveObservationBuilder:
+class ObservationBuilder:
     """
-    Construye el vector de observación normalizado para el modo en vivo.
+    Construye el vector de observación normalizado para el entrenamiento y modo en vivo.
     
-    Esta clase carga los scalers de un 'run_id' de entrenamiento específico
-    y los utiliza para procesar los datos de mercado en tiempo real,
-    asegurando que la entrada al agente sea consistente con el entrenamiento.
+    Esta clase centraliza la lógica de construcción de observaciones, aplicando el principio DRY
+    y garantizando consistencia entre entrenamiento y producción.
     """
-    def __init__(self, run_manager: RunManager, run_config: dict):
+    def __init__(self, scaler, price_scaler, run_config: dict):
         """
         Inicializa el constructor de observaciones.
         
         Args:
-            run_manager (RunManager): El gestor del run de entrenamiento cuyos artefactos (scalers) se deben cargar.
+            scaler: El scaler ya cargado para normalizar las características de mercado.
+            price_scaler: El price_scaler ya cargado para normalizar precios.
             run_config (dict): Configuración del run cargada previamente.
         """
-        self.run_manager = run_manager
+        self.scaler = scaler
+        self.price_scaler = price_scaler
         self.run_config = run_config
-        print(f"LiveObservationBuilder: Inicializando para run_id '{self.run_manager.run_id}'...")
+        print(f"ObservationBuilder: Inicializando con scalers inyectados...")
         
         # Validar que la configuración sea válida
         if not run_config or 'config' not in run_config:
-            raise ValueError(f"Configuración del run inválida para run_id '{self.run_manager.run_id}' - debe contener la clave 'config'")
+            raise ValueError(f"Configuración del run inválida - debe contener la clave 'config'")
         
-        # Cargar scalers
-        self.scaler = self.run_manager.load_scaler()
-        self.price_scaler = self.run_manager.load_price_scaler()
+        # Validar que los scalers estén correctamente cargados
+        if self.scaler is None or self.price_scaler is None:
+            raise ValueError("Los scalers inyectados no pueden ser None")
         
         # Acceder a la configuración del entorno desde la clave 'config'
         main_config = self.run_config.get('config', {})
         self.env_config = main_config.get('environment', {})
         
-        print("Scalers y configuración cargados exitosamente.")
+        print("✅ Scalers inyectados y configuración cargados exitosamente.")
     
     def build(self, live_market_dataframe: pd.DataFrame, live_portfolio_state: dict) -> np.ndarray:
         """
@@ -108,40 +109,8 @@ class LiveObservationBuilder:
         Returns:
             np.ndarray: Vector de características del portafolio normalizado
         """
-        # 1. Tipo de posición normalizado
-        tipo_posicion_enum = portfolio_state['tipo']
-        if tipo_posicion_enum.name == 'LARGO':
-            tipo_posicion_norm = 1.0
-        elif tipo_posicion_enum.name == 'NEUTRAL':
-            tipo_posicion_norm = 0.5
-        else:  # 'CORTO'
-            tipo_posicion_norm = 0.0
-        
-        # 2. PNL ROE normalizado y clipeado
-        pnl_roe = portfolio_state['pnl_no_realizado_roe']
-        pnl_roe_clipped = np.clip(
-            pnl_roe,
-            self.env_config['min_clip_pnl_roe'],
-            self.env_config['max_clip_pnl_roe']
+        return get_normalized_portfolio_features(
+            portfolio_state=portfolio_state,
+            env_config=self.env_config,
+            price_scaler=self.price_scaler
         )
-        
-        # Normalizar a [0, 1]
-        min_roe = self.env_config['min_clip_pnl_roe']
-        max_roe = self.env_config['max_clip_pnl_roe']
-        if max_roe != min_roe:
-            pnl_roe_norm = (pnl_roe_clipped - min_roe) / (max_roe - min_roe)
-        else:
-            pnl_roe_norm = 0.5
-        
-        # 3. Pasos en posición normalizado
-        pasos_norm = min(1.0, portfolio_state['pasos_en_posicion'] / self.env_config['max_pasos_en_posicion'])
-        
-        # 4. Precio de entrada normalizado
-        if tipo_posicion_enum.name != 'NEUTRAL' and portfolio_state['precio_entrada'] > 0:
-            # Usar el price_scaler para normalizar el precio de entrada
-            precio_entrada_scaled = self.price_scaler.transform([[portfolio_state['precio_entrada']]])[0][0]
-            precio_entrada_norm = np.clip(precio_entrada_scaled, 0.0, 1.0)
-        else:
-            precio_entrada_norm = 0.5  # Valor neutral
-        
-        return np.array([tipo_posicion_norm, pnl_roe_norm, pasos_norm, precio_entrada_norm], dtype=np.float32)

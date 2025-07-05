@@ -25,8 +25,13 @@ class LiveDataProcessor:
         # La configuración principal del run está anidada bajo una clave 'config'
         self.main_config = run_config.get('config', {})
         
-        # Corregir la obtención del interval desde experiment_definition
-        self.interval = self.main_config.get('experiment_definition', {}).get('interval', '1h')
+        # Corregir la obtención del interval desde experiment_definition (legacy) o metadata
+        # Primero intentar desde experiment_definition (para compatibilidad con training_runs antiguos)
+        interval_from_exp_def = self.main_config.get('experiment_definition', {}).get('interval')
+        # Luego intentar desde metadata.experiment_parameters (para nuevos training_runs)
+        interval_from_metadata = self.main_config.get('metadata', {}).get('experiment_parameters', {}).get('interval')
+        # Usar el valor disponible, con fallback a '1h'
+        self.interval = interval_from_exp_def or interval_from_metadata or '1h'
         
         # Corregir la obtención del ventana_observacion_size desde environment
         self.ventana_observacion_size = self.main_config.get('environment', {}).get('ventana_observacion_size', 20)

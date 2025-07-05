@@ -1,8 +1,10 @@
 """
 Agent evaluator module for btcbot.
 
-This module contains the AgentEvaluator class which encapsulates
-the logic for evaluating the performance of trading agents.
+This module contains the AgentEvaluator class which implements
+a comprehensive final backtesting engine for trading agents,
+executing a single complete backtest over the entire available dataset
+and returning detailed performance metrics along with the equity curve.
 """
 
 import numpy as np
@@ -12,16 +14,17 @@ from typing import Dict, List, Tuple
 from src.agente.agent import TransformerSACAgent
 from src.entorno.environment import FuturesTradingEnv
 from src.analysis.metrics import FinancialMetrics
-from src.utils.observation_parser import parse_observation
+from src.agente.observation_parser import parse_observation
 
 
 class AgentEvaluator:
     """
-    Clase para encapsular la lógica de evaluación del agente.
+    Motor de backtesting final y exhaustivo para evaluar agentes de trading.
     
-    Esta clase se encarga de evaluar el rendimiento del agente de trading
-    calculando métricas financieras avanzadas como máximo drawdown,
-    Sharpe ratio y Sortino ratio.
+    Esta clase se encarga de ejecutar un único y completo backtest sobre todo 
+    el dataset disponible en el entorno, calculando métricas financieras 
+    avanzadas como máximo drawdown, Sharpe ratio, Sortino ratio y devolviendo 
+    la curva de equity completa del backtest.
     """
     
     def __init__(self, metrics_calculator: FinancialMetrics = None):
@@ -76,128 +79,158 @@ class AgentEvaluator:
         
         return df_trades
     
-    def evaluate(self, agent: TransformerSACAgent, env: FuturesTradingEnv, 
-                num_episodes: int) -> Dict[str, float]:
+    def evaluate(self, agent: TransformerSACAgent, env: FuturesTradingEnv) -> Tuple[Dict[str, float], List[float], List[float]]:
         """
-        Evalúa el rendimiento del agente.
+        Realiza un backtest final y exhaustivo del agente sobre todo el dataset disponible.
         
         Args:
             agent: Agente a evaluar
             env: Entorno de trading
-            num_episodes: Número de episodios de evaluación
             
         Returns:
-            Dict[str, float]: Métricas de evaluación
+            Tuple[Dict[str, float], List[float], List[float]]: 
+                - Diccionario con métricas finales de rendimiento
+                - Lista con la serie temporal completa del equity
+                - Lista con los PnL absolutos de todos los trades
         """
         agent.eval_mode()
         
-        episode_returns = []
-        episode_profits = []
-        episode_lengths = []
+        # Inicializar el entorno para el backtest completo
+        obs, _ = env.reset()
+        
+        # Variables para el tracking del backtest
+        total_return = 0
+        step_count = 0
         successful_trades = 0
         total_trades = 0
         
-        # Para métricas financieras avanzadas
-        all_equity_values = []  # Para calcular max drawdown
-        episode_equity_series = []  # Equity por episodio
-        all_trades_data = []  # Todos los trades para análisis
+        # Valores iniciales
+        initial_balance = env.portfolio.balance
+        initial_equity = env.portfolio.equity
         
-        for episode in range(num_episodes):
-            obs, _ = env.reset()
-            episode_return = 0
-            episode_length = 0
-            initial_balance = env.portfolio.balance
-            initial_equity = env.portfolio.equity
+        # Serie temporal del equity para la curva completa
+        equity_curve = [initial_equity]
+        
+        # Tracking de retornos por paso para métricas financieras
+        step_returns = []
+        
+        # Ejecutar el backtest completo en un solo episodio
+        done = False
+        while not done:
+            # Parse observation and select action deterministically
+            market_data, portfolio_data = parse_observation(obs, env.config_entorno, agent.config, agent.device)
+            action = agent.select_action(market_data, portfolio_data, deterministic=True)
             
-            # Track equity durante el episodio
-            episode_equity_track = [initial_equity]
+            # Equity antes del paso para calcular retorno
+            prev_equity = env.portfolio.equity
             
-            # Store initial trade count to calculate episode trades
-            initial_trade_count = len(env.portfolio.historial_trades)
+            # Ejecutar acción
+            obs, reward, terminated, truncated, info = env.step(action)
+            done = terminated or truncated
             
-            done = False
-            while not done:
-                # Parse observation and select action
-                market_data, portfolio_data = parse_observation(obs, env.config_entorno, agent.device)
-                action = agent.select_action(market_data, portfolio_data, deterministic=True)
-                obs, reward, terminated, truncated, info = env.step(action)
-                done = terminated or truncated
-                
-                episode_return += reward
-                episode_length += 1
-                
-                # Registrar equity en cada paso
-                episode_equity_track.append(env.portfolio.equity)
-                
-                # Contar trades
-                if 'trade_ejecutado' in info and info['trade_ejecutado']:
-                    total_trades += 1
-                    if reward > 0:
-                        successful_trades += 1
+            # Actualizar métricas
+            total_return += reward
+            step_count += 1
             
-            final_balance = env.portfolio.balance
-            final_equity = env.portfolio.equity
-            profit_pct = ((final_balance - initial_balance) / initial_balance) * 100
+            # Calcular retorno del paso
+            current_equity = env.portfolio.equity
+            if prev_equity > 0:
+                step_return = (current_equity - prev_equity) / prev_equity
+                step_returns.append(step_return)
             
-            episode_returns.append(episode_return)
-            episode_profits.append(profit_pct)
-            episode_lengths.append(episode_length)
+            # Registrar equity en cada paso
+            equity_curve.append(current_equity)
             
-            # Guardar series de equity
-            episode_equity_series.extend(episode_equity_track)
-            all_equity_values.append(final_equity)
-            
-            # Episode Summary Analysis - Extract trades from this episode
-            episode_trades = env.portfolio.historial_trades[initial_trade_count:]
-            if episode_trades:
-                all_trades_data.extend(episode_trades)
+            # Contar trades ejecutados
+            if 'trade_ejecutado' in info and info['trade_ejecutado']:
+                total_trades += 1
+                if reward > 0:
+                    successful_trades += 1
         
         agent.train_mode()
         
-        # Episode Summary Analysis using environment histories
-        episode_summary = self._calculate_episode_summary(
+        # Calcular métricas finales del backtest
+        final_balance = env.portfolio.balance
+        final_equity = env.portfolio.equity
+        
+        # Calcular el rendimiento total
+        total_profit_pct = ((final_balance - initial_balance) / initial_balance) * 100 if initial_balance > 0 else 0.0
+        
+        # Calcular métricas financieras avanzadas usando la serie de equity
+        max_drawdown = self.metrics_calculator.calculate_max_drawdown(equity_curve)
+        
+        # Para Sharpe y Sortino, usar retornos por paso
+        sharpe_ratio = self.metrics_calculator.calculate_sharpe_ratio(step_returns) if step_returns else 0.0
+        sortino_ratio = self.metrics_calculator.calculate_sortino_ratio(step_returns) if step_returns else 0.0
+        
+        # Calcular estadísticas de los retornos
+        returns_mean = np.mean(step_returns) if step_returns else 0.0
+        returns_std = np.std(step_returns) if step_returns else 0.0
+        
+        # Calcular métricas de trading detalladas
+        trades_summary = self._calculate_backtest_summary(
             env.portfolio.historial_trades, 
-            env.historial_equity,
-            all_trades_data
+            env.portfolio.historial_equity
         )
         
-        # Calcular métricas financieras avanzadas usando la instancia almacenada
-        max_drawdown = self.metrics_calculator.calculate_max_drawdown(episode_equity_series)
-        sharpe_ratio = self.metrics_calculator.calculate_sharpe_ratio(episode_profits)
-        sortino_ratio = self.metrics_calculator.calculate_sortino_ratio(episode_profits)
-        
-        # Métricas básicas
-        metrics = {
-            'mean_return': np.mean(episode_returns),
-            'std_return': np.std(episode_returns),
-            'mean_profit_pct': np.mean(episode_profits),
-            'std_profit_pct': np.std(episode_profits),
-            'mean_episode_length': np.mean(episode_lengths),
-            'win_rate': successful_trades / max(total_trades, 1),
-            'total_trades': total_trades / num_episodes,
+        # Construir el diccionario de métricas finales con valores por defecto
+        final_metrics = {
+            # Métricas básicas del backtest
+            'total_return': total_return,
+            'total_profit_pct': total_profit_pct,
+            'total_steps': step_count,
+            'initial_equity': initial_equity,
+            'final_equity': final_equity,
+            
+            # Métricas de retornos
+            'mean_return': returns_mean,
+            'std_return': returns_std,
+            'mean_step_return': returns_mean,
+            'std_step_return': returns_std,
+            'volatility': returns_std * np.sqrt(252) if returns_std > 0 else 0.0,  # Anualizada
+            
+            # Métricas de riesgo
             'max_drawdown': max_drawdown,
             'sharpe_ratio': sharpe_ratio,
-            'sortino_ratio': sortino_ratio
+            'sortino_ratio': sortino_ratio,
+            
+            # Métricas de trading
+            'total_trades': total_trades,
+            'successful_trades': successful_trades,
+            'win_rate': successful_trades / max(total_trades, 1),
+            
+            # Métricas de equity
+            'max_equity': max(equity_curve) if equity_curve else initial_equity,
+            'min_equity': min(equity_curve) if equity_curve else initial_equity,
+            'equity_volatility': np.std(equity_curve) if len(equity_curve) > 1 else 0.0,
         }
         
-        # Combinar con análisis de resumen de episodio
-        metrics.update(episode_summary)
+        # Añadir métricas que podrían no existir si no hay trades
+        final_metrics.update({
+            'mean_profit_pct': final_metrics.get('total_profit_pct', 0.0), # Usar el total como fallback
+            'std_profit_pct': np.std([t['roe'] for t in env.portfolio.historial_trades]) if env.portfolio.historial_trades else 0.0,
+            'mean_episode_length': step_count # Para un solo backtest, es la longitud total
+        })
+
+        # Combinar con análisis detallado de trades
+        final_metrics.update(trades_summary)
         
-        return metrics
+        # Extraer lista de PnL para análisis de distribución
+        trade_pnl_list = self.get_trade_pnl_list(env.portfolio.historial_trades)
+        
+        return final_metrics, equity_curve, trade_pnl_list
     
-    def _calculate_episode_summary(self, historial_trades: list, 
-                                 historial_equity: list, 
-                                 all_trades_data: list) -> Dict[str, float]:
+    def _calculate_backtest_summary(self, historial_trades: list, 
+                                   historial_equity: list) -> Dict[str, float]:
         """
-        Calcula estadísticas de resumen de episodio usando los historiales del entorno.
+        Calcula estadísticas de resumen del backtest final usando los historiales del entorno.
         
         Args:
             historial_trades: Historial completo de trades del entorno
             historial_equity: Historial completo de equity del entorno
-            all_trades_data: Todos los trades recopilados durante la evaluación
             
         Returns:
-            Dict[str, float]: Métricas de resumen de episodio
+            Dict[str, float]: Métricas detalladas del backtest
         """
         summary = {}
         
@@ -213,8 +246,8 @@ class AgentEvaluator:
             })
         
         # Análisis detallado de trades usando DataFrame
-        if all_trades_data:
-            trades_df = self.get_trades_dataframe(all_trades_data)
+        if historial_trades:
+            trades_df = self.get_trades_dataframe(historial_trades)
             
             if len(trades_df) > 0:
                 # Métricas de trading
@@ -259,7 +292,7 @@ class AgentEvaluator:
                     summary.update(consecutive_analysis)
         
         # Si no hay trades, llenar con valores por defecto
-        if not all_trades_data:
+        if not historial_trades:
             summary.update({
                 'total_trades_analysis': 0,
                 'profitable_trades': 0,
@@ -328,3 +361,20 @@ class AgentEvaluator:
             'max_consecutive_losses': float(max_losses),
             'current_streak': float(current_streak)
         }
+    
+    def get_trade_pnl_list(self, historial_trades: list) -> list:
+        """
+        Extrae una lista de PnL absolutos de todos los trades para análisis de distribución.
+        
+        Args:
+            historial_trades: Lista de diccionarios con información de trades
+            
+        Returns:
+            list: Lista con los PnL absolutos de todos los trades
+        """
+        if not historial_trades:
+            return []
+        
+        # Extraer solo los valores de pnl_abs
+        pnl_list = [trade.get('pnl_abs', 0.0) for trade in historial_trades]
+        return pnl_list

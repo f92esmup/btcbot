@@ -5,10 +5,18 @@ Handles the main training loop with dependency injection.
 import time
 import numpy as np
 import torch
+import torch.nn.functional as F
 from pathlib import Path
 from typing import Dict, Any, Optional, Tuple
-from src.agente.replay_buffer import ReplayBuffer
-from src.utils.observation_parser import parse_observation
+from src.agente.replay_buffer import ReplayBuffer, PrioritizedReplayBuffer
+from src.agente.observation_parser import parse_observation, parse_observation_batch
+from src.configuration.constants import (
+    KEY_SEED, KEY_BATCH_SIZE, KEY_MIN_BUFFER_FOR_LEARNING, 
+    KEY_REPLAY_BUFFER_CAPACITY, KEY_REPLAY_BUFFER_SIZE,
+    KEY_EVAL_FREQUENCY, KEY_SAVE_FREQUENCY, KEY_TENSORBOARD_DIR,
+    KEY_STORAGE_MODE, STORAGE_MODE_GCP,
+    STATUS_LEARNING, STATUS_COLLECTING
+)
 
 
 class Trainer:
@@ -17,7 +25,7 @@ class Trainer:
     Uses dependency injection for all components.
     """
     
-    def __init__(self, agent, env, evaluator, logger, run_manager, trainer_config, logger_console):
+    def __init__(self, agent, env, evaluator, logger, checkpoint_manager, config_manager, training_run_id, trainer_config, logger_console):
         """
         Initialize trainer with all dependencies.
         
@@ -26,7 +34,9 @@ class Trainer:
             env: The trading environment
             evaluator: AgentEvaluator instance for periodic evaluation
             logger: TensorboardLogger instance for metrics logging
-            run_manager: RunManager instance for file operations
+            checkpoint_manager: CheckpointManager instance for model operations
+            config_manager: ConfigManager instance for configuration operations
+            training_run_id: The ID of the training run (used for saving models/checkpoints)
             trainer_config: Configuration dict with training parameters
             logger_console: Console logger for status messages
         """
@@ -34,48 +44,26 @@ class Trainer:
         self.env = env
         self.evaluator = evaluator
         self.logger = logger
-        self.run_manager = run_manager
+        self.checkpoint_manager = checkpoint_manager
+        self.config_manager = config_manager
+        self.training_run_id = training_run_id
         self.config = trainer_config
         self.logger_console = logger_console
         
         # Training state
         self.best_eval_return = float('-inf')
+        self.best_model_path = None
         self.global_trade_counter = 0
         self.learning_started = False
         
-        # Initialize ReplayBuffer
-        self.replay_buffer = ReplayBuffer(
-            capacity=trainer_config.get('replay_buffer_capacity', trainer_config.get('replay_buffer_size', 100000)),
+        # Initialize PrioritizedReplayBuffer
+        self.replay_buffer = PrioritizedReplayBuffer(
+            capacity=trainer_config.get(KEY_REPLAY_BUFFER_CAPACITY, trainer_config.get(KEY_REPLAY_BUFFER_SIZE, 100000)),
             observation_shape=env.observation_space.shape,
-            action_dim=env.action_space.shape[0]
+            action_dim=env.action_space.shape[0],
+            alpha=trainer_config.get('per_alpha', 0.6),
+            beta=trainer_config.get('per_beta', 0.4)
         )
-        
-    def _parse_observation_batch(self, observations_batch: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        """
-        Vectorized parsing of a batch of observations.
-        
-        Args:
-            observations_batch: Tensor of shape (batch_size, total_features)
-            
-        Returns:
-            Tuple[torch.Tensor, torch.Tensor]: (market_data, portfolio_data) tensors
-            - market_data: shape (batch_size, ventana_size, num_features_mercado)
-            - portfolio_data: shape (batch_size, portfolio_features)
-        """
-        # Calculate dimensions
-        ventana_size = self.env.config_entorno['ventana_observacion_size']
-        num_features_mercado = len(self.env.column_names)
-        market_features_total = ventana_size * num_features_mercado
-        
-        # Use tensor slicing to separate market and portfolio data (vectorized)
-        market_data_flat = observations_batch[:, :market_features_total]
-        portfolio_data = observations_batch[:, market_features_total:]
-        
-        # Reshape market data to 3D tensor (vectorized)
-        batch_size = observations_batch.shape[0]
-        market_data = market_data_flat.view(batch_size, ventana_size, num_features_mercado)
-        
-        return market_data, portfolio_data
 
     def train(self, start_episode: int, total_episodes: int):
         """
@@ -86,7 +74,7 @@ class Trainer:
             total_episodes: Total number of episodes to train
         """
         self.logger_console.info(f"Iniciando entrenamiento por {total_episodes} episodios (desde episodio {start_episode})...")
-        self.logger_console.info(f"Usando semilla base {self.config['seed']} para generación de seeds específicos por episodio")
+        self.logger_console.info(f"Usando semilla base {self.config[KEY_SEED]} para generación de seeds específicos por episodio")
         
         # Training metrics storage
         episode_returns = []
@@ -103,7 +91,7 @@ class Trainer:
             episode_start_time = time.time()
             
             # Calculate episode-specific seed
-            current_episode_seed = self.config['seed'] + episode
+            current_episode_seed = self.config[KEY_SEED] + episode
             
             # Reset environment with specific seed
             obs, _ = self.env.reset(seed=current_episode_seed)
@@ -130,10 +118,14 @@ class Trainer:
             ep_critic2_losses = []
             ep_alpha_losses = []
             
+            # Agent distribution tracking for health monitoring
+            ep_actions_raw = []
+            ep_q_values = []
+            
             done = False
             while not done:
                 # Parse observation and select action
-                market_data, portfolio_data = parse_observation(obs, self.env.config_entorno, self.agent.device)
+                market_data, portfolio_data = parse_observation(obs, self.env.config_entorno, self.agent.config, self.agent.device)
                 action = self.agent.select_action(market_data, portfolio_data, deterministic=False)
                 
                 # Execute action
@@ -144,33 +136,46 @@ class Trainer:
                 self.replay_buffer.add(obs, action, reward, next_obs, terminated, truncated)
                 
                 # Train if enough experiences accumulated
-                if self.replay_buffer.can_sample(self.config['batch_size']) and len(self.replay_buffer) >= self.config['min_buffer_for_learning']:
+                if self.replay_buffer.can_sample(self.config[KEY_BATCH_SIZE]) and len(self.replay_buffer) >= self.config[KEY_MIN_BUFFER_FOR_LEARNING]:
                     # Log when learning starts for the first time
                     if not self.learning_started:
-                        self.logger_console.info(f"🎯 INICIANDO APRENDIZAJE: Buffer alcanzó {len(self.replay_buffer)} experiencias (mínimo: {self.config['min_buffer_for_learning']})")
+                        self.logger_console.info(f"🎯 INICIANDO APRENDIZAJE: Buffer alcanzó {len(self.replay_buffer)} experiencias (mínimo: {self.config[KEY_MIN_BUFFER_FOR_LEARNING]})")
                         self.learning_started = True
                     
-                    # Sample batch from replay buffer
-                    batch_obs, batch_actions, batch_rewards, batch_next_obs, batch_terminated, batch_truncated = self.replay_buffer.sample(
-                        self.config['batch_size'], self.agent.device
+                    # Sample batch from prioritized replay buffer
+                    batch_obs, batch_actions, batch_rewards, batch_next_obs, batch_terminated, batch_truncated, tree_indices, is_weights = self.replay_buffer.sample(
+                        self.config[KEY_BATCH_SIZE], self.agent.device
                     )
                     
                     # Parse batch observations (vectorized)
-                    batch_market_data, batch_portfolio_data = self._parse_observation_batch(batch_obs)
-                    batch_next_market_data, batch_next_portfolio_data = self._parse_observation_batch(batch_next_obs)
-                    
-                    # Learn from batch
-                    losses = self.agent.learn(
-                        batch_market_data, batch_portfolio_data, batch_actions,
-                        batch_rewards, batch_next_market_data, batch_next_portfolio_data,
-                        batch_terminated, batch_truncated
+                    batch_market_data, batch_portfolio_data = parse_observation_batch(
+                        batch_obs, self.env.config_entorno, self.agent.config, len(self.env.column_names)
+                    )
+                    batch_next_market_data, batch_next_portfolio_data = parse_observation_batch(
+                        batch_next_obs, self.env.config_entorno, self.agent.config, len(self.env.column_names)
                     )
                     
-                    if losses:
+                    # Learn from batch with importance sampling weights
+                    result = self.agent.learn(
+                        batch_market_data, batch_portfolio_data, batch_actions,
+                        batch_rewards, batch_next_market_data, batch_next_portfolio_data,
+                        batch_terminated, batch_truncated, is_weights
+                    )
+                    
+                    if result:
+                        losses, q_values = result
                         ep_actor_losses.append(losses['actor_loss'])
                         ep_critic1_losses.append(losses['critic_1_loss'])
                         ep_critic2_losses.append(losses['critic_2_loss'])
                         ep_alpha_losses.append(losses['alpha_loss'])
+                        
+                        # Collect actions and Q-values for distribution analysis
+                        ep_actions_raw.append(batch_actions.detach())
+                        ep_q_values.append(q_values)
+                        
+                        # Update priorities in PrioritizedReplayBuffer if TD errors are available
+                        if 'td_errors' in losses:
+                            self.replay_buffer.update_priorities(tree_indices, losses['td_errors'])
                         
                         # Log step metrics (solo si hay logger)
                         if self.logger:
@@ -260,6 +265,12 @@ class Trainer:
             # Log episode metrics (solo si hay logger)
             if self.logger:
                 self.logger.log_episode_metrics(episode, episode_return, profit_pct, episode_length, trade_metrics, env_metrics)
+                
+                # Log agent distributions and buffer statistics for health monitoring
+                if ep_actions_raw and ep_q_values:
+                    self.logger.log_agent_distributions(episode, ep_actions_raw, ep_q_values)
+                
+                self.logger.log_buffer_stats(episode, len(self.replay_buffer), self.replay_buffer.capacity)
             
             # Log agent-specific metrics if we have losses
             if ep_actor_losses:
@@ -291,7 +302,7 @@ class Trainer:
                 avg_return = np.mean(episode_returns[-10:])
                 avg_profit = np.mean(episode_profits[-10:])
                 buffer_size = len(self.replay_buffer)
-                learning_status = "LEARNING" if buffer_size >= self.config['min_buffer_for_learning'] else f"COLLECTING ({buffer_size}/{self.config['min_buffer_for_learning']})"
+                learning_status = STATUS_LEARNING if buffer_size >= self.config[KEY_MIN_BUFFER_FOR_LEARNING] else f"{STATUS_COLLECTING} ({buffer_size}/{self.config[KEY_MIN_BUFFER_FOR_LEARNING]})"
                 
                 self.logger_console.info(f"Episodio {episode + 1}/{total_episodes} | "
                            f"Return: {episode_return:.2f} | "
@@ -308,11 +319,11 @@ class Trainer:
                                f"Critic Loss: {critic_losses[-1]:.4f}")
             
             # Periodic evaluation (solo si hay evaluator)
-            if (episode + 1) % self.config['eval_frequency'] == 0 and self.evaluator:
+            if (episode + 1) % self.config[KEY_EVAL_FREQUENCY] == 0 and self.evaluator:
                 self.logger_console.info(f"\n=== Evaluación en episodio {episode + 1} ===")
                 
                 # Use AgentEvaluator for evaluation
-                eval_metrics = self.evaluator.evaluate(self.agent, self.env, self.config['eval_episodes'])
+                eval_metrics, _, _ = self.evaluator.evaluate(self.agent, self.env)
                 
                 self.logger_console.info(f"Métricas de evaluación:")
                 self.logger_console.info(f"  - Return promedio: {eval_metrics['mean_return']:.2f} ± {eval_metrics['std_return']:.2f}")
@@ -328,20 +339,20 @@ class Trainer:
                 if self.logger:
                     self.logger.log_evaluation_metrics(episode + 1, eval_metrics)
                 
-                # Save best model using RunManager (solo si hay run_manager)
-                if self.run_manager and eval_metrics['mean_return'] > self.best_eval_return:
+                # Save best model using CheckpointManager (solo si hay checkpoint_manager)
+                if self.checkpoint_manager and eval_metrics['mean_return'] > self.best_eval_return:
                     self.best_eval_return = eval_metrics['mean_return']
-                    best_model_path = self.run_manager.save_best_model(self.agent)
-                    self.logger_console.info(f"  - Nuevo mejor modelo guardado: {best_model_path}")
+                    self.best_model_path = self.checkpoint_manager.save_best_model(self.training_run_id, self.agent)
+                    self.logger_console.info(f"  - Nuevo mejor modelo guardado: {self.best_model_path}")
             
-            # Periodic checkpoint saving (solo si hay run_manager)
-            if (episode + 1) % self.config['save_frequency'] == 0 and self.run_manager:
-                self.run_manager.save_agent_checkpoint(self.agent, episode + 1)
+            # Periodic checkpoint saving (solo si hay checkpoint_manager)
+            if (episode + 1) % self.config[KEY_SAVE_FREQUENCY] == 0 and self.checkpoint_manager:
+                self.checkpoint_manager.save_agent_checkpoint(self.training_run_id, self.agent, episode + 1)
         
-        # Final save (solo si hay run_manager)
+        # Final save (solo si hay checkpoint_manager)
         final_model_path = None
-        if self.run_manager:
-            final_model_path = self.run_manager.save_final_model(self.agent)
+        if self.checkpoint_manager:
+            final_model_path = self.checkpoint_manager.save_final_model(self.training_run_id, self.agent)
         
         total_time = time.time() - start_time
         self.logger_console.info(f"\n=== Entrenamiento Completado ===")
@@ -351,6 +362,29 @@ class Trainer:
         self.logger_console.info(f"Mejor evaluación: {self.best_eval_return:.2f}")
         if final_model_path:
             self.logger_console.info(f"Modelo final guardado: {final_model_path}")
+        
+        # === SUBIDA DE LOGS DE TENSORBOARD A GCS ===
+        # Verificar si debemos subir logs de TensorBoard a GCS
+        if (self.checkpoint_manager and 
+            self.config.get(KEY_STORAGE_MODE) == STORAGE_MODE_GCP and 
+            self.config.get(KEY_TENSORBOARD_DIR) and 
+            self.training_run_id):
+            
+            # Construir la ruta completa al directorio de logs del run actual
+            local_tensorboard_run_dir = f"{self.config[KEY_TENSORBOARD_DIR]}/{self.training_run_id}"
+            
+            self.logger_console.info(f"\n📤 === SUBIENDO LOGS DE TENSORBOARD A GCS ===")
+            self.logger_console.info(f"Directorio local de logs: {local_tensorboard_run_dir}")
+            
+            try:
+                # Llamar al método de subida del CheckpointManager
+                self.checkpoint_manager.upload_tensorboard_logs(
+                    local_log_dir=local_tensorboard_run_dir,
+                    training_run_id=self.training_run_id
+                )
+                self.logger_console.info("✅ Subida de logs de TensorBoard completada")
+            except Exception as e:
+                self.logger_console.error(f"❌ Error durante la subida de logs de TensorBoard: {e}")
         
         # Close TensorBoard writer (solo si hay logger)
         if self.logger:

@@ -1,6 +1,7 @@
 from binance.client import Client
 from binance.exceptions import BinanceAPIException
 import math
+import time
 from typing import Dict, Any, Tuple, List
 
 from src.entorno.base_portfolio import BasePortfolio, TipoOperacion
@@ -64,6 +65,22 @@ class LivePortfolio(BasePortfolio):
         }
         print(f"✅ Estado sincronizado. Balance inicial: {self._balance:.2f} USDT")
 
+    def sync_balance(self):
+        """
+        Sincroniza el balance local con el balance real de la cuenta de Binance.
+        """
+        try:
+            account_balance_info = self.client.futures_account_balance()
+            for asset in account_balance_info:
+                if asset['asset'] == 'USDT':
+                    balance_remoto = float(asset['balance'])
+                    if abs(self._balance - balance_remoto) > 0.01: # Comprobar si hay una diferencia significativa
+                        print(f"🔄 Sincronizando balance. Local: {self._balance:.2f}, Remoto: {balance_remoto:.2f}. Diferencia: {balance_remoto - self._balance:.2f}")
+                        self._balance = balance_remoto
+                    return
+        except BinanceAPIException as e:
+            print(f"⚠️ Error de API al sincronizar balance: {e}. Se usará el balance local.")
+
     def execute_order(self, intencion: str, magnitud: float, precio: float) -> Tuple[bool, float]:
         posicion_actual_tipo = self._current_position['tipo']
 
@@ -118,19 +135,12 @@ class LivePortfolio(BasePortfolio):
             print("No hay posición actual para cerrar")
             return None, 0.0
         
-        entry_price = self._current_position['entry_price']
         quantity = self._current_position['quantity']
+        order_side = 'SELL' if self._current_position['tipo'] == TipoOperacion.LARGO else 'BUY'
         
-        if self._current_position['tipo'] == TipoOperacion.LARGO:
-            pnl_neto = (price - entry_price) * quantity
-            order_side = 'SELL'
-        else:
-            pnl_neto = (entry_price - price) * quantity
-            order_side = 'BUY'
+        print(f"Cerrando posición {self._current_position['tipo'].name} de {quantity} {self.symbol} a precio de mercado...")
         
-        print(f"Cerrando posición {self._current_position['tipo'].name} de {quantity} {self.symbol}...")
-        print(f"PnL calculado: {pnl_neto:.4f} USDT (Entrada: {entry_price:.4f}, Salida: {price:.4f})")
-        
+        # 1. Ejecutar la orden de cierre
         order_response = self.client.futures_create_order(
             symbol=self.symbol,
             side=order_side,
@@ -138,9 +148,33 @@ class LivePortfolio(BasePortfolio):
             quantity=quantity
         )
         
+        # 2. Esperar un momento para que la API procese el trade
+        time.sleep(0.1)
+        
+        # 3. Consultar el último trade para obtener el PnL real
+        try:
+            last_trade = self.client.futures_get_user_trades(symbol=self.symbol, limit=1)[0]
+            pnl_real = float(last_trade.get('realizedPnl', 0.0))
+            
+            if pnl_real == 0.0:
+                print("Advertencia: El PnL real reportado por la API es 0.0. Verifique el historial de trades.")
+
+        except (BinanceAPIException, IndexError) as e:
+            print(f"Error crítico: No se pudo obtener el PnL real del último trade: {e}")
+            print("El balance puede estar desincronizado. Se recomienda intervención manual.")
+            pnl_real = 0.0 # Asumir 0 para evitar fallos, pero loggear el error es crucial
+
+        print(f"PnL Real (API): {pnl_real:.4f} USDT")
+
+        # 4. Actualizar el balance local con el PnL y registrarlo
+        balance_anterior = self._balance
+        self._balance += pnl_real
+        print(f"Balance actualizado: {balance_anterior:.2f} -> {self._balance:.2f} USDT")
+
+        # 5. Actualizar el historial y el estado del portfolio
         self._historial_trades.append({
             'tipo': self._current_position['tipo'].name,
-            'pnl_abs': pnl_neto
+            'pnl_abs': pnl_real 
         })
 
         self._current_position = {
@@ -151,8 +185,8 @@ class LivePortfolio(BasePortfolio):
             'pasos_en_posicion': 0
         }
         
-        print(f"✅ Posición cerrada exitosamente con orden {order_side} de {quantity} {self.symbol} a precio ~{price}")
-        return order_response, pnl_neto
+        print(f"✅ Posición cerrada exitosamente. Orden: {order_side} {quantity} {self.symbol}")
+        return order_response, pnl_real
 
     def update_state(self, precio_actual: float):
         # En modo live, el estado (como PnL) se obtiene directamente de la API
