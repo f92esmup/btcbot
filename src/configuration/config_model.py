@@ -190,6 +190,9 @@ class SACHyperparametersConfig(BaseModel):
     initial_log_alpha: float = Field(0.0, description="Log alpha inicial")
     log_std_min: int = Field(-20, description="Límite inferior para log_std")
     log_std_max: int = Field(2, description="Límite superior para log_std")
+    # Prioritized Experience Replay parameters
+    per_alpha: float = Field(0.6, description="Priority exponent for Prioritized Experience Replay")
+    per_beta: float = Field(0.4, description="Importance sampling exponent for Prioritized Experience Replay")
 
 
 class TransformerConfig(BaseModel):

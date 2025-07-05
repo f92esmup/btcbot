@@ -163,6 +163,9 @@ agent:
     initial_log_alpha: 0.0
     log_std_min: -20  # Límite inferior para log_std
     log_std_max: 2    # Límite superior para log_std
+    # Prioritized Experience Replay parameters
+    per_alpha: 0.6    # Priority exponent (0 = uniform random, 1 = fully prioritized)
+    per_beta: 0.4     # Importance sampling exponent (0 = no correction, 1 = full correction)
 
   # --- Parámetros de la Arquitectura del Transformer ---
   transformer:

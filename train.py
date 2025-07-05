@@ -763,7 +763,10 @@ def _setup_trainer(is_chief: bool, agent, env, local_config, args, seed: str, st
         'storage_mode': storage_mode,
         'run_id': run_id,
         'tensorboard_dir': tensorboard_base_dir if is_chief else None,
-        'gcs_bucket_name': gcp_config.get('storage', {}).get('bucket_name') if storage_mode == STORAGE_MODE_GCP else None
+        'gcs_bucket_name': gcp_config.get('storage', {}).get('bucket_name') if storage_mode == STORAGE_MODE_GCP else None,
+        # Prioritized Experience Replay parameters
+        'per_alpha': local_config.agent.hiperparametros_sac.per_alpha,
+        'per_beta': local_config.agent.hiperparametros_sac.per_beta
     }
     
     # Create trainer (all processes) with conditional instantiation

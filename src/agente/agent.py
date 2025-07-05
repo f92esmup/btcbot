@@ -331,7 +331,8 @@ class TransformerSACAgent:
         next_market_data: torch.Tensor,
         next_portfolio_data: torch.Tensor,
         terminated: torch.Tensor,
-        truncated: torch.Tensor
+        truncated: torch.Tensor,
+        is_weights: Optional[torch.Tensor] = None
     ) -> Optional[Dict[str, float]]:
         """
         Realiza un paso de aprendizaje SAC.
@@ -345,9 +346,10 @@ class TransformerSACAgent:
             next_portfolio_data: Tensor con siguientes datos de portfolio del batch
             terminated: Tensor con flags de terminación del batch
             truncated: Tensor con flags de truncamiento del batch
+            is_weights: Tensor opcional con pesos de importancia para Prioritized Experience Replay
             
         Returns:
-            Diccionario con métricas de entrenamiento
+            Diccionario con métricas de entrenamiento, incluyendo TD errors si is_weights es proporcionado
         """
         self.total_steps += 1
         
@@ -387,8 +389,21 @@ class TransformerSACAgent:
             current_q1 = critic_1_model(market_data, portfolio_data, actions)
             current_q2 = critic_2_model(market_data, portfolio_data, actions)
             
-            critic_1_loss = F.mse_loss(current_q1, q_targets)
-            critic_2_loss = F.mse_loss(current_q2, q_targets)
+            # Calculate raw losses without reduction for priority updates
+            critic_1_loss_raw = F.mse_loss(current_q1, q_targets, reduction='none')
+            critic_2_loss_raw = F.mse_loss(current_q2, q_targets, reduction='none')
+            
+            # Apply importance sampling weights if provided (for Prioritized Experience Replay)
+            if is_weights is not None:
+                critic_1_loss = (is_weights.unsqueeze(1) * critic_1_loss_raw).mean()
+                critic_2_loss = (is_weights.unsqueeze(1) * critic_2_loss_raw).mean()
+                
+                # Calculate TD errors for priority updates (use critic 1 for consistency)
+                td_errors = critic_1_loss_raw.squeeze().detach()
+            else:
+                critic_1_loss = critic_1_loss_raw.mean()
+                critic_2_loss = critic_2_loss_raw.mean()
+                td_errors = None
         
         # Optimizar crítico 1
         self.critic_1_optimizer.zero_grad()
@@ -450,6 +465,10 @@ class TransformerSACAgent:
             'mean_log_prob': log_probs.mean().item(),
             'learning_steps': self.learning_steps
         }
+        
+        # Add TD errors for prioritized replay buffer updates if applicable
+        if td_errors is not None:
+            metrics['td_errors'] = td_errors.cpu().numpy()
         
         return metrics
     

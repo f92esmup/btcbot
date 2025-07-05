@@ -5,9 +5,10 @@ Handles the main training loop with dependency injection.
 import time
 import numpy as np
 import torch
+import torch.nn.functional as F
 from pathlib import Path
 from typing import Dict, Any, Optional, Tuple
-from src.agente.replay_buffer import ReplayBuffer
+from src.agente.replay_buffer import ReplayBuffer, PrioritizedReplayBuffer
 from src.agente.observation_parser import parse_observation, parse_observation_batch
 from src.configuration.constants import (
     KEY_SEED, KEY_BATCH_SIZE, KEY_MIN_BUFFER_FOR_LEARNING, 
@@ -55,11 +56,13 @@ class Trainer:
         self.global_trade_counter = 0
         self.learning_started = False
         
-        # Initialize ReplayBuffer
-        self.replay_buffer = ReplayBuffer(
+        # Initialize PrioritizedReplayBuffer
+        self.replay_buffer = PrioritizedReplayBuffer(
             capacity=trainer_config.get(KEY_REPLAY_BUFFER_CAPACITY, trainer_config.get(KEY_REPLAY_BUFFER_SIZE, 100000)),
             observation_shape=env.observation_space.shape,
-            action_dim=env.action_space.shape[0]
+            action_dim=env.action_space.shape[0],
+            alpha=trainer_config.get('per_alpha', 0.6),
+            beta=trainer_config.get('per_beta', 0.4)
         )
 
     def train(self, start_episode: int, total_episodes: int):
@@ -135,8 +138,8 @@ class Trainer:
                         self.logger_console.info(f"🎯 INICIANDO APRENDIZAJE: Buffer alcanzó {len(self.replay_buffer)} experiencias (mínimo: {self.config[KEY_MIN_BUFFER_FOR_LEARNING]})")
                         self.learning_started = True
                     
-                    # Sample batch from replay buffer
-                    batch_obs, batch_actions, batch_rewards, batch_next_obs, batch_terminated, batch_truncated = self.replay_buffer.sample(
+                    # Sample batch from prioritized replay buffer
+                    batch_obs, batch_actions, batch_rewards, batch_next_obs, batch_terminated, batch_truncated, tree_indices, is_weights = self.replay_buffer.sample(
                         self.config[KEY_BATCH_SIZE], self.agent.device
                     )
                     
@@ -148,11 +151,11 @@ class Trainer:
                         batch_next_obs, self.env.config_entorno, self.agent.config, len(self.env.column_names)
                     )
                     
-                    # Learn from batch
+                    # Learn from batch with importance sampling weights
                     losses = self.agent.learn(
                         batch_market_data, batch_portfolio_data, batch_actions,
                         batch_rewards, batch_next_market_data, batch_next_portfolio_data,
-                        batch_terminated, batch_truncated
+                        batch_terminated, batch_truncated, is_weights
                     )
                     
                     if losses:
@@ -160,6 +163,10 @@ class Trainer:
                         ep_critic1_losses.append(losses['critic_1_loss'])
                         ep_critic2_losses.append(losses['critic_2_loss'])
                         ep_alpha_losses.append(losses['alpha_loss'])
+                        
+                        # Update priorities in PrioritizedReplayBuffer if TD errors are available
+                        if 'td_errors' in losses:
+                            self.replay_buffer.update_priorities(tree_indices, losses['td_errors'])
                         
                         # Log step metrics (solo si hay logger)
                         if self.logger:
