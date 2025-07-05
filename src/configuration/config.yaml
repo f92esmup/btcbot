@@ -131,6 +131,7 @@ environment:
   peso_recompensa_paso: 1.0           # Peso para recompensa por paso
   peso_recompensa_cierre: 1.0         # Peso para recompensa al cerrar operación
   peso_recompensa_episodio: 0.0       # Peso para Sortino (0 = no se usa por ahora)
+  reward_strategy: "Sortino"          # Estrategia de recompensa: 'EquityChange' o 'Sortino'
 
   # Condiciones de finalización
   usar_max_pasos_episodio: false      # Si limitar pasos por episodio

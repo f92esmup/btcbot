@@ -170,7 +170,7 @@ class AgentEvaluator:
         # Calcular métricas de trading detalladas
         trades_summary = self._calculate_backtest_summary(
             env.portfolio.historial_trades, 
-            env.historial_equity
+            env.portfolio.historial_equity
         )
         
         # Construir el diccionario de métricas finales con valores por defecto

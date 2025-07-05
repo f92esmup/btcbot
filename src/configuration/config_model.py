@@ -165,6 +165,7 @@ class EnvironmentConfig(BaseModel):
     peso_recompensa_paso: float = Field(..., description="Peso para recompensa por paso")
     peso_recompensa_cierre: float = Field(..., description="Peso para recompensa al cerrar operación")
     peso_recompensa_episodio: float = Field(..., description="Peso para Sortino")
+    reward_strategy: str = Field("EquityChange", description="Estrategia de recompensa a utilizar: 'EquityChange' o 'Sortino'")
     
     # Condiciones de finalización
     usar_max_pasos_episodio: bool = Field(..., description="Si limitar pasos por episodio")

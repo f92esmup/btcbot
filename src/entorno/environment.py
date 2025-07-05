@@ -15,7 +15,7 @@ from sklearn.preprocessing import MinMaxScaler
 
 from .portfolio import Portfolio
 from .base_portfolio import BasePortfolio, TipoOperacion
-from .reward_strategy import BaseRewardStrategy, EquityChangeRewardStrategy
+from .reward_strategy import BaseRewardStrategy, EquityChangeRewardStrategy, SortinoRewardStrategy
 from .portfolio_state import get_normalized_portfolio_features
 # Importar tipo de configuración solo para type hints
 if TYPE_CHECKING:
@@ -80,12 +80,20 @@ class FuturesTradingEnv(gym.Env):
             )
         
         self.portfolio = portfolio
-        self.reward_strategy = reward_strategy or EquityChangeRewardStrategy(env_config)
+        
+        # Dynamic reward strategy selection based on configuration
+        strategy_name = self._get_config_value('reward_strategy', 'EquityChange')
+        if reward_strategy is not None:
+            self.reward_strategy = reward_strategy
+        elif strategy_name == 'Sortino':
+            self.reward_strategy = SortinoRewardStrategy(env_config)
+        else:
+            self.reward_strategy = EquityChangeRewardStrategy(env_config)
+            
         self._setup_spaces()
         
         self.paso_actual = 0
         self.pasos_totales_episodio = 0
-        self.historial_equity = []
 
         logger.info(f"Entorno inicializado con {len(self.data_array)} filas de datos")
 
@@ -121,7 +129,6 @@ class FuturesTradingEnv(gym.Env):
         self._select_start_point(options)
         self.portfolio.reset()
         self.pasos_totales_episodio = 0
-        self.historial_equity = [self.portfolio.equity]
         
         observation = self._get_current_observation()
         info = self._get_step_info(0.0, "RESET", False, 0.0)
@@ -151,6 +158,7 @@ class FuturesTradingEnv(gym.Env):
         )
         
         self.portfolio.update_state(self._get_current_price())
+        self.portfolio.historial_equity.append(self.portfolio.equity)
         self.portfolio.advance_step()
 
         self.paso_actual += 1
@@ -162,8 +170,6 @@ class FuturesTradingEnv(gym.Env):
         observation = self._get_current_observation()
         info = self._get_step_info(action_raw, intencion, trade_ejecutado, pnl_realizado)
 
-        self.historial_equity.append(self.portfolio.equity)
-        
         return observation, reward, terminated, truncated, info
 
     def _interpret_action(self, action_raw: float) -> Tuple[str, float]:
@@ -252,4 +258,4 @@ class FuturesTradingEnv(gym.Env):
 
     def get_equity_series(self) -> pd.Series:
         """Obtiene la serie temporal del equity."""
-        return pd.Series(self.historial_equity)
+        return pd.Series(self.portfolio.historial_equity)
