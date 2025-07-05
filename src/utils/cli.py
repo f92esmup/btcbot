@@ -126,3 +126,35 @@ Ejemplos de uso:
     )
     
     return parser.parse_args()
+
+
+def parse_evaluation_arguments():
+    """Parsea los argumentos específicos para la evaluación de modelos."""
+    parser = argparse.ArgumentParser(
+        description='Script para evaluación de modelos entrenados',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Ejemplos de uso:
+  %(prog)s --run-id training_run_20250703_120000
+  %(prog)s --run-id training_run_20250703_120000 --model-type final_model
+        """
+    )
+    
+    # Argumentos requeridos
+    parser.add_argument(
+        '--run-id',
+        type=str,
+        required=True,
+        help='ID del training_run del modelo que se desea evaluar'
+    )
+    
+    # Argumentos opcionales
+    parser.add_argument(
+        '--model-type',
+        type=str,
+        default='best_model',
+        choices=['best_model', 'final_model'],
+        help='Tipo de modelo a evaluar (default: best_model)'
+    )
+    
+    return parser.parse_args()
