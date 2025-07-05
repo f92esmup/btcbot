@@ -333,7 +333,7 @@ class TransformerSACAgent:
         terminated: torch.Tensor,
         truncated: torch.Tensor,
         is_weights: Optional[torch.Tensor] = None
-    ) -> Optional[Dict[str, float]]:
+    ) -> Optional[Tuple[Dict[str, float], torch.Tensor]]:
         """
         Realiza un paso de aprendizaje SAC.
         
@@ -349,7 +349,9 @@ class TransformerSACAgent:
             is_weights: Tensor opcional con pesos de importancia para Prioritized Experience Replay
             
         Returns:
-            Diccionario con métricas de entrenamiento, incluyendo TD errors si is_weights es proporcionado
+            Tuple containing:
+            - Diccionario con métricas de entrenamiento, incluyendo TD errors si is_weights es proporcionado
+            - Tensor con Q-values del batch para análisis de distribución
         """
         self.total_steps += 1
         
@@ -470,7 +472,7 @@ class TransformerSACAgent:
         if td_errors is not None:
             metrics['td_errors'] = td_errors.cpu().numpy()
         
-        return metrics
+        return metrics, current_q1.detach()
     
     def _soft_update_target_networks(self) -> None:
         """Actualización suave de las redes objetivo."""

@@ -118,6 +118,10 @@ class Trainer:
             ep_critic2_losses = []
             ep_alpha_losses = []
             
+            # Agent distribution tracking for health monitoring
+            ep_actions_raw = []
+            ep_q_values = []
+            
             done = False
             while not done:
                 # Parse observation and select action
@@ -152,17 +156,22 @@ class Trainer:
                     )
                     
                     # Learn from batch with importance sampling weights
-                    losses = self.agent.learn(
+                    result = self.agent.learn(
                         batch_market_data, batch_portfolio_data, batch_actions,
                         batch_rewards, batch_next_market_data, batch_next_portfolio_data,
                         batch_terminated, batch_truncated, is_weights
                     )
                     
-                    if losses:
+                    if result:
+                        losses, q_values = result
                         ep_actor_losses.append(losses['actor_loss'])
                         ep_critic1_losses.append(losses['critic_1_loss'])
                         ep_critic2_losses.append(losses['critic_2_loss'])
                         ep_alpha_losses.append(losses['alpha_loss'])
+                        
+                        # Collect actions and Q-values for distribution analysis
+                        ep_actions_raw.append(batch_actions.detach())
+                        ep_q_values.append(q_values)
                         
                         # Update priorities in PrioritizedReplayBuffer if TD errors are available
                         if 'td_errors' in losses:
@@ -256,6 +265,12 @@ class Trainer:
             # Log episode metrics (solo si hay logger)
             if self.logger:
                 self.logger.log_episode_metrics(episode, episode_return, profit_pct, episode_length, trade_metrics, env_metrics)
+                
+                # Log agent distributions and buffer statistics for health monitoring
+                if ep_actions_raw and ep_q_values:
+                    self.logger.log_agent_distributions(episode, ep_actions_raw, ep_q_values)
+                
+                self.logger.log_buffer_stats(episode, len(self.replay_buffer), self.replay_buffer.capacity)
             
             # Log agent-specific metrics if we have losses
             if ep_actor_losses:

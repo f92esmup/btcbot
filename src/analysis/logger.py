@@ -6,6 +6,7 @@ This module provides the TensorboardLogger class for centralized TensorBoard log
 
 from typing import Dict, Any
 from torch.utils.tensorboard import SummaryWriter
+import torch
 import logging
 import numpy as np
 import os
@@ -62,17 +63,23 @@ class TensorboardLogger:
             losses: Dictionary containing loss values (actor_loss, critic_1_loss, critic_2_loss, alpha_loss)
             alpha: Current alpha value
         """
-        self.writer.add_scalar('Agent/Actor_Loss_step', losses['actor_loss'], step)
-        self.writer.add_scalar('Agent/Critic_1_Loss_step', losses['critic_1_loss'], step)
-        self.writer.add_scalar('Agent/Critic_2_Loss_step', losses['critic_2_loss'], step)
-        self.writer.add_scalar('Agent/Alpha_Loss_step', losses['alpha_loss'], step)
-        self.writer.add_scalar('Agent/Alpha_Value_step', alpha, step)
+        # Group all loss metrics in a single TensorBoard graph for better comparability
+        loss_dict = {
+            'Actor': losses['actor_loss'],
+            'Critic_1': losses['critic_1_loss'],
+            'Critic_2': losses['critic_2_loss'],
+            'Alpha': losses['alpha_loss']
+        }
+        self.writer.add_scalars('Losses/Step', loss_dict, step)
+        
+        # Log alpha value with cleaner tag hierarchy
+        self.writer.add_scalar('Agent/Alpha', alpha, step)
     
     def log_episode_metrics(self, episode: int, episode_return: float, profit_pct: float, 
                           episode_length: int, trade_metrics: Dict[str, Any], 
                           env_metrics: Dict[str, Any]) -> None:
         """
-        Log episode-level metrics.
+        Log episode-level metrics organized under Performance/Train hierarchy.
         
         Args:
             episode: Episode number
@@ -82,34 +89,39 @@ class TensorboardLogger:
             trade_metrics: Dictionary containing trade-related metrics
             env_metrics: Dictionary containing environment-related metrics
         """
-        # Basic episode metrics
-        self.writer.add_scalar('Episode_Metrics/Return', episode_return, episode)
-        self.writer.add_scalar('Episode_Metrics/Profit_Percentage_Initial_Capital', profit_pct, episode)
-        self.writer.add_scalar('Episode_Metrics/Length', episode_length, episode)
+        # Performance/Train/Episode - General episode metrics
+        self.writer.add_scalar('Performance/Train/Episode/Return', episode_return, episode)
+        self.writer.add_scalar('Performance/Train/Episode/Profit_Pct', profit_pct, episode)
+        self.writer.add_scalar('Performance/Train/Episode/Length', episode_length, episode)
         
-        # Trade metrics
+        # Performance/Train/Trading - Trading activity metrics
+        # Group trade counts in a single chart for better comparison
+        trade_counts = {}
         if trade_metrics.get('trades_count') is not None:
-            self.writer.add_scalar('Trading_Episode/Total_Trades_Executed', trade_metrics['trades_count'], episode)
+            trade_counts['Total'] = trade_metrics['trades_count']
         if trade_metrics.get('winning_trades') is not None:
-            self.writer.add_scalar('Trading_Episode/Number_Winning_Trades', trade_metrics['winning_trades'], episode)
+            trade_counts['Winning'] = trade_metrics['winning_trades']
         if trade_metrics.get('long_trades') is not None:
-            self.writer.add_scalar('Trading_Episode/Number_Long_Trades', trade_metrics['long_trades'], episode)
+            trade_counts['Long'] = trade_metrics['long_trades']
         if trade_metrics.get('short_trades') is not None:
-            self.writer.add_scalar('Trading_Episode/Number_Short_Trades', trade_metrics['short_trades'], episode)
-        if trade_metrics.get('total_pnl_realized_abs') is not None:
-            self.writer.add_scalar('Trading_Episode/Total_PNL_Realized_Absolute', trade_metrics['total_pnl_realized_abs'], episode)
-        if trade_metrics.get('total_roe_realizado') is not None:
-            self.writer.add_scalar('Trading_Episode/Total_ROE_Realizado', trade_metrics['total_roe_realizado'], episode)
-        if trade_metrics.get('avg_margin_used') is not None:
-            self.writer.add_scalar('Trading_Episode/Average_Margin_Used_per_Trade', trade_metrics['avg_margin_used'], episode)
+            trade_counts['Short'] = trade_metrics['short_trades']
         
-        # Environment metrics
+        if trade_counts:
+            self.writer.add_scalars('Performance/Train/Trading/Counts', trade_counts, episode)
+        
+        # Individual trading metrics
+        if trade_metrics.get('total_pnl_realized_abs') is not None:
+            self.writer.add_scalar('Performance/Train/Trading/Total_PnL_Realized', trade_metrics['total_pnl_realized_abs'], episode)
+        if trade_metrics.get('total_roe_realizado') is not None:
+            self.writer.add_scalar('Performance/Train/Trading/Total_ROE_Realizado', trade_metrics['total_roe_realizado'], episode)
+        if trade_metrics.get('avg_margin_used') is not None:
+            self.writer.add_scalar('Performance/Train/Trading/Avg_Margin_Used', trade_metrics['avg_margin_used'], episode)
+        
+        # Performance/Train/Portfolio - Portfolio health metrics
         if env_metrics.get('drawdown_episode') is not None:
-            self.writer.add_scalar('Environment_Episode/Drawdown_Percentage', env_metrics['drawdown_episode'] * 100, episode)
+            self.writer.add_scalar('Performance/Train/Portfolio/Drawdown_Pct', env_metrics['drawdown_episode'] * 100, episode)
         if env_metrics.get('final_balance') is not None:
-            self.writer.add_scalar('Environment_Episode/Final_Balance', env_metrics['final_balance'], episode)
-        if env_metrics.get('initial_balance') is not None:
-            self.writer.add_scalar('Environment_Episode/Final_Equity', env_metrics['final_balance'], episode)  # Using final_balance as equity for now
+            self.writer.add_scalar('Performance/Train/Portfolio/Equity', env_metrics['final_balance'], episode)
     
     def log_per_trade_metrics(self, trade_counter: int, trade_data: Dict[str, Any]) -> None:
         """
@@ -133,35 +145,51 @@ class TensorboardLogger:
     
     def log_evaluation_metrics(self, episode: int, eval_metrics: Dict[str, float]) -> None:
         """
-        Log evaluation metrics.
+        Log evaluation metrics organized under Performance/Evaluation hierarchy.
         
         Args:
             episode: Current episode/step number
             eval_metrics: Dictionary containing evaluation metrics
         """
-        # Basic evaluation metrics
-        if 'mean_return' in eval_metrics:
-            self.writer.add_scalar('Evaluation/Mean_Return', eval_metrics['mean_return'], episode)
-        if 'std_return' in eval_metrics:
-            self.writer.add_scalar('Evaluation/Std_Return', eval_metrics['std_return'], episode)
-        if 'mean_profit_pct' in eval_metrics:
-            self.writer.add_scalar('Evaluation/Mean_Profit_Pct', eval_metrics['mean_profit_pct'], episode)
-        if 'std_profit_pct' in eval_metrics:
-            self.writer.add_scalar('Evaluation/Std_Profit_Pct', eval_metrics['std_profit_pct'], episode)
-        if 'mean_episode_length' in eval_metrics:
-            self.writer.add_scalar('Evaluation/Mean_Episode_Length', eval_metrics['mean_episode_length'], episode)
-        if 'win_rate' in eval_metrics:
-            self.writer.add_scalar('Evaluation/Win_Rate', eval_metrics['win_rate'] * 100, episode)
-        if 'total_trades' in eval_metrics:
-            self.writer.add_scalar('Evaluation/Avg_Trades_per_Episode', eval_metrics['total_trades'], episode)
+        # Performance/Evaluation/Key_Metrics - Core performance indicators
+        key_metrics = {}
+        if eval_metrics.get('mean_return') is not None:
+            key_metrics['Mean_Return'] = eval_metrics['mean_return']
+        if eval_metrics.get('sharpe_ratio') is not None:
+            key_metrics['Sharpe_Ratio'] = eval_metrics['sharpe_ratio']
+        if eval_metrics.get('sortino_ratio') is not None:
+            key_metrics['Sortino_Ratio'] = eval_metrics['sortino_ratio']
         
-        # Financial metrics
-        if 'max_drawdown' in eval_metrics:
-            self.writer.add_scalar('Evaluation/Max_Drawdown_Pct', eval_metrics['max_drawdown'] * 100, episode)
-        if 'sharpe_ratio' in eval_metrics:
-            self.writer.add_scalar('Evaluation/Sharpe_Ratio', eval_metrics['sharpe_ratio'], episode)
-        if 'sortino_ratio' in eval_metrics:
-            self.writer.add_scalar('Evaluation/Sortino_Ratio', eval_metrics['sortino_ratio'], episode)
+        if key_metrics:
+            self.writer.add_scalars('Performance/Evaluation/Key_Metrics', key_metrics, episode)
+        
+        # Performance/Evaluation/Risk - Risk assessment metrics
+        risk_metrics = {}
+        if eval_metrics.get('max_drawdown') is not None:
+            risk_metrics['Max_Drawdown_Pct'] = eval_metrics['max_drawdown'] * 100
+        if eval_metrics.get('std_return') is not None:
+            risk_metrics['Volatility'] = eval_metrics['std_return']
+        
+        if risk_metrics:
+            self.writer.add_scalars('Performance/Evaluation/Risk', risk_metrics, episode)
+        
+        # Performance/Evaluation/Trading - Trading activity metrics
+        trading_metrics = {}
+        if eval_metrics.get('win_rate') is not None:
+            trading_metrics['Win_Rate_Pct'] = eval_metrics['win_rate'] * 100
+        if eval_metrics.get('total_trades') is not None:
+            trading_metrics['Avg_Trades'] = eval_metrics['total_trades']
+        
+        if trading_metrics:
+            self.writer.add_scalars('Performance/Evaluation/Trading', trading_metrics, episode)
+        
+        # Additional individual metrics under Performance/Evaluation
+        if eval_metrics.get('mean_profit_pct') is not None:
+            self.writer.add_scalar('Performance/Evaluation/Mean_Profit_Pct', eval_metrics['mean_profit_pct'], episode)
+        if eval_metrics.get('std_profit_pct') is not None:
+            self.writer.add_scalar('Performance/Evaluation/Std_Profit_Pct', eval_metrics['std_profit_pct'], episode)
+        if eval_metrics.get('mean_episode_length') is not None:
+            self.writer.add_scalar('Performance/Evaluation/Mean_Episode_Length', eval_metrics['mean_episode_length'], episode)
     
     def log_evaluation_summary(self, hparams: dict, final_metrics: dict, equity_curve: list, trade_pnl_list: list) -> None:
         """
@@ -276,3 +304,38 @@ class TensorboardLogger:
             self.writer.close()
             self.writer = None
             self.logger.info("TensorBoard writer cerrado y logs enviados.")
+    
+    def log_agent_distributions(self, episode: int, actions: list, q_values: list) -> None:
+        """
+        Log agent behavior distributions (actions and Q-values).
+        
+        Args:
+            episode: Current episode number
+            actions: List of action tensors from the episode
+            q_values: List of Q-value tensors from the episode
+        """
+        if actions:
+            # Concatenate all actions and convert to numpy for histogram
+            all_actions = np.concatenate([action.cpu().numpy().flatten() for action in actions])
+            self.writer.add_histogram('Distributions/Actions', all_actions, episode)
+        
+        if q_values:
+            # Concatenate all Q-values and convert to numpy for histogram
+            all_q_values = np.concatenate([q_val.cpu().numpy().flatten() for q_val in q_values])
+            self.writer.add_histogram('Distributions/Q_Values', all_q_values, episode)
+    
+    def log_buffer_stats(self, episode: int, buffer_size: int, buffer_capacity: int) -> None:
+        """
+        Log replay buffer statistics.
+        
+        Args:
+            episode: Current episode number
+            buffer_size: Current number of experiences in buffer
+            buffer_capacity: Maximum capacity of the buffer
+        """
+        # Calculate fill percentage
+        fill_percentage = (buffer_size / buffer_capacity) * 100 if buffer_capacity > 0 else 0
+        
+        # Log buffer metrics
+        self.writer.add_scalar('Agent/Buffer/Fill_Percentage', fill_percentage, episode)
+        self.writer.add_scalar('Agent/Buffer/Size', buffer_size, episode)
