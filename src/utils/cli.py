@@ -79,6 +79,58 @@ Ejemplos:
         help='Activa el modo de ajuste fino: carga los pesos del agente pero reinicia los optimizadores para aprender con nuevos hiperparámetros (ej: un learning rate más bajo).'
     )
     
+    # Grupo de hiperparámetros del agente (opcional)
+    hyperparams_group = parser.add_argument_group('Hiperparámetros del Agente (Opcional)')
+    
+    hyperparams_group.add_argument(
+        '--actor-learning-rate',
+        type=float,
+        default=None,
+        help='Learning rate del actor. Sobrescribe el valor de config.yaml.'
+    )
+    
+    hyperparams_group.add_argument(
+        '--critic-learning-rate',
+        type=float,
+        default=None,
+        help='Learning rate de los críticos. Sobrescribe el valor de config.yaml.'
+    )
+    
+    hyperparams_group.add_argument(
+        '--alpha-learning-rate',
+        type=float,
+        default=None,
+        help='Learning rate de alpha. Sobrescribe el valor de config.yaml.'
+    )
+    
+    hyperparams_group.add_argument(
+        '--batch-size',
+        type=int,
+        default=None,
+        help='Tamaño del batch. Sobrescribe el valor de config.yaml.'
+    )
+    
+    hyperparams_group.add_argument(
+        '--tau',
+        type=float,
+        default=None,
+        help='Factor de actualización suave (soft update). Sobrescribe el valor de config.yaml.'
+    )
+    
+    hyperparams_group.add_argument(
+        '--per-alpha',
+        type=float,
+        default=None,
+        help='Exponente de prioridad para PER. Sobrescribe el valor de config.yaml.'
+    )
+    
+    hyperparams_group.add_argument(
+        '--per-beta',
+        type=float,
+        default=None,
+        help='Exponente de muestreo por importancia para PER. Sobrescribe el valor de config.yaml.'
+    )
+    
     return parser.parse_args()
 
 
@@ -155,6 +207,92 @@ Ejemplos de uso:
         default='best_model',
         choices=['best_model', 'final_model'],
         help='Tipo de modelo a evaluar (default: best_model)'
+    )
+    
+    return parser.parse_args()
+
+
+def parse_hypertune_arguments():
+    """Parsea los argumentos específicos para trials de Vertex AI Hypertune."""
+    parser = argparse.ArgumentParser(
+        description='Script para trials de optimización de hiperparámetros con Vertex AI Hypertune',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Ejemplos de uso:
+  %(prog)s --train-data-run-id BTCUSDT_1h_bloque_1 --eval-data-run-id BTCUSDT_1h_bloque_2 --episodes 300 --actor-learning-rate 0.0003 --critic-learning-rate 0.0003 --alpha-learning-rate 0.0003 --batch-size 512 --tau 0.005 --per-alpha 0.6 --per-beta 0.4
+        """
+    )
+    
+    # Argumentos requeridos para datos
+    parser.add_argument(
+        '--train-data-run-id',
+        type=str,
+        required=True,
+        help='ID del data_run para el entrenamiento del trial'
+    )
+    
+    parser.add_argument(
+        '--eval-data-run-id',
+        type=str,
+        required=True,
+        help='ID del data_run para la evaluación del trial'
+    )
+    
+    parser.add_argument(
+        '--episodes',
+        type=int,
+        required=True,
+        help='Número de episodios para el entrenamiento del trial'
+    )
+    
+    # Hiperparámetros requeridos (serán proporcionados por Vertex AI)
+    parser.add_argument(
+        '--actor-learning-rate',
+        type=float,
+        required=True,
+        help='Learning rate del actor'
+    )
+    
+    parser.add_argument(
+        '--critic-learning-rate',
+        type=float,
+        required=True,
+        help='Learning rate de los críticos'
+    )
+    
+    parser.add_argument(
+        '--alpha-learning-rate',
+        type=float,
+        required=True,
+        help='Learning rate de alpha'
+    )
+    
+    parser.add_argument(
+        '--batch-size',
+        type=int,
+        required=True,
+        help='Tamaño del batch'
+    )
+    
+    parser.add_argument(
+        '--tau',
+        type=float,
+        required=True,
+        help='Factor de actualización suave (soft update)'
+    )
+    
+    parser.add_argument(
+        '--per-alpha',
+        type=float,
+        required=True,
+        help='Exponente de prioridad para PER'
+    )
+    
+    parser.add_argument(
+        '--per-beta',
+        type=float,
+        required=True,
+        help='Exponente de muestreo por importancia para PER'
     )
     
     return parser.parse_args()

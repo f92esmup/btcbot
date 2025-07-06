@@ -224,6 +224,48 @@ def _load_configuration(operation_mode: str, source_id: str, args) -> Tuple[Any,
         # Variables for existing training
         is_new_training = False
 
+    def _override_config_with_args(config, args):
+        """
+        Override configuration values with command line arguments if provided.
+        
+        Args:
+            config: The configuration object to modify
+            args: Command line arguments
+        """
+        logger = logging.getLogger(__name__)
+        
+        # Check and override agent hyperparameters
+        if args.actor_learning_rate is not None:
+            config.agent.hiperparametros_sac.actor_learning_rate = args.actor_learning_rate
+            logger.info(f"🔧 Sobrescribiendo actor_learning_rate: {args.actor_learning_rate}")
+            
+        if args.critic_learning_rate is not None:
+            config.agent.hiperparametros_sac.critic_learning_rate = args.critic_learning_rate
+            logger.info(f"🔧 Sobrescribiendo critic_learning_rate: {args.critic_learning_rate}")
+            
+        if args.alpha_learning_rate is not None:
+            config.agent.hiperparametros_sac.alpha_learning_rate = args.alpha_learning_rate
+            logger.info(f"🔧 Sobrescribiendo alpha_learning_rate: {args.alpha_learning_rate}")
+            
+        if args.batch_size is not None:
+            config.agent.batch_size = args.batch_size
+            logger.info(f"🔧 Sobrescribiendo batch_size: {args.batch_size}")
+            
+        if args.tau is not None:
+            config.agent.hiperparametros_sac.tau = args.tau
+            logger.info(f"🔧 Sobrescribiendo tau: {args.tau}")
+            
+        if args.per_alpha is not None:
+            config.agent.hiperparametros_sac.per_alpha = args.per_alpha
+            logger.info(f"🔧 Sobrescribiendo per_alpha: {args.per_alpha}")
+            
+        if args.per_beta is not None:
+            config.agent.hiperparametros_sac.per_beta = args.per_beta
+            logger.info(f"🔧 Sobrescribiendo per_beta: {args.per_beta}")
+    
+    # Apply command line argument overrides
+    _override_config_with_args(local_config, args)
+
     return local_config, training_run_lineage, data_run_id, is_new_training
 
 
