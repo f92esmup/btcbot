@@ -23,6 +23,7 @@ def hypertune_step(
     eval_data_run_id: str,
     container_uri: str,
     staging_bucket: str,
+    best_hyperparameters: Output[Artifact],
     service_account: str = None
 ) -> str:
     """
@@ -35,6 +36,7 @@ def hypertune_step(
         eval_data_run_id: ID del data_run para evaluación
         container_uri: URI del contenedor Docker que ejecuta hypertune_trial.py
         staging_bucket: Bucket de GCS para staging
+        best_hyperparameters: Artefacto de salida con los mejores hiperparámetros encontrados
         service_account: Service account para el job (opcional)
         
     Returns:
@@ -122,7 +124,7 @@ def hypertune_step(
     hpt_job.run(
         service_account=service_account,
         sync=True,  # Esperar a que termine
-        timeout=7200  # Timeout de 2 horas
+        timeout=86400  # Timeout de 24 horas
     )
     
     print(f"✅ Optimización completada. Job ID: {hpt_job.name}")
@@ -133,6 +135,26 @@ def hypertune_step(
     print("🏆 Mejores hiperparámetros:")
     for param in best_trial.parameters:
         print(f"  - {param.parameter_id}: {param.value}")
+    
+    # Guardar los mejores hiperparámetros en el artefacto de salida
+    import json
+    
+    # Crear diccionario con los mejores parámetros
+    best_params_dict = {}
+    for param in best_trial.parameters:
+        best_params_dict[param.parameter_id] = param.value
+    
+    # Añadir información adicional del trial
+    best_params_dict["sortino_ratio"] = best_trial.final_measurement.metrics[0].value
+    best_params_dict["trial_id"] = best_trial.id
+    best_params_dict["train_data_run_id"] = train_data_run_id
+    best_params_dict["eval_data_run_id"] = eval_data_run_id
+    
+    # Escribir al archivo del artefacto de salida
+    with open(best_hyperparameters.path, 'w') as f:
+        json.dump(best_params_dict, f, indent=2)
+    
+    print(f"💾 Mejores hiperparámetros guardados en: {best_hyperparameters.path}")
     
     return hpt_job.name
 
@@ -213,6 +235,203 @@ def consolidate_results(
     return json.dumps(final_summary, indent=2)
 
 
+@component(
+    base_image="python:3.11-slim",
+    packages_to_install=["google-cloud-aiplatform"]
+)
+def full_training_step(
+    project_id: str,
+    location: str,
+    train_data_run_id: str,
+    container_uri: str,
+    staging_bucket: str,
+    best_hyperparameters: Input[Artifact],
+    service_account: str = None
+) -> str:
+    """
+    Componente que ejecuta un entrenamiento completo con los mejores hiperparámetros encontrados.
+    
+    Args:
+        project_id: ID del proyecto de Google Cloud
+        location: Región de Vertex AI (ej: us-central1)
+        train_data_run_id: ID del data_run para entrenamiento completo
+        container_uri: URI del contenedor Docker que ejecuta train.py
+        staging_bucket: Bucket de GCS para staging
+        best_hyperparameters: Artefacto de entrada con los mejores hiperparámetros
+        service_account: Service account para el job (opcional)
+        
+    Returns:
+        str: ID único del entrenamiento completo ejecutado
+    """
+    import google.cloud.aiplatform as aip
+    import json
+    import time
+    from datetime import datetime
+    
+    # Inicializar Vertex AI
+    aip.init(project=project_id, location=location, staging_bucket=staging_bucket)
+    
+    # Leer y cargar los mejores hiperparámetros desde el artefacto
+    with open(best_hyperparameters.path, 'r') as f:
+        params_dict = json.load(f)
+    
+    print(f"📂 Hiperparámetros cargados desde artefacto:")
+    for key, value in params_dict.items():
+        print(f"  - {key}: {value}")
+    
+    # Generar un training_run_id único
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    training_run_id = f"full_training_{train_data_run_id}_{timestamp}"
+    
+    # Construir argumentos dinámicamente desde los hiperparámetros
+    training_args = [
+        f"--data-run-id={train_data_run_id}",
+        f"--run-id={training_run_id}",
+        "--episodes=10000",  # Entrenamiento completo con muchos episodios
+    ]
+    
+    # Añadir hiperparámetros optimizados si están disponibles
+    hyperparameter_mappings = {
+        "actor-learning-rate": "--actor-learning-rate",
+        "critic-learning-rate": "--critic-learning-rate", 
+        "alpha-learning-rate": "--alpha-learning-rate",
+        "batch-size": "--batch-size",
+        "tau": "--tau",
+        "per-alpha": "--per-alpha",
+        "per-beta": "--per-beta"
+    }
+    
+    for param_key, arg_name in hyperparameter_mappings.items():
+        if param_key in params_dict:
+            training_args.append(f"{arg_name}={params_dict[param_key]}")
+    
+    print(f"🎯 Argumentos de entrenamiento: {training_args}")
+    
+    # Definir las especificaciones del worker con 4 GPUs (replicando vertexai.yaml)
+    worker_pool_specs = [
+        {
+            "machine_spec": {
+                "machine_type": "n1-standard-8",  # 8 vCPUs, 30 GB RAM - coincide con vertexai.yaml
+                "accelerator_type": "NVIDIA_TESLA_T4",
+                "accelerator_count": 4,  # 4 GPUs para entrenamiento distribuido
+            },
+            "replica_count": 1,
+            "container_spec": {
+                "image_uri": container_uri,
+                "command": ["torchrun", "--nproc_per_node=4", "train.py"],
+                "args": training_args
+            }
+        }
+    ]
+    
+    # Crear el Custom Job para entrenamiento completo
+    custom_job = aip.CustomJob(
+        display_name=f"full-training-{training_run_id}",
+        worker_pool_specs=worker_pool_specs
+    )
+    
+    # Ejecutar el Custom Job de entrenamiento
+    print(f"🚀 Iniciando entrenamiento completo: {training_run_id}")
+    print(f"📊 Usando datos de entrenamiento: {train_data_run_id}")
+    print(f"🔧 Hiperparámetros optimizados desde trial: {params_dict.get('trial_id', 'N/A')}")
+    
+    custom_job.run(
+        service_account=service_account,
+        sync=True,  # Esperar a que termine el entrenamiento
+        timeout=172800  # Timeout de 48 horas para entrenamiento completo
+    )
+    
+    print(f"✅ Entrenamiento completo finalizado: {training_run_id}")
+    print(f"📈 Job ID: {custom_job.name}")
+    
+    return training_run_id
+
+
+@component(
+    base_image="python:3.11-slim",
+    packages_to_install=["google-cloud-aiplatform"]
+)
+def evaluation_step(
+    project_id: str,
+    location: str,
+    container_uri: str,
+    staging_bucket: str,
+    training_run_id_to_eval: str,
+    eval_data_run_id: str,
+    service_account: str = None
+) -> str:
+    """
+    Componente que ejecuta la evaluación de un modelo entrenado.
+    
+    Args:
+        project_id: ID del proyecto de Google Cloud
+        location: Región de Vertex AI (ej: us-central1)
+        container_uri: URI del contenedor Docker que ejecuta evaluate.py
+        staging_bucket: Bucket de GCS para staging
+        training_run_id_to_eval: ID del entrenamiento a evaluar
+        eval_data_run_id: ID del data_run para evaluación
+        service_account: Service account para el job (opcional)
+        
+    Returns:
+        str: ID único de la evaluación ejecutada
+    """
+    import google.cloud.aiplatform as aip
+    from datetime import datetime
+    
+    # Inicializar Vertex AI
+    aip.init(project=project_id, location=location, staging_bucket=staging_bucket)
+    
+    # Generar un evaluation_id único
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    evaluation_id = f"eval_{training_run_id_to_eval}_{timestamp}"
+    
+    # Construir argumentos para la evaluación
+    evaluation_args = [
+        f"--run-id={training_run_id_to_eval}",
+        f"--eval-data-run-id={eval_data_run_id}",
+        f"--evaluation-id={evaluation_id}"
+    ]
+    
+    print(f"🎯 Argumentos de evaluación: {evaluation_args}")
+    
+    # Definir las especificaciones del worker (CPU solamente, no necesita GPU)
+    worker_pool_specs = [
+        {
+            "machine_spec": {
+                "machine_type": "n1-standard-4",  # CPU solamente para evaluación
+            },
+            "replica_count": 1,
+            "container_spec": {
+                "image_uri": container_uri,
+                "command": ["python", "evaluate.py"],
+                "args": evaluation_args
+            }
+        }
+    ]
+    
+    # Crear el Custom Job para evaluación
+    custom_job = aip.CustomJob(
+        display_name=f"evaluation-{evaluation_id}",
+        worker_pool_specs=worker_pool_specs
+    )
+    
+    # Ejecutar el Custom Job de evaluación
+    print(f"🔍 Iniciando evaluación: {evaluation_id}")
+    print(f"🤖 Evaluando modelo: {training_run_id_to_eval}")
+    print(f"📊 Usando datos de evaluación: {eval_data_run_id}")
+    
+    custom_job.run(
+        service_account=service_account,
+        sync=True,  # Esperar a que termine la evaluación
+        timeout=7200  # Timeout de 2 horas para evaluación
+    )
+    
+    print(f"✅ Evaluación completada: {evaluation_id}")
+    print(f"📈 Job ID: {custom_job.name}")
+    
+    return evaluation_id
+
+
 @pipeline(
     name="btcbot-walk-forward-hypertuning",
     description="Pipeline de validación walk-forward con optimización de hiperparámetros para btcbot",
@@ -262,12 +481,42 @@ def walk_forward_pipeline(
             service_account=service_account
         )
         
-        # Establecer dependencia secuencial
+        # Establecer dependencia secuencial para hypertune
         if previous_step is not None:
             hpt_task.after(previous_step)
         
-        # Actualizar para la siguiente iteración
-        previous_step = hpt_task
+        # Crear tarea de entrenamiento completo usando los mejores hiperparámetros
+        train_task = full_training_step(
+            project_id=project_id,
+            location=location,
+            train_data_run_id=train_data_run_id,
+            container_uri=container_uri,
+            staging_bucket=staging_bucket,
+            best_hyperparameters=hpt_task.outputs["best_hyperparameters"],
+            service_account=service_account
+        )
+        
+        # El entrenamiento completo debe ejecutarse después de la optimización
+        train_task.after(hpt_task)
+        
+        # Crear tarea de evaluación del modelo entrenado
+        eval_task = evaluation_step(
+            project_id=project_id,
+            location=location,
+            container_uri=container_uri,
+            staging_bucket=staging_bucket,
+            training_run_id_to_eval=train_task.output,
+            eval_data_run_id=eval_data_run_id,
+            service_account=service_account
+        )
+        
+        # La evaluación debe ejecutarse después del entrenamiento
+        eval_task.after(train_task)
+        
+        # Actualizar para la siguiente iteración: 
+        # El siguiente hpt_task esperará a que el eval_task actual termine,
+        # asegurando secuencia completa: HPT1→TRAIN1→EVAL1→HPT2→TRAIN2→EVAL2→...
+        previous_step = eval_task
         hpt_job_ids.append(hpt_task.output)
     
     # Paso final: consolidar resultados
@@ -277,7 +526,7 @@ def walk_forward_pipeline(
         hpt_job_ids=hpt_job_ids
     )
     
-    # El paso de consolidación debe ejecutarse después del último paso de Hypertune
+    # El paso de consolidación debe ejecutarse después del último paso de evaluación
     consolidate_task.after(previous_step)
     
     print("✅ Pipeline walk-forward definido correctamente")
