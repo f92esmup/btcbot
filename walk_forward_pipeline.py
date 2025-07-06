@@ -64,7 +64,7 @@ def hypertune_step(
                 "args": [
                     f"--train-data-run-id={train_data_run_id}",
                     f"--eval-data-run-id={eval_data_run_id}",
-                    "--episodes=300",  # Entrenamiento corto para trials
+                    "--episodes=20",  # Entrenamiento corto para trials
                     # Los hiperparámetros serán inyectados por Hypertune
                 ]
             }
@@ -114,7 +114,7 @@ def hypertune_step(
         custom_job=custom_job,
         parameter_spec=parameter_spec,
         metric_spec=metric_spec,
-        max_trial_count=50,  # Número máximo de trials
+        max_trial_count=4,  # Número máximo de trials
         parallel_trial_count=4,  # Trials paralelos
         search_algorithm=hpt.SearchAlgorithm.BAYESIAN_OPTIMIZATION
     )
@@ -287,7 +287,9 @@ def full_training_step(
     training_args = [
         f"--data-run-id={train_data_run_id}",
         f"--run-id={training_run_id}",
-        "--episodes=10000",  # Entrenamiento completo con muchos episodios
+        "--episodes=150",  # <-- CAMBIO: Un entrenamiento muy corto para validar.
+        "--eval-frequency=50", # <-- AÑADIDO (Opcional): Evaluar más frecuentemente.
+        "--save-frequency=50"  # <-- AÑADIDO (Opcional): Guardar más frecuentemente.
     ]
     
     # Añadir hiperparámetros optimizados si están disponibles
