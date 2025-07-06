@@ -6,9 +6,6 @@ Orquesta la ejecuci√≥n secuencial de trials de Hypertune simulando una validaci√
 import kfp
 from kfp.v2.dsl import component, pipeline, Input, Output, Artifact
 from kfp.v2 import compiler
-import google.cloud.aiplatform as aip
-from google_cloud_pipeline_components.v1.hyperparameter_tuning_job import HyperparameterTuningJobRunOp
-from google_cloud_pipeline_components.v1.custom_job import CustomJobRunOp
 from typing import List
 
 
