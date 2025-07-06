@@ -87,7 +87,7 @@ def hypertune_step(
             min=1e-5, max=1e-2, scale="log"
         ),
         "batch-size": hpt.DiscreteParameterSpec(
-            values=[256, 512, 1024, 2048, 4096], scale="linear"
+            values=[256, 512, 1024, 2048, 4096, 8192], scale="linear"
         ),
         "tau": hpt.DoubleParameterSpec(
             min=0.001, max=0.01, scale="log"
@@ -113,7 +113,7 @@ def hypertune_step(
         parameter_spec=parameter_spec,
         metric_spec=metric_spec,
         max_trial_count=50,  # Número máximo de trials
-        parallel_trial_count=5,  # Trials paralelos
+        parallel_trial_count=4,  # Trials paralelos
         search_algorithm=hpt.SearchAlgorithm.BAYESIAN_OPTIMIZATION
     )
     
