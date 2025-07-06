@@ -269,6 +269,9 @@ def main():
         
         # === CREAR ENTORNO DE EVALUACIÓN ===
         logger.info("🔍 Creando entorno de evaluación...")
+        logger.info(f"📊 Separación de datos confirmada:")
+        logger.info(f"   - DataFrame de evaluación: {args.eval_data_run_id} ({len(eval_df)} filas)")
+        logger.info(f"   - Scalers del entrenamiento: {args.train_data_run_id} (para consistencia de normalización)")
         
         # La factoría se encarga de crear el ObservationBuilder internamente.
         eval_env = create_trading_environment(

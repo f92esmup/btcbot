@@ -388,8 +388,7 @@ def evaluation_step(
     # Construir argumentos para la evaluación
     evaluation_args = [
         f"--run-id={training_run_id_to_eval}",
-        f"--eval-data-run-id={eval_data_run_id}",
-        f"--evaluation-id={evaluation_id}"
+        f"--eval-data-run-id={eval_data_run_id}"
     ]
     
     print(f"🎯 Argumentos de evaluación: {evaluation_args}")

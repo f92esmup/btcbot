@@ -189,6 +189,7 @@ def parse_evaluation_arguments():
 Ejemplos de uso:
   %(prog)s --run-id training_run_20250703_120000
   %(prog)s --run-id training_run_20250703_120000 --model-type final_model
+  %(prog)s --run-id training_run_20250703_120000 --eval-data-run-id BTCUSDT_1h_20250701_20250730-143022
         """
     )
     
@@ -207,6 +208,15 @@ Ejemplos de uso:
         default='best_model',
         choices=['best_model', 'final_model'],
         help='Tipo de modelo a evaluar (default: best_model)'
+    )
+    
+    parser.add_argument(
+        '--eval-data-run-id',
+        type=str,
+        default=None,
+        help='ID del data_run específico para evaluación. Si no se proporciona, '
+             'se usará el data_run_id original del entrenamiento para mantener '
+             'la consistencia con los scalers de normalización.'
     )
     
     return parser.parse_args()
