@@ -84,7 +84,7 @@ def simple_training_loop(agent, env, episodes: int, min_buffer_size: int, device
     """
     logger.info(f"🚀 Iniciando entrenamiento simplificado para {episodes} episodios")
     
-    # Crear replay buffer
+    # Crear replay buffer con la capacidad correcta desde la configuración del agente
     replay_buffer = PrioritizedReplayBuffer(
         capacity=agent.config.replay_buffer_size,
         observation_shape=env.observation_space.shape,
@@ -136,7 +136,7 @@ def simple_training_loop(agent, env, episodes: int, min_buffer_size: int, device
                     batch_next_obs, env.config_entorno, agent.config, len(env.column_names)
                 )
                 
-                # Aprender del batch
+                # Aprender del batch con los datos parseados correctamente
                 result = agent.learn(
                     batch_market_data, batch_portfolio_data, batch_actions,
                     batch_rewards, batch_next_market_data, batch_next_portfolio_data,
@@ -232,12 +232,18 @@ def main():
         
         # === CREAR ENTORNO DE ENTRENAMIENTO ===
         logger.info("🏗️ Creando entorno de entrenamiento...")
+        
+        # La factoría se encarga de crear el ObservationBuilder internamente.
+        # Preparamos la configuración completa del run como espera la factoría.
+        full_run_config_dict = {'config': base_config.model_dump()}
+
         train_env = create_trading_environment(
             dataframe=train_df,
-            scaler=scaler,
+            logger=logger,
             price_scaler=price_scaler,
+            scaler=scaler,
             env_config=base_config.environment,
-            observation_builder=ObservationBuilder(base_config.environment)
+            run_config=full_run_config_dict
         )
         
         # === CREAR AGENTE ===
@@ -263,12 +269,15 @@ def main():
         
         # === CREAR ENTORNO DE EVALUACIÓN ===
         logger.info("🔍 Creando entorno de evaluación...")
+        
+        # La factoría se encarga de crear el ObservationBuilder internamente.
         eval_env = create_trading_environment(
             dataframe=eval_df,
-            scaler=scaler,  # Usar scaler del entrenamiento
-            price_scaler=price_scaler,  # Usar price_scaler del entrenamiento
+            logger=logger,
+            price_scaler=price_scaler, # Usar el mismo price_scaler del entrenamiento
+            scaler=scaler, # Usar el mismo scaler del entrenamiento
             env_config=base_config.environment,
-            observation_builder=ObservationBuilder(base_config.environment)
+            run_config=full_run_config_dict
         )
         
         # === EVALUACIÓN ===
@@ -282,7 +291,7 @@ def main():
         sortino_ratio = metrics.get('sortino_ratio', 0.0)
         logger.info(f"📈 Sortino Ratio obtenido: {sortino_ratio:.6f}")
         
-        # Reportar a Hypertune
+        # Reportar a Hypertune con los argumentos correctos
         if hpt:
             hpt.report_hyperparameter_tuning_metric(
                 hyperparameter_metric_tag='sortino_ratio',
