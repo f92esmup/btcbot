@@ -25,7 +25,7 @@ from src.data.artifact_manager import ArtifactManager
 from src.entorno.factory import create_trading_environment
 from src.agente.factory import create_sac_agent
 from src.agente.replay_buffer import PrioritizedReplayBuffer
-from src.agente.observation_parser import parse_observation
+from src.agente.observation_parser import parse_observation, parse_observation_batch
 from src.utils.observation_builder import ObservationBuilder
 from src.utils.system import setup_logging, set_seed, setup_device
 from src.utils.cli import parse_hypertune_arguments
@@ -128,7 +128,6 @@ def simple_training_loop(agent, env, episodes: int, min_buffer_size: int, device
                 )
                 
                 # Parse batch observations
-                from src.agente.observation_parser import parse_observation_batch
                 batch_market_data, batch_portfolio_data = parse_observation_batch(
                     batch_obs, env.config_entorno, agent.config, len(env.column_names)
                 )
