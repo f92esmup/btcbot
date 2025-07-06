@@ -131,6 +131,14 @@ Ejemplos:
         help='Exponente de muestreo por importancia para PER. Sobrescribe el valor de config.yaml.'
     )
     
+    # Argumento opcional para ID de ejecución (usado por pipelines de orquestación)
+    parser.add_argument(
+        '--run-id',
+        type=str,
+        default=None,
+        help='ID del training_run a utilizar. Sobrescribe la generación automática de ID. Usado por pipelines de orquestación.'
+    )
+    
     return parser.parse_args()
 
 

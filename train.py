@@ -339,7 +339,11 @@ def _synchronize_run_id(is_chief: bool, is_distributed: bool, is_new_training: b
     
     # Only chief process generates training_run_id, then synchronizes with all processes
     if is_chief:
-        if is_new_training:
+        # Check if run_id was provided via command line argument
+        if args.run_id is not None:
+            run_id = args.run_id
+            logger.info(f"[Proceso Jefe] Usando run_id proporcionado por pipeline: {run_id}")
+        elif is_new_training:
             # Generate new training_run_id for training from data_run
             current_time = datetime.now().strftime('%Y%m%d-%H%M%S')
             run_id = f"training_{symbol}_{interval}_{seed}_{current_time}"
