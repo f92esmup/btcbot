@@ -154,7 +154,7 @@ class FuturesTradingEnv(gym.Env):
         intencion, magnitud_efectiva = self._interpret_action(action_raw)
         
         trade_ejecutado, pnl_realizado = self.portfolio.execute_order(
-            intencion, magnitud_efectiva, self._get_current_price()
+            intencion, magnitud_efectiva, self._get_current_price(), self.paso_actual
         )
         
         self.portfolio.update_state(self._get_current_price())

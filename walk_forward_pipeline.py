@@ -110,8 +110,8 @@ def hypertune_step(
         custom_job=custom_job,
         parameter_spec=parameter_spec,
         metric_spec=metric_spec,
-        max_trial_count=2,  # Número máximo de trials
-        parallel_trial_count=1,  # Ejecución secuencial para optimización bayesiana
+        max_trial_count=4,  # Número máximo de trials
+        parallel_trial_count=2,  # Ejecución paralela para optimización bayesiana
         search_algorithm=None  # Algoritmo bayesiano por defecto de Vertex AI
     )
     

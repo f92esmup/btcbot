@@ -60,7 +60,7 @@ class Portfolio(BasePortfolio):
         self._historial_trades = []
         self.retornos_realizados_episodio = []
 
-    def execute_order(self, intencion: str, magnitud: float, precio: float) -> Tuple[bool, float]:
+    def execute_order(self, intencion: str, magnitud: float, precio: float, paso_cierre: int = None) -> Tuple[bool, float]:
         posicion_actual_tipo = self._posicion_actual['tipo']
 
         if intencion == "MANTENER":
@@ -72,7 +72,7 @@ class Portfolio(BasePortfolio):
         )
 
         if es_operacion_opuesta:
-            pnl_realizado = self._close_position(precio)
+            pnl_realizado = self._close_position(precio, paso_cierre)
             return True, pnl_realizado
 
         if posicion_actual_tipo == TipoOperacion.NEUTRAL and magnitud > 0:
@@ -103,7 +103,7 @@ class Portfolio(BasePortfolio):
         }
         logger.debug(f"Posición {tipo_operacion.name} abierta: {tamaño_activo:.6f} BTC @ {precio_ejecucion:.2f}")
 
-    def _close_position(self, precio_mercado: float) -> float:
+    def _close_position(self, precio_mercado: float, paso_cierre: int = None) -> float:
         if self._posicion_actual['tipo'] == TipoOperacion.NEUTRAL:
             return 0.0
 
@@ -130,7 +130,8 @@ class Portfolio(BasePortfolio):
         roe_operacion = pnl_neto / self._posicion_actual['margen_usado'] if self._posicion_actual['margen_usado'] > 0 else 0.0
         self.retornos_realizados_episodio.append(roe_operacion)
 
-        self._historial_trades.append({
+        # Crear diccionario del trade para el historial
+        trade_dict = {
             'tipo': self._posicion_actual['tipo'].name,
             'precio_entrada': self._posicion_actual['precio_entrada'],
             'precio_salida': precio_ejecucion,
@@ -139,7 +140,13 @@ class Portfolio(BasePortfolio):
             'pnl_abs': pnl_neto,
             'roe': roe_operacion,
             'pasos_duracion': self._posicion_actual['pasos_en_posicion'],
-        })
+        }
+        
+        # Añadir paso_cierre si está disponible
+        if paso_cierre is not None:
+            trade_dict['paso_cierre'] = paso_cierre
+            
+        self._historial_trades.append(trade_dict)
 
         logger.debug(f"Posición cerrada: PNL = {pnl_neto:.2f}, ROE = {roe_operacion:.4f}")
 
