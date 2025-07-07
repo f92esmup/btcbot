@@ -155,3 +155,6 @@ Para borrar completamente el servicio de Cloud Run.
 ```bash
 gcloud beta run worker-pools delete btcbot-live-worker --region=europe-southwest1
 ```
+
+
+Mi forma de trabajar es que dividamos el problema de la implementación en pasos más pequeños. Realizamos un solo paso a la vez y para cada paso define los onjetivos, los módulos afectados y la descrippción exacta pero sin añadir código. Tienes que crear también un pormpt de github copilot para cada paso. Luego yo te muestro los resultados de ese paso y si me das el visto bueno ENTONCES pasamos al siguiente
