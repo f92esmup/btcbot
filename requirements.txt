@@ -7,6 +7,7 @@ pytz>=2023.3
 google-cloud-secret-manager>=2.16.0
 google-cloud-storage>=2.10.0
 google-cloud-aiplatform>=1.36.0  # Nueva dependencia para Vertex AI TensorBoard
+cloudml-hypertune>=0.1.0.dev6  # Dependencia para comunicación con Vertex AI Hypertune
 gcsfs>=2025.5.1
 pandas-ta>=0.3.14b
 scikit-learn>=1.3.0

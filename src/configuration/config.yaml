@@ -150,7 +150,7 @@ agent:
   # --- Parámetros del Replay Buffer y Entrenamiento General ---
   replay_buffer_size: 8000000
   batch_size: 8192
-  min_buffer_for_learning: 1000
+  min_buffer_for_learning: 1
 
   # --- Hiperparámetros Específicos de SAC ---
   hiperparametros_sac:
