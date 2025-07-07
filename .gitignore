@@ -13,3 +13,4 @@ training_runs/
 tensorboard_logs/
 tensorboard_logs_evaluations/
 evaluations/
+walk_forward_pipeline.json

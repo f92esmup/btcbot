@@ -4,12 +4,13 @@ Orquesta la ejecución secuencial de trials de Hypertune simulando una validaci�
 """
 
 import kfp
-from kfp.v2.dsl import component, pipeline, Input, Output, Artifact
-from kfp.v2 import compiler
+from kfp import dsl
+from kfp.dsl import Input, Output, Artifact
+from kfp import compiler
 from typing import List
 
 
-@component(
+@dsl.component(
     base_image="python:3.11-slim",
     packages_to_install=["google-cloud-aiplatform"]
 )
@@ -156,14 +157,16 @@ def hypertune_step(
     return hpt_job.name
 
 
-@component(
+@dsl.component(
     base_image="python:3.11-slim",
     packages_to_install=["google-cloud-aiplatform"]
 )
 def consolidate_results(
     project_id: str,
     location: str,
-    hpt_job_ids: List[str]
+    hpt_job_id_1: str,
+    hpt_job_id_2: str,
+    hpt_job_id_3: str
 ) -> str:
     """
     Componente que consolida los resultados de todos los pasos walk-forward.
@@ -171,7 +174,9 @@ def consolidate_results(
     Args:
         project_id: ID del proyecto de Google Cloud
         location: Región de Vertex AI
-        hpt_job_ids: Lista de IDs de los HyperparameterTuningJobs
+        hpt_job_id_1: ID del primer HyperparameterTuningJob
+        hpt_job_id_2: ID del segundo HyperparameterTuningJob
+        hpt_job_id_3: ID del tercer HyperparameterTuningJob
         
     Returns:
         str: Resumen de los resultados consolidados
@@ -181,6 +186,9 @@ def consolidate_results(
     
     # Inicializar Vertex AI
     aip.init(project=project_id, location=location)
+    
+    # Construir lista de job IDs manualmente
+    hpt_job_ids = [hpt_job_id_1, hpt_job_id_2, hpt_job_id_3]
     
     results_summary = []
     total_avg_sortino = 0.0
@@ -232,7 +240,7 @@ def consolidate_results(
     return json.dumps(final_summary, indent=2)
 
 
-@component(
+@dsl.component(
     base_image="python:3.11-slim",
     packages_to_install=["google-cloud-aiplatform"]
 )
@@ -346,7 +354,7 @@ def full_training_step(
     return training_run_id
 
 
-@component(
+@dsl.component(
     base_image="python:3.11-slim",
     packages_to_install=["google-cloud-aiplatform"]
 )
@@ -430,7 +438,7 @@ def evaluation_step(
     return evaluation_id
 
 
-@pipeline(
+@dsl.pipeline(
     name="btcbot-walk-forward-hypertuning",
     description="Pipeline de validación walk-forward con optimización de hiperparámetros para btcbot",
     pipeline_root="gs://btcbot-training-2762/pipeline_runs"
@@ -438,7 +446,10 @@ def evaluation_step(
 def walk_forward_pipeline(
     project_id: str,
     location: str,
-    data_run_ids: List[str],
+    data_run_id_1: str,
+    data_run_id_2: str,
+    data_run_id_3: str,
+    data_run_id_4: str,
     container_uri: str,
     staging_bucket: str,
     service_account: str = None
@@ -449,83 +460,130 @@ def walk_forward_pipeline(
     Args:
         project_id: ID del proyecto de Google Cloud
         location: Región de Vertex AI (ej: us-central1)
-        data_run_ids: Lista de IDs de data_runs secuenciales para walk-forward
+        data_run_id_1: Primer bloque de datos (entrenamiento paso 1)
+        data_run_id_2: Segundo bloque de datos (evaluación paso 1, entrenamiento paso 2)
+        data_run_id_3: Tercer bloque de datos (evaluación paso 2, entrenamiento paso 3)
+        data_run_id_4: Cuarto bloque de datos (evaluación paso 3)
         container_uri: URI del contenedor Docker con el código del bot
         staging_bucket: Bucket de GCS para staging
         service_account: Service account para los jobs (opcional)
     """
     
-    # Lista para almacenar los IDs de los jobs de Hypertune
-    hpt_job_ids = []
+    # Variable de control para encadenar tareas secuencialmente
     previous_step = None
     
-    print(f"🎯 Iniciando pipeline walk-forward con {len(data_run_ids)} bloques de datos")
+    # Paso 1: data_run_id_1 -> data_run_id_2
+    hpt_task_1 = hypertune_step(
+        project_id=project_id,
+        location=location,
+        train_data_run_id=data_run_id_1,
+        eval_data_run_id=data_run_id_2,
+        container_uri=container_uri,
+        staging_bucket=staging_bucket,
+        service_account=service_account
+    )
     
-    # Iterar sobre los data_run_ids para crear pasos walk-forward
-    for i in range(len(data_run_ids) - 1):
-        train_data_run_id = data_run_ids[i]
-        eval_data_run_id = data_run_ids[i + 1]
-        
-        print(f"📊 Paso {i+1}: Entrenar en {train_data_run_id}, Evaluar en {eval_data_run_id}")
-        
-        # Crear tarea de optimización de hiperparámetros
-        hpt_task = hypertune_step(
-            project_id=project_id,
-            location=location,
-            train_data_run_id=train_data_run_id,
-            eval_data_run_id=eval_data_run_id,
-            container_uri=container_uri,
-            staging_bucket=staging_bucket,
-            service_account=service_account
-        )
-        
-        # Establecer dependencia secuencial para hypertune
-        if previous_step is not None:
-            hpt_task.after(previous_step)
-        
-        # Crear tarea de entrenamiento completo usando los mejores hiperparámetros
-        train_task = full_training_step(
-            project_id=project_id,
-            location=location,
-            train_data_run_id=train_data_run_id,
-            container_uri=container_uri,
-            staging_bucket=staging_bucket,
-            best_hyperparameters=hpt_task.outputs["best_hyperparameters"],
-            service_account=service_account
-        )
-        
-        # El entrenamiento completo debe ejecutarse después de la optimización
-        train_task.after(hpt_task)
-        
-        # Crear tarea de evaluación del modelo entrenado
-        eval_task = evaluation_step(
-            project_id=project_id,
-            location=location,
-            container_uri=container_uri,
-            staging_bucket=staging_bucket,
-            training_run_id_to_eval=train_task.output,
-            eval_data_run_id=eval_data_run_id,
-            service_account=service_account
-        )
-        
-        # La evaluación debe ejecutarse después del entrenamiento
-        eval_task.after(train_task)
-        
-        # Actualizar para la siguiente iteración: 
-        # El siguiente hpt_task esperará a que el eval_task actual termine,
-        # asegurando secuencia completa: HPT1→TRAIN1→EVAL1→HPT2→TRAIN2→EVAL2→...
-        previous_step = eval_task
-        hpt_job_ids.append(hpt_task.output)
+    train_task_1 = full_training_step(
+        project_id=project_id,
+        location=location,
+        train_data_run_id=data_run_id_1,
+        container_uri=container_uri,
+        staging_bucket=staging_bucket,
+        best_hyperparameters=hpt_task_1.outputs["best_hyperparameters"],
+        service_account=service_account
+    )
+    train_task_1.after(hpt_task_1)
     
-    # Paso final: consolidar resultados
+    eval_task_1 = evaluation_step(
+        project_id=project_id,
+        location=location,
+        container_uri=container_uri,
+        staging_bucket=staging_bucket,
+        training_run_id_to_eval=train_task_1.output,
+        eval_data_run_id=data_run_id_2,
+        service_account=service_account
+    )
+    eval_task_1.after(train_task_1)
+    
+    # Paso 2: data_run_id_2 -> data_run_id_3
+    hpt_task_2 = hypertune_step(
+        project_id=project_id,
+        location=location,
+        train_data_run_id=data_run_id_2,
+        eval_data_run_id=data_run_id_3,
+        container_uri=container_uri,
+        staging_bucket=staging_bucket,
+        service_account=service_account
+    )
+    hpt_task_2.after(eval_task_1)  # Secuencial: esperar al paso anterior
+    
+    train_task_2 = full_training_step(
+        project_id=project_id,
+        location=location,
+        train_data_run_id=data_run_id_2,
+        container_uri=container_uri,
+        staging_bucket=staging_bucket,
+        best_hyperparameters=hpt_task_2.outputs["best_hyperparameters"],
+        service_account=service_account
+    )
+    train_task_2.after(hpt_task_2)
+    
+    eval_task_2 = evaluation_step(
+        project_id=project_id,
+        location=location,
+        container_uri=container_uri,
+        staging_bucket=staging_bucket,
+        training_run_id_to_eval=train_task_2.output,
+        eval_data_run_id=data_run_id_3,
+        service_account=service_account
+    )
+    eval_task_2.after(train_task_2)
+    
+    # Paso 3: data_run_id_3 -> data_run_id_4
+    hpt_task_3 = hypertune_step(
+        project_id=project_id,
+        location=location,
+        train_data_run_id=data_run_id_3,
+        eval_data_run_id=data_run_id_4,
+        container_uri=container_uri,
+        staging_bucket=staging_bucket,
+        service_account=service_account
+    )
+    hpt_task_3.after(eval_task_2)  # Secuencial: esperar al paso anterior
+    
+    train_task_3 = full_training_step(
+        project_id=project_id,
+        location=location,
+        train_data_run_id=data_run_id_3,
+        container_uri=container_uri,
+        staging_bucket=staging_bucket,
+        best_hyperparameters=hpt_task_3.outputs["best_hyperparameters"],
+        service_account=service_account
+    )
+    train_task_3.after(hpt_task_3)
+    
+    eval_task_3 = evaluation_step(
+        project_id=project_id,
+        location=location,
+        container_uri=container_uri,
+        staging_bucket=staging_bucket,
+        training_run_id_to_eval=train_task_3.output,
+        eval_data_run_id=data_run_id_4,
+        service_account=service_account
+    )
+    eval_task_3.after(train_task_3)
+    
+    # Paso final: consolidar resultados de los 3 pasos walk-forward
     consolidate_task = consolidate_results(
         project_id=project_id,
         location=location,
-        hpt_job_ids=hpt_job_ids
+        hpt_job_id_1=hpt_task_1.outputs["Output"],
+        hpt_job_id_2=hpt_task_2.outputs["Output"],
+        hpt_job_id_3=hpt_task_3.outputs["Output"]
     )
     
-    # El paso de consolidación debe ejecutarse después del último paso de evaluación
-    consolidate_task.after(previous_step)
+    # La consolidación debe ejecutarse después del último paso de evaluación
+    consolidate_task.after(eval_task_3)
     
     print("✅ Pipeline walk-forward definido correctamente")
 
@@ -558,8 +616,8 @@ if __name__ == "__main__":
     # Compilar el pipeline
     print("🔧 Compilando pipeline walk-forward...")
     
-    compiler = kfp.v2.compiler.Compiler()
-    compiler.compile(
+    pipeline_compiler = compiler.Compiler()
+    pipeline_compiler.compile(
         pipeline_func=walk_forward_pipeline,
         package_path="walk_forward_pipeline.json"
     )
