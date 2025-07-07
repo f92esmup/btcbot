@@ -11,8 +11,7 @@ from typing import List
 
 
 @dsl.component(
-    base_image="python:3.11-slim",
-    packages_to_install=["google-cloud-aiplatform"]
+    packages_to_install=["kfp", "google-cloud-aiplatform"]
 )
 def hypertune_step(
     project_id: str,
@@ -157,8 +156,7 @@ def hypertune_step(
 
 
 @dsl.component(
-    base_image="python:3.11-slim",
-    packages_to_install=["google-cloud-aiplatform"]
+    packages_to_install=["kfp", "google-cloud-aiplatform"]
 )
 def consolidate_results(
     project_id: str,
@@ -240,8 +238,7 @@ def consolidate_results(
 
 
 @dsl.component(
-    base_image="python:3.11-slim",
-    packages_to_install=["google-cloud-aiplatform"]
+    packages_to_install=["kfp", "google-cloud-aiplatform"]
 )
 def full_training_step(
     project_id: str,
@@ -354,8 +351,7 @@ def full_training_step(
 
 
 @dsl.component(
-    base_image="python:3.11-slim",
-    packages_to_install=["google-cloud-aiplatform"]
+    packages_to_install=["kfp", "google-cloud-aiplatform"]
 )
 def evaluation_step(
     project_id: str,
@@ -583,6 +579,21 @@ def walk_forward_pipeline(
     
     # La consolidación debe ejecutarse después del último paso de evaluación
     consolidate_task.after(eval_task_3)
+    
+    # Entrenamiento final de producción usando el último bloque de datos
+    # y los mejores hiperparámetros del último paso walk-forward
+    final_production_training_task = full_training_step(
+        project_id=project_id,
+        location=location,
+        train_data_run_id=data_run_id_4,  # Último bloque de datos para producción
+        container_uri=container_uri,
+        staging_bucket=staging_bucket,
+        best_hyperparameters=hpt_task_3.outputs["best_hyperparameters"],  # Mejores hiperparámetros del último paso
+        service_account=service_account
+    )
+    
+    # El entrenamiento final debe ejecutarse después de la consolidación
+    final_production_training_task.after(consolidate_task)
     
     print("✅ Pipeline walk-forward definido correctamente")
 
