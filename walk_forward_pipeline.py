@@ -110,8 +110,8 @@ def hypertune_step(
         custom_job=custom_job,
         parameter_spec=parameter_spec,
         metric_spec=metric_spec,
-        max_trial_count=4,  # Número máximo de trials
-        parallel_trial_count=2,  # Ejecución paralela para optimización bayesiana
+        max_trial_count=16,  # Número máximo de trials
+        parallel_trial_count=4,  # Ejecución paralela para optimización bayesiana
         search_algorithm=None  # Algoritmo bayesiano por defecto de Vertex AI
     )
     
@@ -288,9 +288,9 @@ def full_training_step(
     training_args = [
         f"--data-run-id={train_data_run_id}",
         f"--run-id={training_run_id}",
-        "--episodes=15",  # <-- CAMBIO: Un entrenamiento muy corto para validar.
-        "--eval-frequency=10", # <-- AÑADIDO (Opcional): Evaluar más frecuentemente.
-        "--save-frequency=10"  # <-- AÑADIDO (Opcional): Guardar más frecuentemente.
+        "--episodes=2000",  # <-- CAMBIO: Un entrenamiento muy corto para validar.
+        "--eval-frequency=100", # <-- AÑADIDO (Opcional): Evaluar más frecuentemente.
+        "--save-frequency=100"  # <-- AÑADIDO (Opcional): Guardar más frecuentemente.
     ]
     
     # Añadir hiperparámetros optimizados si están disponibles
