@@ -61,7 +61,7 @@ def hypertune_step(
                 "args": [
                     f"--train-data-run-id={train_data_run_id}",
                     f"--eval-data-run-id={eval_data_run_id}",
-                    "--episodes=10",  # Entrenamiento corto para trials
+                    "--episodes=100",  # Entrenamiento más largo para trials útiles
                     # Los hiperparámetros serán inyectados por Hypertune
                 ]
             }
@@ -110,7 +110,7 @@ def hypertune_step(
         custom_job=custom_job,
         parameter_spec=parameter_spec,
         metric_spec=metric_spec,
-        max_trial_count=4,  # Número máximo de trials
+        max_trial_count=2,  # Número máximo de trials
         parallel_trial_count=1,  # Ejecución secuencial para optimización bayesiana
         search_algorithm=None  # Algoritmo bayesiano por defecto de Vertex AI
     )
@@ -306,7 +306,12 @@ def full_training_step(
     
     for param_key, arg_name in hyperparameter_mappings.items():
         if param_key in params_dict:
-            training_args.append(f"{arg_name}={params_dict[param_key]}")
+            # Conversión explícita a entero para batch-size
+            if param_key == "batch-size":
+                batch_size_value = int(params_dict[param_key])
+                training_args.append(f"{arg_name}={batch_size_value}")
+            else:
+                training_args.append(f"{arg_name}={params_dict[param_key]}")
     
     print(f"🎯 Argumentos de entrenamiento: {training_args}")
     
@@ -594,6 +599,20 @@ def walk_forward_pipeline(
     
     # El entrenamiento final debe ejecutarse después de la consolidación
     final_production_training_task.after(consolidate_task)
+    
+    # Evaluación final del modelo de producción (in-sample evaluation)
+    final_evaluation_task = evaluation_step(
+        project_id=project_id,
+        location=location,
+        container_uri=container_uri,
+        staging_bucket=staging_bucket,
+        training_run_id_to_eval=final_production_training_task.output,
+        eval_data_run_id=data_run_id_4,  # Mismo bloque de datos usado para entrenamiento final
+        service_account=service_account
+    )
+    
+    # La evaluación final debe ejecutarse después del entrenamiento final
+    final_evaluation_task.after(final_production_training_task)
     
     print("✅ Pipeline walk-forward definido correctamente")
 
