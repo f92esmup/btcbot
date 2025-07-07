@@ -62,7 +62,7 @@ def hypertune_step(
                 "args": [
                     f"--train-data-run-id={train_data_run_id}",
                     f"--eval-data-run-id={eval_data_run_id}",
-                    "--episodes=20",  # Entrenamiento corto para trials
+                    "--episodes=10",  # Entrenamiento corto para trials
                     # Los hiperparámetros serán inyectados por Hypertune
                 ]
             }
@@ -100,11 +100,10 @@ def hypertune_step(
         )
     }
     
-    # Definir la métrica objetivo
-    metric_spec = hpt.MetricSpec(
-        metric_id="sortino_ratio",
-        goal=hpt.MetricSpec.GoalType.MAXIMIZE
-    )
+    # Definir la métrica objetivo (formato moderno de diccionario)
+    metric_spec = {
+        "sortino_ratio": "maximize"
+    }
     
     # Crear el HyperparameterTuningJob
     hpt_job = aip.HyperparameterTuningJob(
@@ -113,8 +112,8 @@ def hypertune_step(
         parameter_spec=parameter_spec,
         metric_spec=metric_spec,
         max_trial_count=4,  # Número máximo de trials
-        parallel_trial_count=4,  # Trials paralelos
-        search_algorithm=hpt.SearchAlgorithm.BAYESIAN_OPTIMIZATION
+        parallel_trial_count=1,  # Ejecución secuencial para optimización bayesiana
+        search_algorithm=None  # Algoritmo bayesiano por defecto de Vertex AI
     )
     
     # Ejecutar el HyperparameterTuningJob
@@ -292,9 +291,9 @@ def full_training_step(
     training_args = [
         f"--data-run-id={train_data_run_id}",
         f"--run-id={training_run_id}",
-        "--episodes=150",  # <-- CAMBIO: Un entrenamiento muy corto para validar.
-        "--eval-frequency=50", # <-- AÑADIDO (Opcional): Evaluar más frecuentemente.
-        "--save-frequency=50"  # <-- AÑADIDO (Opcional): Guardar más frecuentemente.
+        "--episodes=15",  # <-- CAMBIO: Un entrenamiento muy corto para validar.
+        "--eval-frequency=10", # <-- AÑADIDO (Opcional): Evaluar más frecuentemente.
+        "--save-frequency=10"  # <-- AÑADIDO (Opcional): Guardar más frecuentemente.
     ]
     
     # Añadir hiperparámetros optimizados si están disponibles
