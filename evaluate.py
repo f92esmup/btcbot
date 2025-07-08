@@ -131,12 +131,17 @@ def validate_run_id(run_id: str) -> None:
     Raises:
         ValueError: Si el format del run_id no es válido
     """
-    # Validación básica del formato (debe empezar con training_)
-    if not run_id.startswith('training_'):
-        raise ValueError(f"El run_id debe empezar con 'training_', recibido: {run_id}")
+    # Prefijos válidos para diferentes tipos de ejecuciones
+    valid_prefixes = ("training_", "full_training_", "finetune_")
+    
+    # Validación básica del formato (debe empezar con uno de los prefijos válidos)
+    if not run_id.startswith(valid_prefixes):
+        raise ValueError(f"El run_id debe empezar con uno de {valid_prefixes}, recibido: {run_id}")
     
     # Verificar que no esté vacío después del prefijo
-    if len(run_id) <= len('training_'):
+    # Encontrar el prefijo que coincide para validar longitud
+    matching_prefix = next((prefix for prefix in valid_prefixes if run_id.startswith(prefix)), None)
+    if matching_prefix and len(run_id) <= len(matching_prefix):
         raise ValueError(f"El run_id parece estar incompleto: {run_id}")
 
 
@@ -146,6 +151,7 @@ def main():
     args = parse_evaluation_arguments()
     run_id = args.run_id
     model_type = args.model_type
+    eval_data_run_id = args.eval_data_run_id
     
     # Validar formato de run_id
     validate_run_id(run_id)
@@ -191,11 +197,19 @@ def main():
         
         # Extract data_run_id from lineage section
         lineage = config_dict.get('lineage', {})
-        data_run_id = lineage.get('data_run_id')
-        if not data_run_id:
+        training_data_run_id = lineage.get('data_run_id')
+        if not training_data_run_id:
             raise ValueError(f"No se encontró data_run_id en el linaje del run: {run_id}")
         
-        logger.info(f"Data run ID extraído del linaje: {data_run_id}")
+        logger.info(f"Training data run ID extraído del linaje: {training_data_run_id}")
+        
+        # Determine the evaluation data run ID
+        if eval_data_run_id is not None:
+            eval_data_id = eval_data_run_id
+            logger.info(f"Usando data_run_id específico para evaluación: {eval_data_id}")
+        else:
+            eval_data_id = training_data_run_id
+            logger.info(f"Usando el mismo data_run_id del entrenamiento para evaluación: {eval_data_id}")
         
         # Create configuration object from loaded data
         config = AppConfig(**config_dict.get('config', {}))
@@ -214,21 +228,31 @@ def main():
         checkpoint_manager = CheckpointManager(storage_mode=storage_mode, gcp_config=gcp_config)
         
         # 4. Load data artifacts using ArtifactManager
-        logger.info(f"Cargando artefactos del data_run: {data_run_id}")
-        normalized_dataframe, scaler, price_scaler = artifact_manager.load_data_artifacts(data_run_id)
+        # Key point: Scalers ALWAYS come from the training data to maintain consistency
+        logger.info(f"Cargando escaladores del training data_run: {training_data_run_id}")
+        _, training_scaler, training_price_scaler = artifact_manager.load_data_artifacts(training_data_run_id)
         
-        if normalized_dataframe is None or scaler is None or price_scaler is None:
-            raise ValueError(f"No se pudieron cargar los artefactos del data_run: {data_run_id}")
+        if training_scaler is None or training_price_scaler is None:
+            raise ValueError(f"No se pudieron cargar los escaladores del training data_run: {training_data_run_id}")
+        
+        # Load the evaluation DataFrame (may be different from training data)
+        logger.info(f"Cargando DataFrame de evaluación del data_run: {eval_data_id}")
+        eval_dataframe, _, _ = artifact_manager.load_data_artifacts(eval_data_id)
+        
+        if eval_dataframe is None:
+            raise ValueError(f"No se pudo cargar el DataFrame del evaluation data_run: {eval_data_id}")
         
         logger.info("✅ Artefactos de datos cargados exitosamente mediante ArtifactManager")
+        logger.info(f"   - Escaladores cargados desde: {training_data_run_id}")
+        logger.info(f"   - DataFrame de evaluación cargado desde: {eval_data_id}")
         
         # 5. Reconstruir el entorno
         logger.info("Reconstruyendo entorno de trading...")
         env = create_trading_environment(
-            dataframe=normalized_dataframe,
+            dataframe=eval_dataframe,
             logger=logger,
-            price_scaler=price_scaler,
-            scaler=scaler,
+            price_scaler=training_price_scaler,
+            scaler=training_scaler,
             env_config=config.environment,
             run_config=config_dict
         )
@@ -297,7 +321,8 @@ def main():
         # Preparar hiperparámetros para TensorBoard
         hparams = {
             "training_run_id": run_id,
-            "data_run_id": data_run_id,
+            "training_data_run_id": training_data_run_id,
+            "eval_data_run_id": eval_data_id,
             "model_type": model_type,
             "evaluation_id": evaluation_id,
             # Añadir algunos hiperparámetros clave del entrenamiento

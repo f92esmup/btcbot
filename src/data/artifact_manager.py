@@ -429,3 +429,160 @@ class ArtifactManager:
             info['artifacts'][artifact_type] = self.artifact_exists(data_run_id, artifact_type)
         
         return info
+
+    def load_dataframe(self, data_run_id: str):
+        """
+        Load the normalized dataframe from a specific data_run.
+        
+        Args:
+            data_run_id: The ID of the data_run to load the dataframe from
+            
+        Returns:
+            The normalized DataFrame
+        """
+        self.logger.info(f"Loading dataframe from data_run: {data_run_id}")
+        
+        # Get data run prefix using helper
+        prefix = self._get_data_run_prefix(data_run_id)
+        
+        try:
+            if self.storage_mode == "gcp":
+                # GCP mode: load from Google Cloud Storage
+                self.logger.info("Loading dataframe from Google Cloud Storage...")
+                
+                # Use temporary files for downloading
+                import tempfile
+                
+                # Load normalized_dataframe
+                with tempfile.NamedTemporaryFile(suffix='.pkl', delete=False) as temp_file:
+                    temp_dataframe_path = temp_file.name
+                
+                try:
+                    dataframe_blob_name = f"{prefix}/{FILE_DATAFRAME_PKL}"
+                    if self.gcs_utils.download_file_from_gcs(dataframe_blob_name, temp_dataframe_path):
+                        with open(temp_dataframe_path, 'rb') as f:
+                            normalized_dataframe = pickle.load(f)
+                        self.logger.info(f"DataFrame loaded from GCS - Shape: {normalized_dataframe.shape}")
+                        return normalized_dataframe
+                    else:
+                        raise FileNotFoundError(f"Failed to download dataframe from GCS: {dataframe_blob_name}")
+                finally:
+                    os.unlink(temp_dataframe_path)
+                
+            else:
+                # Local mode using prefix
+                data_run_path = Path(prefix)
+                
+                if not data_run_path.exists():
+                    raise FileNotFoundError(f"Data run directory not found: {data_run_path}")
+                
+                # Load normalized_dataframe
+                dataframe_path = data_run_path / FILE_DATAFRAME_PKL
+                if not dataframe_path.exists():
+                    raise FileNotFoundError(f"Normalized dataframe not found: {dataframe_path}")
+                
+                with open(dataframe_path, 'rb') as f:
+                    normalized_dataframe = pickle.load(f)
+                self.logger.info(f"DataFrame loaded from: {dataframe_path} - Shape: {normalized_dataframe.shape}")
+                
+                return normalized_dataframe
+                
+        except Exception as e:
+            self.logger.error(f"Error loading dataframe from data_run {data_run_id}: {str(e)}")
+            raise
+
+    def load_scaler(self, data_run_id: str):
+        """
+        Load the scaler from a specific data_run.
+        
+        Args:
+            data_run_id: The ID of the data_run to load the scaler from
+            
+        Returns:
+            The fitted MinMaxScaler object
+        """
+        self.logger.info(f"Loading scaler from data_run: {data_run_id}")
+        
+        # Get data run prefix using helper
+        prefix = self._get_data_run_prefix(data_run_id)
+        
+        try:
+            if self.storage_mode == "gcp":
+                # GCP mode: load from Google Cloud Storage
+                self.logger.info("Loading scaler from Google Cloud Storage...")
+                
+                # Load scaler
+                scaler_blob_name = f"{prefix}/{FILE_SCALER_PKL}"
+                scaler = self.gcs_utils.load_scaler_from_gcs(scaler_blob_name)
+                self.logger.info("Scaler loaded from GCS")
+                
+                return scaler
+                
+            else:
+                # Local mode using prefix
+                data_run_path = Path(prefix)
+                
+                if not data_run_path.exists():
+                    raise FileNotFoundError(f"Data run directory not found: {data_run_path}")
+                
+                # Load scaler
+                scaler_path = data_run_path / FILE_SCALER_PKL
+                if not scaler_path.exists():
+                    raise FileNotFoundError(f"Scaler not found: {scaler_path}")
+                
+                scaler = joblib.load(scaler_path)
+                self.logger.info(f"Scaler loaded from: {scaler_path}")
+                
+                return scaler
+                
+        except Exception as e:
+            self.logger.error(f"Error loading scaler from data_run {data_run_id}: {str(e)}")
+            raise
+
+    def load_price_scaler(self, data_run_id: str):
+        """
+        Load the price scaler from a specific data_run.
+        
+        Args:
+            data_run_id: The ID of the data_run to load the price scaler from
+            
+        Returns:
+            The fitted price scaler object
+        """
+        self.logger.info(f"Loading price scaler from data_run: {data_run_id}")
+        
+        # Get data run prefix using helper
+        prefix = self._get_data_run_prefix(data_run_id)
+        
+        try:
+            if self.storage_mode == "gcp":
+                # GCP mode: load from Google Cloud Storage
+                self.logger.info("Loading price scaler from Google Cloud Storage...")
+                
+                # Load price_scaler
+                price_scaler_blob_name = f"{prefix}/{FILE_PRICE_SCALER_PKL}"
+                price_scaler = self.gcs_utils.load_price_scaler_from_gcs(price_scaler_blob_name)
+                self.logger.info("Price scaler loaded from GCS")
+                
+                return price_scaler
+                
+            else:
+                # Local mode using prefix
+                data_run_path = Path(prefix)
+                
+                if not data_run_path.exists():
+                    raise FileNotFoundError(f"Data run directory not found: {data_run_path}")
+                
+                # Load price_scaler
+                price_scaler_path = data_run_path / FILE_PRICE_SCALER_PKL
+                if not price_scaler_path.exists():
+                    raise FileNotFoundError(f"Price scaler not found: {price_scaler_path}")
+                
+                price_scaler = joblib.load(price_scaler_path)
+                self.logger.info(f"Price scaler loaded from: {price_scaler_path}")
+                
+                return price_scaler
+                
+        except Exception as e:
+            self.logger.error(f"Error loading price scaler from data_run {data_run_id}: {str(e)}")
+            raise
