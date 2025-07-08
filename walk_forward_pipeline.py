@@ -61,7 +61,7 @@ def hypertune_step(
                 "args": [
                     f"--train-data-run-id={train_data_run_id}",
                     f"--eval-data-run-id={eval_data_run_id}",
-                    "--episodes=2000",  # Entrenamiento más largo para trials útiles
+                    "--episodes=150",  # Entrenamiento más corto para trials útiles
                     # Los hiperparámetros serán inyectados por Hypertune
                 ]
             }
@@ -288,9 +288,9 @@ def full_training_step(
     training_args = [
         f"--data-run-id={train_data_run_id}",
         f"--run-id={training_run_id}",
-        "--episodes=500",  # <-- CAMBIO: Un entrenamiento muy corto para validar.
-        "--eval-frequency=15", # <-- AÑADIDO (Opcional): Evaluar más frecuentemente.
-        "--save-frequency=18"  # <-- AÑADIDO (Opcional): Guardar más frecuentemente.
+        "--episodes=2000",  # <-- CAMBIO: Un entrenamiento muy corto para validar.
+        "--eval-frequency=150", # <-- AÑADIDO (Opcional): Evaluar más frecuentemente.
+        "--save-frequency=150"  # <-- AÑADIDO (Opcional): Guardar más frecuentemente.
     ]
     
     # Añadir hiperparámetros optimizados si están disponibles
