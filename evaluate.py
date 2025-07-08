@@ -131,12 +131,17 @@ def validate_run_id(run_id: str) -> None:
     Raises:
         ValueError: Si el format del run_id no es válido
     """
-    # Validación básica del formato (debe empezar con training_)
-    if not run_id.startswith('training_'):
-        raise ValueError(f"El run_id debe empezar con 'training_', recibido: {run_id}")
+    # Prefijos válidos para diferentes tipos de ejecuciones
+    valid_prefixes = ("training_", "full_training_", "finetune_")
+    
+    # Validación básica del formato (debe empezar con uno de los prefijos válidos)
+    if not run_id.startswith(valid_prefixes):
+        raise ValueError(f"El run_id debe empezar con uno de {valid_prefixes}, recibido: {run_id}")
     
     # Verificar que no esté vacío después del prefijo
-    if len(run_id) <= len('training_'):
+    # Encontrar el prefijo que coincide para validar longitud
+    matching_prefix = next((prefix for prefix in valid_prefixes if run_id.startswith(prefix)), None)
+    if matching_prefix and len(run_id) <= len(matching_prefix):
         raise ValueError(f"El run_id parece estar incompleto: {run_id}")
 
 
