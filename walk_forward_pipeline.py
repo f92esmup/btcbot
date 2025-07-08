@@ -288,9 +288,9 @@ def full_training_step(
     training_args = [
         f"--data-run-id={train_data_run_id}",
         f"--run-id={training_run_id}",
-        "--episodes=500",  # <-- CAMBIO: Un entrenamiento muy corto para validar.
-        "--eval-frequency=15", # <-- AÑADIDO (Opcional): Evaluar más frecuentemente.
-        "--save-frequency=18"  # <-- AÑADIDO (Opcional): Guardar más frecuentemente.
+        "--episodes=150",  # <-- CAMBIO: Un entrenamiento muy corto para validar.
+        "--eval-frequency=50", # <-- AÑADIDO (Opcional): Evaluar más frecuentemente.
+        "--save-frequency=50"  # <-- AÑADIDO (Opcional): Guardar más frecuentemente.
     ]
     
     # Añadir hiperparámetros optimizados si están disponibles

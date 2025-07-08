@@ -117,7 +117,7 @@ environment:
   slippage_porcentaje: 0.00005         # 0.005% sobre precio de ejecución
   
   # Observación
-  ventana_observacion_size: 96         # Número de velas pasadas en la observación (L)
+  ventana_observacion_size: 24         # Número de velas pasadas en la observación (L)
   
   # Normalización de portfolio para observación
   max_pasos_en_posicion: 100          # Máximo esperado de pasos en una posición
