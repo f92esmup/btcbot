@@ -184,7 +184,7 @@ class Indicadores:
         initial_rows = len(self.dataframe)
         
         # Identificar columnas de indicadores (todas excepto OHLCV)
-        ohlcv_columns = ['Open', 'High', 'Low', 'Close', 'Volume']
+        ohlcv_columns = COLUMNS_OHLCV
         indicator_columns = [col for col in self.dataframe.columns if col not in ohlcv_columns]
         
         if not indicator_columns:
