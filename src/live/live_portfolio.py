@@ -349,3 +349,103 @@ class LivePortfolio(BasePortfolio):
                         print(f"Precisión de cantidad para {self.symbol} establecida en: {precision} decimales.")
                         return precision
         raise ValueError(f"No se pudo obtener la precisión de cantidad para {self.symbol}")
+
+    def sync_state(self) -> None:
+        """
+        Sincroniza el estado del portfolio con la información real del exchange.
+        Este método es la fuente de la verdad sobre el estado actual del portfolio.
+        """
+        try:
+            # 1. Sincronizar el balance
+            account_balance_info = self.client.futures_account_balance()
+            for asset in account_balance_info:
+                if asset['asset'] == 'USDT':
+                    self._balance = float(asset['balance'])
+                    break
+
+            # 2. Obtener información de la posición actual
+            positions = self.client.futures_position_information(symbol=self.symbol)
+            if not positions:
+                raise BinanceAPIException("No se pudo obtener información de la posición")
+
+            position = positions[0]  # Solo nos interesa la posición de nuestro símbolo
+            position_amt = float(position['positionAmt'])
+            entry_price = float(position['entryPrice'])
+
+            # 3. Detectar cierre externo de posición
+            if position_amt == 0 and self._current_position['tipo'] != TipoOperacion.NEUTRAL:
+                print("⚠️ Detectado cierre externo de posición (probablemente por stop-loss)")
+                self._handle_external_closure()
+                return
+
+            # 4. Sincronizar estado si hay una posición abierta
+            if position_amt != 0:
+                if abs(position_amt - self._current_position.get('quantity', 0)) > 0.00001 or \
+                   abs(entry_price - self._current_position.get('entry_price', 0)) > 0.01:
+                    print(f"📊 Sincronizando detalles de posición. API: {position_amt} @ {entry_price}")
+                    tipo = TipoOperacion.LARGO if position_amt > 0 else TipoOperacion.CORTO
+                    self._current_position['tipo'] = tipo
+                    self._current_position['quantity'] = abs(position_amt)
+                    self._current_position['entry_price'] = entry_price
+
+        except BinanceAPIException as e:
+            print(f"❌ Error al sincronizar estado con Binance: {e}")
+            raise
+
+    def _handle_external_closure(self) -> None:
+        """
+        Maneja el caso específico de una posición que fue cerrada externamente.
+        """
+        print("🔄 Iniciando proceso de reconciliación por cierre externo...")
+        
+        try:
+            # 1. Obtener información del último trade para PnL
+            trades = self.client.futures_get_user_trades(symbol=self.symbol, limit=1)
+            if not trades:
+                raise BinanceAPIException("No se pudo obtener información del último trade")
+
+            last_trade = trades[0]
+            pnl_realizado = float(last_trade['realizedPnl'])
+            
+            # 2. Registrar el trade en el historial
+            self._historial_trades.append({
+                'tipo': self._current_position['tipo'].name,
+                'pnl_abs': pnl_realizado,
+                'cierre_por': 'STOP_LOSS',
+                'precio_entrada': self._current_position['entry_price'],
+                'precio_salida': float(last_trade['price'])
+            })
+
+            # 3. Notificar por Telegram si está configurado
+            if self.telegram_notifier:
+                self.telegram_notifier.notify_stop_loss_execution(
+                    symbol=self.symbol,
+                    position_type=self._current_position['tipo'].name,
+                    pnl=pnl_realizado,
+                    entry_price=self._current_position['entry_price'],
+                    exit_price=float(last_trade['price'])
+                )
+
+            # 4. Actualizar el balance con el PnL realizado
+            self._balance += pnl_realizado
+            print(f"💰 PnL del cierre externo: {pnl_realizado:.2f} USDT")
+            print(f"📊 Balance actualizado a: {self._balance:.2f} USDT")
+
+            # 5. Registrar el trade en el RiskManager si está disponible
+            if hasattr(self, 'risk_manager'):
+                self.risk_manager.register_trade(pnl_realizado)
+
+            # 6. Resetear la posición actual a NEUTRAL
+            self._current_position = {
+                'tipo': TipoOperacion.NEUTRAL,
+                'quantity': 0.0,
+                'entry_price': 0.0,
+                'margen_usado': 0.0,
+                'pasos_en_posicion': 0
+            }
+            
+            print("✅ Proceso de reconciliación por cierre externo completado")
+
+        except BinanceAPIException as e:
+            print(f"❌ Error durante el manejo del cierre externo: {e}")
+            raise
