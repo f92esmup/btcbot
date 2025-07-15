@@ -250,12 +250,19 @@ class AgentEvaluator:
             trades_df = self.get_trades_dataframe(historial_trades)
             
             if len(trades_df) > 0:
-                # Métricas de trading
+                # Análisis de cierres por stop-loss
+                stop_loss_trades = trades_df['cierre_por'] == 'STOP_LOSS'
+                stop_loss_count = stop_loss_trades.sum()
+                stop_loss_pct = stop_loss_count / len(trades_df) if len(trades_df) > 0 else 0.0
+                
+                # Métricas de trading con análisis de stop-loss
                 summary.update({
                     'total_trades_analysis': len(trades_df),
                     'profitable_trades': trades_df['is_profitable'].sum(),
                     'losing_trades': (~trades_df['is_profitable']).sum(),
                     'win_rate_analysis': trades_df['is_profitable'].mean(),
+                    'stop_loss_closures_count': stop_loss_count,
+                    'stop_loss_closures_pct': stop_loss_pct,
                     
                     # Métricas de ROE
                     'mean_roe': trades_df['roe'].mean(),

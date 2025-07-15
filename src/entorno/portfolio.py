@@ -140,6 +140,7 @@ class Portfolio(BasePortfolio):
             'pnl_abs': pnl_neto,
             'roe': roe_operacion,
             'pasos_duracion': self._posicion_actual['pasos_en_posicion'],
+            'cierre_por': 'AGENT'  # Valor por defecto, se sobrescribe si es por stop-loss
         }
         
         # Añadir paso_cierre si está disponible
@@ -227,3 +228,42 @@ class Portfolio(BasePortfolio):
             pd.Series: Serie temporal del historial de equity
         """
         return pd.Series(self.historial_equity)
+
+    def check_and_execute_stop_loss(self, low_price: float, high_price: float, paso_cierre: int) -> bool:
+        """
+        Verifica y ejecuta el stop-loss si se alcanza el nivel configurado.
+
+        Args:
+            low_price (float): Precio mínimo de la vela actual
+            high_price (float): Precio máximo de la vela actual
+            paso_cierre (int): Paso del episodio en el que se ejecuta el cierre
+
+        Returns:
+            bool: True si se ejecutó el stop-loss, False en caso contrario
+        """
+        if self._posicion_actual['tipo'] == TipoOperacion.NEUTRAL:
+            return False
+        
+        precio_entrada = self._posicion_actual['precio_entrada']
+        stop_loss_pct = self.config.stop_loss_pct
+
+        if self._posicion_actual['tipo'] == TipoOperacion.LARGO:
+            stop_loss_price = precio_entrada * (1 - stop_loss_pct)
+            if low_price <= stop_loss_price:
+                logger.debug(f"Stop-loss ejecutado en LARGO: {stop_loss_price:.2f}")
+                pnl = self._close_position(stop_loss_price, paso_cierre)
+                # Modificar el último trade del historial para indicar que fue por stop-loss
+                if self._historial_trades:
+                    self._historial_trades[-1]['cierre_por'] = 'STOP_LOSS'
+                return True
+        else:  # CORTO
+            stop_loss_price = precio_entrada * (1 + stop_loss_pct)
+            if high_price >= stop_loss_price:
+                logger.debug(f"Stop-loss ejecutado en CORTO: {stop_loss_price:.2f}")
+                pnl = self._close_position(stop_loss_price, paso_cierre)
+                # Modificar el último trade del historial para indicar que fue por stop-loss
+                if self._historial_trades:
+                    self._historial_trades[-1]['cierre_por'] = 'STOP_LOSS'
+                return True
+        
+        return False

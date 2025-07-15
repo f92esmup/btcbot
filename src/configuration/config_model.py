@@ -145,6 +145,7 @@ class EnvironmentConfig(BaseModel):
     porcentaje_max_inversion_por_trade: float = Field(..., description="Porcentaje máximo del balance como margen por trade")
     max_drawdown_configurado_cuenta: float = Field(..., description="Drawdown máximo antes de terminated")
     max_consecutive_losses: int = Field(..., description="Número máximo de pérdidas consecutivas permitidas")
+    stop_loss_pct: float = Field(..., description="Porcentaje de pérdida sobre el precio de entrada para stop-loss")
     
     # Costos de trading
     comision_taker_porcentaje: float = Field(..., description="Comisión taker sobre valor nocional")

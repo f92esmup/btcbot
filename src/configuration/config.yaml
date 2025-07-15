@@ -111,6 +111,7 @@ environment:
   porcentaje_max_inversion_por_trade: 0.05  # 5% del balance como margen por trade
   max_drawdown_configurado_cuenta: 0.5      # 50% de drawdown máximo antes de terminated
   max_consecutive_losses: 5  # Número máximo de pérdidas consecutivas permitidas
+  stop_loss_pct: 0.02       # Stop-loss al 2% de pérdida sobre el precio de entrada
   
   # Costos de trading
   comision_taker_porcentaje: 0.0004    # 0.04% sobre valor nocional

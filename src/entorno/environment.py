@@ -67,9 +67,20 @@ class FuturesTradingEnv(gym.Env):
         if 'Close' not in self.column_names:
             raise ValueError("Columna 'Close' no encontrada en los datos")
         
+        # Obtener índices de columnas OHLC
         close_index = self.column_names.index('Close')
+        high_index = self.column_names.index('High')
+        low_index = self.column_names.index('Low')
+
+        # Desnormalizar precios Close (para precios de ejecución generales)
         close_data_normalized = self.data_array[:, close_index].reshape(-1, 1)
         self.original_prices = self.price_scaler.inverse_transform(close_data_normalized).ravel()
+
+        # Desnormalizar precios High y Low (para verificación de stop-loss)
+        high_data_normalized = self.data_array[:, high_index].reshape(-1, 1)
+        low_data_normalized = self.data_array[:, low_index].reshape(-1, 1)
+        self.original_highs = self.price_scaler.inverse_transform(high_data_normalized).ravel()
+        self.original_lows = self.price_scaler.inverse_transform(low_data_normalized).ravel()
         
         # Acceso compatible con Pydantic y diccionarios
         ventana_observacion_size = self._get_config_value('ventana_observacion_size')
@@ -153,9 +164,21 @@ class FuturesTradingEnv(gym.Env):
 
         intencion, magnitud_efectiva = self._interpret_action(action_raw)
         
-        trade_ejecutado, pnl_realizado = self.portfolio.execute_order(
-            intencion, magnitud_efectiva, self._get_current_price(), self.paso_actual
+        # Primero, verificar si se ha activado el stop-loss en la vela actual
+        stop_loss_ejecutado = self.portfolio.check_and_execute_stop_loss(
+            self.original_lows[self.paso_actual],
+            self.original_highs[self.paso_actual],
+            self.paso_actual
         )
+        
+        # Solo ejecutar la orden del agente si no se activó el stop-loss
+        if not stop_loss_ejecutado:
+            trade_ejecutado, pnl_realizado = self.portfolio.execute_order(
+                intencion, magnitud_efectiva, self._get_current_price(), self.paso_actual
+            )
+        else:
+            # Si el stop-loss se activó, ignorar la orden del agente
+            trade_ejecutado, pnl_realizado = True, 0.0  # El PnL ya fue registrado en el stop-loss
         
         self.portfolio.update_state(self._get_current_price())
         self.portfolio.historial_equity.append(self.portfolio.equity)
