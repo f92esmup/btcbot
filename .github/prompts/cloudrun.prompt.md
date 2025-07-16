@@ -1,3 +1,7 @@
+---
+mode: ask
+---
+
 ## **Manual de Despliegue y Mantenimiento: Bot de Trading en Cloud Run**
 
 **Autor:** Pedro Escudero Murcia & Asistente Gemini
