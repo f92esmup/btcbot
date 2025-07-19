@@ -22,7 +22,7 @@ from src.configuration.constants import (
 )
 
 
-def _download_kline_chunk(start_timestamp: int, symbol: str, interval: str, 
+def _download_kline_chunk(start_timestamp: int, symbol: str, interval: str,  # parallel
                          api_key: Optional[str] = None, api_secret: Optional[str] = None,
                          is_testnet: bool = False, api_call_limit: int = 1000,
                          max_retries: int = 3, retry_delay: float = 1.0) -> List:
@@ -470,7 +470,7 @@ class BinanceDataSource(DataSource):
         self.raw_data = unique_klines
         self.logger.info(f"Descarga paralela completada: {len(self.raw_data)} velas únicas")
     
-    def _get_interval_in_ms(self) -> int:
+    def _get_interval_in_ms(self) -> int: #parallel
         """
         Convierte el intervalo de string a milisegundos.
         
