@@ -52,7 +52,6 @@ class Normalization:
         # Obtener configuración de normalización desde el diccionario inyectado
         self.scaler_type = self.config.dataset.normalization.scaler_type
         self.feature_range = self.config.dataset.normalization.feature_range
-        self.storage_mode = self.config.get('storage_mode', 'local')
 
         # Construir rutas dinámicamente
         self.scaler_path = Path(self.base_path) / self.config.base.artifacts.scaler
@@ -65,7 +64,6 @@ class Normalization:
         self.logger.info(f"Inicializada clase Normalization con {len(self.dataframe)} filas")
         self.logger.info(f"Tipo de scaler: {self.scaler_type}")
         self.logger.info(f"Rango de características: {self.feature_range}")
-        self.logger.info(f"Modo de almacenamiento: {self.storage_mode}")
         self.logger.info(f"Run ID: {self.run_id}")
         self.logger.info(f"Base path: {self.base_path}")
         self.logger.info(f"Ruta del scaler: {self.scaler_path}")
