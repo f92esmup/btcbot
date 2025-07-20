@@ -28,7 +28,8 @@ from src.config import (
     parse_dataset_arguments, 
     setup_logging,
     validate_date_format,
-    load_system_config
+    load_system_config,
+    BinanceDataSource
 )
 
 
@@ -95,7 +96,7 @@ def main() -> None:
     logger.info(f"  • Data Run ID: {data_run_id}")
     
     # Definir ruta base para el data_run
-    data_run_path = system_config.dir.data_runs / data_run_id
+    data_run_path = system_config.base.dir.data_runs / data_run_id
     logger.info(f"  • Ruta de salida: {data_run_path}")
 
     ###### Me lo salto de momento ######
@@ -110,9 +111,10 @@ def main() -> None:
     logger.info("\n🗂️  CONFIGURANDO GESTORES DE ARCHIVOS:")
     
     artifact_manager = ArtifactManager(
-        config=system_config  # Pasar configuración completa
+        config=system_config  # Pasar configuración completa como un objeto pydantic
     )
 
+    ###### Me lo salto de momento ######
    # Guardar metadatos del data_run usando el ArtifactManager
     logger.info("💾 GUARDANDO METADATOS DEL DATASET:")
     metadata_save_success = artifact_manager.save_data_run_metadata(
@@ -125,52 +127,20 @@ def main() -> None:
         sys.exit(1)
     
     logger.info("  ✅ Metadatos guardados exitosamente")
-    
-    # Configurar credenciales de API si es necesario
-    api_key = None
-    api_secret = None
-    
-    if hasattr(system_config, ATTR_GCP) and system_config.gcp:
-        logger.info("\n🔐 CONFIGURANDO CREDENCIALES DE API:")
-        try:
-            secret_manager = SecretManagerUtils(project_id=system_config.gcp.project_id)
-            
-            # Determinar qué credenciales usar basado en el modo de trading
-            is_testnet = system_config.trading.testnet
-            
-            if is_testnet:
-                api_key = secret_manager.get_secret(system_config.gcp.secrets.testnet_binance_api_key_futures)
-                api_secret = secret_manager.get_secret(system_config.gcp.secrets.testnet_binance_api_secret_futures)
-                logger.info("  ✅ Credenciales de testnet cargadas")
-            else:
-                api_key = secret_manager.get_secret(system_config.gcp.secrets.binance_api_key_futures)
-                api_secret = secret_manager.get_secret(system_config.gcp.secrets.binance_api_secret_futures)
-                logger.info("  ✅ Credenciales de producción cargadas")
-                
-        except Exception as e:
-            logger.warning(f"  ⚠️  No se pudieron cargar las credenciales de API: {e}")
-            logger.warning("  ⚠️  Se continuará sin credenciales (puede afectar límites de API)")
-    
+    ###### Me lo salto de momento ######
+
     # Crear y ejecutar el pipeline de datos
     logger.info("\n🚀 EJECUTANDO PIPELINE DE DATOS:")
     logger.info("-" * 40)
     
     try:
-        # Configurar GCSUtils si es necesario
-        gcs_utils = None
-        if storage_mode == STORAGE_MODE_GCP:
-            from src.configuration.gcs_utils import GCSUtils
-            gcs_utils = GCSUtils(gcp_config)
-        
         # Crear fuente de datos de Binance (Dependency Injection)
         binance_data_source = BinanceDataSource(
             symbol=args.symbol,
             interval=args.interval,
             start_date=args.start_date,
-            end_date=args.end_date,
-            config_dict=system_config.model_dump(),
-            api_key=api_key,
-            api_secret=api_secret
+            config=system_config,
+            end_date=args.end_date
         )
         
         # Instanciar el pipeline de datos con la fuente de datos inyectada

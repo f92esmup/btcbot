@@ -3,13 +3,11 @@ ArtifactManager: Specialized manager for data artifact operations.
 Ya veremos que hace este ahora jejeje
 """
 
-import os
-import tempfile
 import logging
 import pickle
 import yaml
 from pathlib import Path
-from typing import Dict, Any, Optional, Tuple
+from typing import Any
 import joblib
 
 from src.config import (
@@ -126,69 +124,3 @@ class ArtifactManager:
         except Exception as e:
             self.logger.error(f"Error cargando artefacto '{artifact_type}' de {artifact_path}: {e}")
             raise
-        
-    def artifact_exists(self, data_run_id: str, artifact_type: str) -> bool:
-        """
-        Check if a specific artifact exists for a data_run.
-        
-        Args:
-            data_run_id: The ID of the data_run to check
-            artifact_type: Type of artifact ('dataframe', 'scaler', 'price_scaler', 'metadata')
-            
-        Returns:
-            bool: True if the artifact exists
-        """
-        prefix = self._get_data_run_prefix(data_run_id)
-        
-        # Map artifact types to filenames
-        artifact_files = {
-            'dataframe': FILE_DATAFRAME_PKL,
-            'scaler': FILE_SCALER_PKL,
-            'price_scaler': FILE_PRICE_SCALER_PKL,
-            'metadata': FILE_DATA_RUN_METADATA_YAML
-        }
-        
-        if artifact_type not in artifact_files:
-            raise ValueError(f"Unknown artifact type: {artifact_type}")
-        
-        filename = artifact_files[artifact_type]
-        
-        try:
-            if self.storage_mode == "gcp":
-                blob_name = f"{prefix}/{filename}"
-                bucket = self.gcs_utils.client.bucket(self.gcs_bucket_name)
-                blob = bucket.blob(blob_name)
-                return blob.exists()
-            else:
-                artifact_path = Path(prefix) / filename
-                return artifact_path.exists()
-                
-        except Exception as e:
-            self.logger.error(f"Error checking if artifact exists for {data_run_id}: {str(e)}")
-            return False
-
-    def get_artifact_info(self, data_run_id: str) -> Dict[str, Any]:
-        """
-        Get information about all artifacts for a data_run.
-        
-        Args:
-            data_run_id: The ID of the data_run to get info for
-            
-        Returns:
-            Dictionary containing artifact information
-        """
-        prefix = self._get_data_run_prefix(data_run_id)
-        
-        info = {
-            'data_run_id': data_run_id,
-            'storage_mode': self.storage_mode,
-            'prefix': prefix,
-            'artifacts': {}
-        }
-        
-        # Check each artifact type
-        artifact_types = ['dataframe', 'scaler', 'price_scaler', 'metadata']
-        for artifact_type in artifact_types:
-            info['artifacts'][artifact_type] = self.artifact_exists(data_run_id, artifact_type)
-        
-        return info
