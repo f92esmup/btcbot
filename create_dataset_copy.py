@@ -22,14 +22,15 @@ from typing import Optional, Dict, Any
 
 # Import del pipeline principal
 from src.Data import (
-    ArtifactManager
+    ArtifactManager,
+    BinanceDataSource,
+    DataPipeline
 )
 from src.config import (
     parse_dataset_arguments, 
     setup_logging,
     validate_date_format,
-    load_system_config,
-    BinanceDataSource
+    load_system_config
 )
 
 
@@ -152,9 +153,8 @@ def main() -> None:
             end_date=args.end_date,
             run_id=data_run_id,
             base_path=data_run_path,
-            full_config=system_config.model_dump(),
-            save_artifacts=True,  # Siempre guardar artefactos en creación de datasets
-            gcs_utils=gcs_utils
+            config=system_config,
+            save_artifacts=True  # Siempre guardar artefactos en creación de datasets
         )
         
         # Ejecutar el pipeline
@@ -185,14 +185,13 @@ def main() -> None:
         logger.info(f"  • Ubicación: {artifact_manager._get_data_run_prefix(data_run_id)}")
         logger.info(f"  • Forma del DataFrame: {normalized_dataframe.shape}")
         logger.info(f"  • Rango temporal: {normalized_dataframe.index.min()} → {normalized_dataframe.index.max()}")
-        logger.info(f"  • Modo de almacenamiento: {storage_mode}")
         
         logger.info("\n📁 ARTEFACTOS GENERADOS:")
-        logger.info(f"  • {FILE_DATA_RUN_METADATA} - Metadatos del dataset")
-        logger.info(f"  • {FILE_NORMALIZED_DATAFRAME} - Datos normalizados")
-        logger.info(f"  • {FILE_SCALER} - Escalador de características")
-        logger.info(f"  • {FILE_PRICE_SCALER} - Escalador de precios")
-        
+        logger.info(f"  • {system_config.base.artifacts.dataset_metadata} - Metadatos del dataset")
+        logger.info(f"  • {system_config.base.artifacts.normalized_dataframe} - Datos normalizados")
+        logger.info(f"  • {system_config.base.artifacts.scaler} - Escalador de características")
+        logger.info(f"  • {system_config.base.artifacts.price_scaler} - Escalador de precios")
+
         logger.info(f"\n✨ El dataset '{data_run_id}' está listo para ser utilizado en entrenamientos!")
         logger.info("=" * 60)
         

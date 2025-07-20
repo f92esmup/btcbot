@@ -7,7 +7,7 @@ basado en diccionarios por un modelo de datos validado y con tipado estático.
 import yaml
 import os
 from dotenv import load_dotenv
-from typing import Dict, List, Optional, Union, Any
+from typing import Dict, List, Optional, Union, Any, Tuple
 from pydantic import BaseModel, Field, SecretStr, validator, root_validator
 from pathlib import Path
 
@@ -41,7 +41,7 @@ class Interpolation(BaseModel):
 class Normalization(BaseModel):
     """Configuración de normalización."""
     scaler_type: str = Field(..., description="Tipo de escalador a utilizar para normalización")
-    feature_range: List[int] = Field(..., min_items=2, max_items=2, description="Rango de características para normalización")
+    feature_range: Tuple[int, int] = Field(..., description="Rango de características para normalización")
 
 class trend(BaseModel):
     """Configuración de la tendencia."""
@@ -51,7 +51,7 @@ class trend(BaseModel):
 class TrendIndicators(BaseModel):
     """Configuración de indicadores de tendencia."""
     ema_20: trend = Field(..., description="Configuración del EMA de 20 períodos")
-    sma_50: trend = Field(..., description="Configuración del SMA de 50 períodos")
+    ema_50: trend = Field(..., description="Configuración del EMA de 50 períodos")
     adx: trend = Field(..., description="Configuración del ADX")
 
 class stochastic(BaseModel):
