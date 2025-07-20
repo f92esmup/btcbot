@@ -8,7 +8,7 @@ import yaml
 import os
 from dotenv import load_dotenv
 from typing import Dict, List, Optional, Union, Any, Tuple
-from pydantic import BaseModel, Field, SecretStr, validator, root_validator
+from pydantic import BaseModel, Field, SecretStr, validator, root_validator, field_validator
 from pathlib import Path
 
 # Configuración para Create_dataset.py
@@ -110,10 +110,10 @@ class Credenciales(BaseModel):
     api_secret: SecretStr = Field(None, description="Secreto de la API para acceso a servicios externos")
     testnet: bool = Field(True, description="Indica si se usa el entorno de prueba (testnet)")
 
-    @validator('api_key', 'api_secret', pre=True, always=True)
-    def not_empty(cls, v, field):
+    @field_validator('api_key', 'api_secret', mode='before')
+    def not_empty(cls, v, info):
         if v is None or (isinstance(v, str) and not v.strip()):
-            raise ValueError(f"La credencial '{field.name}' no puede ser None ni vacía.")
+            raise ValueError(f"La credencial '{info.field_name}' no puede ser None ni vacía.")
         return v
 class AppConfig(BaseModel):
     """Configuración principal de la aplicación."""

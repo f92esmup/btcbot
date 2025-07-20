@@ -18,8 +18,8 @@ from src.config import (
 class DataPipeline:
     """Clase que unifica todo el preprocesamiento de datos."""
     
-    def __init__(self, data_source: DataSource, symbol: str, interval: str, start_date: str, run_id: str, base_path: str,
-                 config: AppConfig, end_date: str = None, save_artifacts: bool = True):
+    def __init__(self, data_source: DataSource, symbol: str, interval: str, start_date: str, end_date: str, run_id: str, base_path: str,
+                 config: AppConfig):
         """
         Inicializa el pipeline de datos.
         
@@ -32,7 +32,6 @@ class DataPipeline:
             base_path (str): Ruta base para guardar los artifacts del entrenamiento
             full_config (Dict): Configuración completa para todas las clases del pipeline
             end_date (str, optional): Fecha de fin en formato YYYY-MM-DD
-            save_artifacts (bool): Si True, guarda artefactos como scalers
         """
         # Inyección de dependencia: fuente de datos
         self.data_source = data_source
@@ -43,7 +42,6 @@ class DataPipeline:
         self.end_date = end_date
         self.run_id = run_id
         self.base_path = base_path
-        self.save_artifacts = save_artifacts
         
         # Store injected configuration and dependencies
         self.config = config
@@ -55,7 +53,6 @@ class DataPipeline:
         self.logger.info(f"Período: desde {start_date}" + (f" hasta {end_date}" if end_date else " hasta ahora"))
         self.logger.info(f"Run ID: {run_id}")
         self.logger.info(f"Base path: {base_path}")
-        self.logger.info(f"Guardar artefactos: {save_artifacts}")
         self.logger.info(f"Configuración inyectada: {len(self.config)} secciones")
 
     def run(self) -> Tuple[pd.DataFrame, object, object]:
@@ -115,13 +112,6 @@ class DataPipeline:
         self.logger.info("  - Artefactos disponibles para guardado por ArtifactManager")
             
         self.logger.info(f"  - Memoria utilizada: {normalized_dataframe.memory_usage(deep=True).sum() / 1024**2:.2f} MB")
-        
-        #############################################################################################
-        # Mostrar información del scaler
-        feature_info = normalization.get_feature_info()
-        self.logger.info(f"  - Características normalizadas: {feature_info['num_features']}")
-        self.logger.info(f"  - Tipo de scaler: {feature_info['scaler_type']}")
-        self.logger.info(f"  - Rango de normalización: {feature_info['feature_range']}")
         
         self.logger.info("=== Pipeline de Datos Completado ===")
         

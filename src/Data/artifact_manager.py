@@ -43,6 +43,30 @@ class ArtifactManager:
 
         self.config = config
 
+    def save_all_artifacts(self, data_run_id: str, normalized_dataframe: Any, scaler: Any, price_scaler: Any, dataset_metadata: Any) -> bool:
+        """
+        Save all artifacts for a given data_run.
+        
+        Args:
+            data_run_id: ID of the data run.
+            normalized_dataframe: Normalized DataFrame to save.
+            scaler: Scaler object to save.
+            price_scaler: Price scaler object to save.
+            dataset_metadata: Metadata dictionary to save.
+        
+        Returns:
+            bool: True if all artifacts were saved successfully.
+        """        
+        # Save each artifact individually
+        success = (
+            self.save_artifact(data_run_id, 'dataframe', normalized_dataframe) and
+            self.save_artifact(data_run_id, 'scaler', scaler) and
+            self.save_artifact(data_run_id, 'price_scaler', price_scaler) and
+            self.save_artifact(data_run_id, 'metadata', dataset_metadata)
+        )
+        
+        return success
+
     def save_artifact(self, data_run_id: str, artifact_type: str, artifact_obj: Any) -> bool:
         """
         Guarda un artefacto individual de un data_run en modo local.

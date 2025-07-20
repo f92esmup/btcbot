@@ -15,10 +15,6 @@ import sys
 sys.path.append('.')
 
 import logging
-from pathlib import Path
-from datetime import datetime
-from typing import Optional, Dict, Any
-
 
 # Import del pipeline principal
 from src.Data import (
@@ -30,32 +26,10 @@ from src.config import (
     parse_dataset_arguments, 
     setup_logging,
     validate_date_format,
-    load_system_config
+    load_system_config,
+    generate_data_run_id,
+    create_data_run_metadata
 )
-
-
-def generate_data_run_id(symbol: str, interval: str, start_date: str, end_date: Optional[str] = None) -> str:
-    """
-    Genera un identificador único para el data_run.
-    
-    Args:
-        symbol: Símbolo del par de trading
-        interval: Intervalo de tiempo
-        start_date: Fecha de inicio
-        end_date: Fecha de fin (opcional)
-        
-    Returns:
-        str: ID único del data_run (ej: BTCUSDT_1m_20250101_20250703-153000)
-    """
-    timestamp = datetime.now().strftime("%H%M%S")
-    date_str = start_date.replace("-", "")
-    
-    if end_date:
-        end_date_str = end_date.replace("-", "")
-        return f"{symbol}_{interval}_{date_str}_{end_date_str}-{timestamp}"
-    else:
-        today_str = datetime.now().strftime("%Y%m%d")
-        return f"{symbol}_{interval}_{date_str}_{today_str}-{timestamp}"
 
 def main() -> None:
     """Función principal del script de creación de datasets."""
@@ -100,13 +74,11 @@ def main() -> None:
     data_run_path = system_config.base.dir.data_runs / data_run_id
     logger.info(f"  • Ruta de salida: {data_run_path}")
 
-    ###### Me lo salto de momento ######
     # Crear metadatos del data_run 
     logger.info("\n📝 CREANDO METADATOS DEL DATASET:")
-   # data_run_metadata = create_data_run_metadata(
-   #     args.symbol, args.interval, args.start_date, args.end_date, data_run_id
-   # )
-    ###### Me lo salto de momento ######
+    data_run_metadata = create_data_run_metadata(
+        args.symbol, args.interval, args.start_date, args.end_date, data_run_id
+    )
 
     # Configurar gestores especializados para el data_run
     logger.info("\n🗂️  CONFIGURANDO GESTORES DE ARCHIVOS:")
@@ -114,21 +86,6 @@ def main() -> None:
     artifact_manager = ArtifactManager(
         config=system_config  # Pasar configuración completa como un objeto pydantic
     )
-
-    ###### Me lo salto de momento ######
-   # Guardar metadatos del data_run usando el ArtifactManager
-    logger.info("💾 GUARDANDO METADATOS DEL DATASET:")
-    metadata_save_success = artifact_manager.save_data_run_metadata(
-        data_run_id=data_run_id,
-        metadata=data_run_metadata
-    )
-    
-    if not metadata_save_success:
-        logger.error("  ❌ Error guardando metadatos del dataset")
-        sys.exit(1)
-    
-    logger.info("  ✅ Metadatos guardados exitosamente")
-    ###### Me lo salto de momento ######
 
     # Crear y ejecutar el pipeline de datos
     logger.info("\n🚀 EJECUTANDO PIPELINE DE DATOS:")
@@ -153,8 +110,7 @@ def main() -> None:
             end_date=args.end_date,
             run_id=data_run_id,
             base_path=data_run_path,
-            config=system_config,
-            save_artifacts=True  # Siempre guardar artefactos en creación de datasets
+            config=system_config
         )
         
         # Ejecutar el pipeline
@@ -162,13 +118,14 @@ def main() -> None:
         
         # Guardar todos los artefactos usando el ArtifactManager
         logger.info("💾 GUARDANDO ARTEFACTOS DEL DATASET:")
-        artifact_save_success = artifact_manager.save_data_artifacts(
+        artifact_save_success = artifact_manager.save_all_artifacts(
             data_run_id=data_run_id,
             normalized_dataframe=normalized_dataframe,
             scaler=scaler,
-            price_scaler=price_scaler
+            price_scaler=price_scaler,
+            dataset_metadata=data_run_metadata
         )
-        
+
         if not artifact_save_success:
             logger.error("  ❌ Error guardando artefactos del dataset")
             sys.exit(1)
@@ -182,7 +139,7 @@ def main() -> None:
         # Mostrar resumen final
         logger.info("📊 RESUMEN DEL DATASET CREADO:")
         logger.info(f"  • Data Run ID: {data_run_id}")
-        logger.info(f"  • Ubicación: {artifact_manager._get_data_run_prefix(data_run_id)}")
+        logger.info(f"  • Ubicación: {data_run_path}")
         logger.info(f"  • Forma del DataFrame: {normalized_dataframe.shape}")
         logger.info(f"  • Rango temporal: {normalized_dataframe.index.min()} → {normalized_dataframe.index.max()}")
         
