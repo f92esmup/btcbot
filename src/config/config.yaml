@@ -4,7 +4,7 @@
 # Configuración para Create_dataset.py
 # ----------------------------------------------------
 
-CreateDataset:
+dataset:
   # Columnas OHLCV a mantener
   columns:
     - "Open"
@@ -79,7 +79,7 @@ CreateDataset:
 
 
 
-BaseConfig:
+base:
   dir:
     data_runs: "data_runs"  # Ruta para almacenar los data runs.
   

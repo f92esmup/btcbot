@@ -53,7 +53,7 @@ class DataPipeline:
         self.logger.info(f"Período: desde {start_date}" + (f" hasta {end_date}" if end_date else " hasta ahora"))
         self.logger.info(f"Run ID: {run_id}")
         self.logger.info(f"Base path: {base_path}")
-        self.logger.info(f"Configuración inyectada: {len(self.config)} secciones")
+        self.logger.info(f"Configuración inyectada: {len(self.config.model_dump())} secciones")
 
     def run(self) -> Tuple[pd.DataFrame, object, object]:
         """

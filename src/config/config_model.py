@@ -80,16 +80,16 @@ class VolumeIndicators(BaseModel):
 
 class CreateDatasetConfig(BaseModel):
     """Configuración para el script Create_dataset.py."""
-    columns: List[str] = Field(..., min_items = 5, description="Columnas OHLCV a mantener del dataframe dado por el cliente de Binance")
+    columns: List[str] = Field(..., min_items=5, description="Columnas OHLCV a mantener del dataframe dado por el cliente de Binance")
     dtypes: Dtypes = Field(..., description="Tipos de datos para optimizar RAM")
     binanceapi: BinaceAPI = Field(..., description="Parámetros de la API de Binance")
     timezone: Timezone = Field(..., description="Configuración de zona horaria")
-    interpolation: Interpolation = Field(..., min_items = 2, description="Configuración de interpolación")
-    normalization: Normalization = Field(..., min_items = 2, description="Configuración de normalización")
-    trend_indicators: TrendIndicators = Field(..., min_items = 3, description="Indicadores de Tendencia")
-    momentum_indicators: MomentumIndicators = Field(..., min_items = 2, description="Indicadores de Momento")
-    volatility_indicators: VolatilityIndicators = Field(..., min_items = 1, description="Indicadores de Volatilidad")
-    volume_indicators: VolumeIndicators = Field(..., min_items = 1, description="Indicadores de Volumen")
+    interpolation: Interpolation = Field(..., description="Configuración de interpolación")
+    normalization: Normalization = Field(..., description="Configuración de normalización")
+    trend_indicators: TrendIndicators = Field(..., description="Indicadores de Tendencia")
+    momentum_indicators: MomentumIndicators = Field(..., description="Indicadores de Momento")
+    volatility_indicators: VolatilityIndicators = Field(..., description="Indicadores de Volatilidad")
+    volume_indicators: VolumeIndicators = Field(..., description="Indicadores de Volumen")
 
 
 class Directories(BaseModel):

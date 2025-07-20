@@ -53,7 +53,7 @@ class BinanceDataSource(DataSource):
                 api_secret=self.config.credenciales.api_secret.get_secret_value(),
                 testnet=self.config.credenciales.testnet
             )   
-                
+            self.logger.info("Cliente de Binance inicializado con API keys")
         except Exception as e:
             self.logger.warning(f"Error inicializando cliente de Binance: {e}")
             self.logger.info("Inicializando cliente sin API keys (solo datos públicos)")
