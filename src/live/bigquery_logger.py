@@ -17,6 +17,7 @@ class BigQueryLogger:
         bigquery.SchemaField("agent_action", "FLOAT", mode="NULLABLE"),
         bigquery.SchemaField("interpreted_intent", "STRING", mode="NULLABLE"),
         bigquery.SchemaField("trade_executed", "BOOLEAN", mode="NULLABLE"),
+        bigquery.SchemaField("close_reason", "STRING", mode="NULLABLE"),  # Nueva columna: AGENT, STOP_LOSS, EMERGENCY_HALT
         bigquery.SchemaField("position_status", "STRING", mode="NULLABLE"),
         bigquery.SchemaField("position_pnl_roe", "FLOAT", mode="NULLABLE"),
         bigquery.SchemaField("position_duration", "INTEGER", mode="NULLABLE"),

@@ -4,21 +4,18 @@ Añade indicadores técnicos al dataframe OHLCV usando la biblioteca pandas-ta.
 """
 
 import pandas as pd
-import numpy as np
 import pandas_ta as ta
-from typing import Optional, Dict
 import logging
 
-from src.configuration.constants import (
-    COLUMN_OPEN, COLUMN_HIGH, COLUMN_LOW, COLUMN_CLOSE, COLUMN_VOLUME,
-    COLUMNS_OHLCV
+from src.config import (
+    AppConfig
 )
 
 
 class Indicadores:
     """Clase para calcular y añadir indicadores técnicos al dataframe."""
     
-    def __init__(self, dataframe: pd.DataFrame, config_dict: Dict = None):
+    def __init__(self, dataframe: pd.DataFrame, config: AppConfig = None):
         """
         Inicializa la clase de indicadores.
         
@@ -30,14 +27,13 @@ class Indicadores:
         self.initial_length = len(self.dataframe)
         
         # Almacenar configuración inyectada
-        self.config = config_dict or {}
+        self.config = config
         
         # Configurar logging
-        logging.basicConfig(level=logging.INFO)
         self.logger = logging.getLogger(__name__)
         
         # Validar que el dataframe tenga las columnas necesarias
-        required_columns = COLUMNS_OHLCV
+        required_columns = config.dataset.columns
         missing_columns = [col for col in required_columns if col not in self.dataframe.columns]
         if missing_columns:
             raise ValueError(f"Faltan columnas requeridas en el dataframe: {missing_columns}")
@@ -74,29 +70,23 @@ class Indicadores:
         # Diccionario para almacenar todos los nuevos indicadores
         new_indicators = {}
         
-        # Obtener configuraciones de indicadores desde la configuración inyectada
-        trend_config = self.config.get('trend_indicators', {})
-        momentum_config = self.config.get('momentum_indicators', {})
-        volatility_config = self.config.get('volatility_indicators', {})
-        volume_config = self.config.get('volume_indicators', {})
-        
         # 1. Indicadores de Tendencia
-        if trend_config.get('ema_20', {}).get('enabled', False):
-            period = trend_config['ema_20']['period']
-            new_indicators[f'EMA_{period}'] = ta.ema(self.dataframe[COLUMN_CLOSE], length=period)
+        if self.config.dataset.trend_indicators.ema_20.enabled:
+            period = self.config.dataset.trend_indicators.ema_20.period 
+            new_indicators[f'EMA_{period}'] = ta.ema(self.dataframe["Close"], length=period)
             self.logger.info(f"EMA {period} calculado")
-        
-        if trend_config.get('ema_50', {}).get('enabled', False):
-            period = trend_config['ema_50']['period']
-            new_indicators[f'EMA_{period}'] = ta.ema(self.dataframe[COLUMN_CLOSE], length=period)
+
+        if self.config.dataset.trend_indicators.ema_50.enabled:
+            period = self.config.dataset.trend_indicators.ema_50.period
+            new_indicators[f'EMA_{period}'] = ta.ema(self.dataframe["Close"], length=period)
             self.logger.info(f"EMA {period} calculado")
-        
-        if trend_config.get('adx', {}).get('enabled', False):
-            period = trend_config['adx']['period']
+
+        if self.config.dataset.trend_indicators.adx.enabled:
+            period = self.config.dataset.trend_indicators.adx.period
             adx_result = ta.adx(
-                high=self.dataframe[COLUMN_HIGH],
-                low=self.dataframe[COLUMN_LOW], 
-                close=self.dataframe[COLUMN_CLOSE],
+                high=self.dataframe["High"],
+                low=self.dataframe["Low"], 
+                close=self.dataframe["Close"],
                 length=period
             )
             if adx_result is not None:
@@ -117,20 +107,20 @@ class Indicadores:
                 self.logger.warning(f"ADX {period} retornó None")
         
         # 2. Indicadores de Momento
-        if momentum_config.get('rsi', {}).get('enabled', False):
-            period = momentum_config['rsi']['period']
-            new_indicators[f'RSI_{period}'] = ta.rsi(self.dataframe[COLUMN_CLOSE], length=period)
+        if self.config.dataset.momentum_indicators.rsi.enabled:
+            period = self.config.dataset.momentum_indicators.rsi.period
+            new_indicators[f'RSI_{period}'] = ta.rsi(self.dataframe["Close"], length=period)
             self.logger.info(f"RSI {period} calculado")
-        
-        if momentum_config.get('stoch', {}).get('enabled', False):
-            k_period = momentum_config['stoch']['k_period']
-            d_period = momentum_config['stoch']['d_period']
-            smooth_k = momentum_config['stoch']['smooth_k']
-            
+
+        if self.config.dataset.momentum_indicators.stoch.enabled:
+            k_period = self.config.dataset.momentum_indicators.stoch.k_period
+            d_period = self.config.dataset.momentum_indicators.stoch.d_period
+            smooth_k = self.config.dataset.momentum_indicators.stoch.smooth_k
+
             stoch_result = ta.stoch(
-                high=self.dataframe[COLUMN_HIGH],
-                low=self.dataframe[COLUMN_LOW],
-                close=self.dataframe[COLUMN_CLOSE],
+                high=self.dataframe["High"],
+                low=self.dataframe["Low"],
+                close=self.dataframe["Close"],
                 k=k_period,
                 d=d_period,
                 smooth_k=smooth_k
@@ -151,21 +141,21 @@ class Indicadores:
                         self.logger.warning(f"No se pudo calcular STOCHK, columnas disponibles: {stoch_result.columns.tolist()}")
         
         # 3. Indicadores de Volatilidad
-        if volatility_config.get('atr', {}).get('enabled', False):
-            period = volatility_config['atr']['period']
+        if self.config.dataset.volatility_indicators.atr.enabled:
+            period = self.config.dataset.volatility_indicators.atr.period
             new_indicators[f'ATR_{period}'] = ta.atr(
-                high=self.dataframe[COLUMN_HIGH],
-                low=self.dataframe[COLUMN_LOW],
-                close=self.dataframe[COLUMN_CLOSE],
+                high=self.dataframe["High"],
+                low=self.dataframe["Low"],
+                close=self.dataframe["Close"],
                 length=period
             )
             self.logger.info(f"ATR {period} calculado")
         
         # 4. Indicadores de Volumen
-        if volume_config.get('obv', {}).get('enabled', False):
+        if self.config.dataset.volume_indicators.obv.enabled:
             new_indicators['OBV'] = ta.obv(
-                close=self.dataframe[COLUMN_CLOSE],
-                volume=self.dataframe[COLUMN_VOLUME]
+                close=self.dataframe["Close"],
+                volume=self.dataframe["Volume"]
             )
             self.logger.info("OBV calculado")
         
@@ -184,8 +174,7 @@ class Indicadores:
         initial_rows = len(self.dataframe)
         
         # Identificar columnas de indicadores (todas excepto OHLCV)
-        ohlcv_columns = COLUMNS_OHLCV
-        indicator_columns = [col for col in self.dataframe.columns if col not in ohlcv_columns]
+        indicator_columns = [col for col in self.dataframe.columns if col not in self.config.dataset.columns]
         
         if not indicator_columns:
             self.logger.warning("No se encontraron columnas de indicadores")

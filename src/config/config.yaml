@@ -1,0 +1,91 @@
+# ----------------------------------------------------
+# CONFIGURACIÓN DEL SISTEMA DE DATOS PARA EL PROYECTO
+# ----------------------------------------------------
+# Configuración para Create_dataset.py
+# ----------------------------------------------------
+
+dataset:
+  # Columnas OHLCV a mantener
+  columns:
+    - "Open"
+    - "High" 
+    - "Low"
+    - "Close"
+    - "Volume"
+
+  # Configuración de tipos de datos para optimizar RAM
+  dtypes:
+    Open: "float32"
+    High: "float32"
+    Low: "float32" 
+    Close: "float32"
+    Volume: "float32"
+
+  # Parámetros de la API de Binance
+  binanceapi:
+    call_limit: 1000  # Número máximo de velas por llamada
+    max_retries: 3    # Número máximo de reintentos en caso de error
+    retry_delay: 1    # Segundos entre reintentos
+    timeout: 10       # Timeout para las peticiones en segundos
+
+  # Configuración de zona horaria
+  timezone:
+    target: "Europe/Madrid"  # UTC+1/UTC+2
+    source: "UTC"
+
+  # Configuración de interpolación
+  interpolation:
+    method: "linear"  # Método de interpolación para NaNs
+    limit_direction: "both"  # Dirección para fill
+
+  # Configuración de normalización
+  normalization:
+    scaler_type: "MinMaxScaler"  # Tipo de escalador a usar
+    feature_range: [0, 1]        # Rango de normalización
+
+  # Indicadores de Tendencia
+  trend_indicators:
+    ema_20:
+      period: 20
+      enabled: true
+    ema_50:
+      period: 50
+      enabled: true
+    adx:
+      period: 14
+      enabled: true
+
+  # Indicadores de Momento
+  momentum_indicators:
+    rsi:
+      period: 14
+      enabled: true
+    stoch:
+      k_period: 14
+      d_period: 3
+      smooth_k: 3
+      enabled: true
+
+  # Indicadores de Volatilidad
+  volatility_indicators:
+    atr:
+      period: 14
+      enabled: true
+
+  # Indicadores de Volumen
+  volume_indicators:
+    obv:
+      enabled: true
+
+
+
+base:
+  dir:
+    data_runs: "data_runs"  # Ruta para almacenar los data runs.
+  
+  artifacts:
+    normalized_dataframe: "normalized_dataframe.pkl"
+    scaler: "scaler.pkl" 
+    price_scaler: "price_scaler.pkl"
+    dataset_metadata: "data_run_metadata.yaml"
+    
