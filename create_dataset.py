@@ -17,7 +17,7 @@ sys.path.append('.')
 import logging
 
 # Import del pipeline principal
-from src.Data import (
+from src.data import (
     ArtifactManager,
     BinanceDataSource,
     DataPipeline
